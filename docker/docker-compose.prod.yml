@@ -9,47 +9,7 @@
 #       或 cd docker && docker compose up -d 走默认解析）
 # ============================================================
 services:
-  mysql:
-    image: mysql:8.0
-    # Apple Silicon 上无 arm64 官方镜像，固定 amd64 走 Rosetta 模拟
-    platform: linux/amd64
-    container_name: mkt-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: marketing_activity
-      MYSQL_USER: marketing
-      MYSQL_PASSWORD: marketing123
-    ports:
-      - "127.0.0.1:3307:3306"   # 只绑回环；宿主机 3306 常被本地 mysqld 占用
-    volumes:
-      - mkt-mysql-data:/var/lib/mysql
-      - ./mysql/init:/docker-entrypoint-initdb.d:ro
-    command:
-      # 连接预算：FULL 四个服务各 20 = 80，按可扩到 2 实例（160）留量 → 显式 200，
-      # 不吃默认 151 这个刚好会被撞上的边界
-      - --max-connections=200
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-
-  redis:
-    image: redis:7-alpine
-    container_name: mkt-redis
-    ports:
-      # 避开宿主机常驻 redis-server 的 6379（精确绑定会遮蔽容器发布）
-      - "127.0.0.1:6380:6379"
-    command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
+  # MySQL 与 Redis 属于常驻数据层（docker-compose.data.yml），本形态只补扩容档专属中间件
   rocketmq-namesrv:
     image: apache/rocketmq:5.2.0
     platform: linux/amd64
@@ -117,5 +77,3 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
-volumes:
-  mkt-mysql-data:

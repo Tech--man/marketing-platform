@@ -1,98 +1,32 @@
 # ============================================================
-# LITE 服役档（preview）：全栈容器化，四业务模块单 JVM 聚合 + 网关，共 2 个 JVM
-#   · 定位：**非活跃期常态服役**——小机器 7×24 真跑流量，不是演示环境。
-#     活跃期升档到 FULL（docker-compose.prod.yml），升档只换应用侧进程形态。
-#   · 内存：按"够用"给定 + mem_limit 留余量（堆之外还要算元空间/code cache/
-#     线程栈/direct buffer，卡太紧会被容器 OOMKill）。实测整机 ≈ 1.0 GiB。
-#   · 可靠性：与 FULL 同等对待——Redis noeviction + AOF 挂卷、G1（不用 SerialGC 的
-#     停全部线程 Full GC）、restart 策略、日志轮转。省内存一律不靠牺牲这些换。
+# LITE 服役档（preview）：应用侧全栈容器化 —— 四业务模块单 JVM 聚合 + 网关，共 2 个 JVM
+#   · 定位：非活跃期 7×24 常态服役，小机器真跑流量，不是演示环境
+#   · 数据层不在本文件里：MySQL/Redis 由 docker-compose.data.yml 常驻提供，
+#     本形态只是接入同一个网络 —— 这正是"同一份数据原地升档到 FULL"的前提
+#   · 内存：实测整机 ≈ 1.0 GiB（JVM 小堆 + G1 + mem_limit 留余量）
 #   · 消息：Redis Stream 替代 RocketMQ；无 Nacos（网关静态路由）；无 Prometheus
-#   · 库：单库 marketing（docker/mysql/init-lite），与 FULL 的表定义逐字一致
-# 与 dev/prod 形态只在 8090/8085 上可能冲突（mysql/redis 不对外发布端口）
+# 启动：./scripts/deploy-preview.sh（会自动把数据层拉起来）
 # ============================================================
-x-log-anchor: &mkt-log
+# 容器日志必须轮转：默认 json-file 不限量，常态服役下会撑爆磁盘
+x-log: &log
   driver: json-file
   options:
     max-size: "10m"
     max-file: "3"
 
 services:
-  mysql:
-    image: mysql:8.0
-    platform: linux/amd64
-    container_name: mkt-preview-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: marketing
-      MYSQL_USER: marketing
-      MYSQL_PASSWORD: marketing123
-    # 不对宿主机发布：预览栈自给自足，容器网络内按服务名访问，避免与 dev/prod 抢端口
-    volumes:
-      - mkt-preview-mysql-data:/var/lib/mysql
-      # 单库初始化脚本（4 库合并版，种子数据一致）
-      - ./mysql/init-lite:/docker-entrypoint-initdb.d:ro
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
-      # 小内存调参：缓冲池 64M，关掉 performance_schema / binlog / 连接与表缓存
-      - --innodb-buffer-pool-size=64M
-      - --performance-schema=OFF
-      # 无主从复制与 CDC 需求，binlog 只是白吃磁盘；InnoDB 保持默认 flush=1（每次提交刷盘）
-      - --skip-log-bin
-      # 可选容量旋钮（默认不开）：加一行 --innodb-flush-log-at-trx-commit=2，
-      # 实测入口 73-94 → 132-138 msg/s、消费 24 → 40-62 msg/s（约 1.5-2 倍，非数量级）。
-      # 代价是 OS/主机崩溃时丢最近 1 秒已提交事务（MySQL 进程崩溃不丢）——对秒杀等于
-      # "已扣库存无订单"需人工对账。只在读多写少、能容忍该窗口、单机无 BBU 时才开。
-      # 连接预算需 ≥ 各应用池之和：LITE 单聚合进程 30，这里留一倍余量
-      - --max-connections=60
-      - --table-open-cache=400
-      - --table-definition-cache=400
-    restart: unless-stopped
-    mem_limit: 512m
-    logging: *mkt-log
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-
-  redis:
-    image: redis:7-alpine
-    container_name: mkt-preview-redis
-    volumes:
-      # AOF 必须落在卷上：否则容器重建即丢，开持久化等于白做
-      - mkt-preview-redis-aof:/data
-    # 常态服役档：这份 Redis 里是秒杀余量、券预扣、幂等标记、限流窗口，是会丢钱的状态。
-    # noeviction —— 写满必须报错（业务侧靠本地消息表退避重投兜住），绝不能淘汰键换内存，
-    #              allkeys-lru 在服役下的后果是超卖与重复领券。
-    # AOF everysec —— 持久化开；RDB 关（--save ""），避免 fork 造成的瞬时内存翻倍。
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "",
-              "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
-    restart: unless-stopped
-    mem_limit: 256m
-    logging: *mkt-log
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
   standalone:
     build:
       context: ../marketing-standalone
     image: marketing-standalone:preview
     container_name: mkt-preview-standalone
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # 数据层常驻，不在本编排内：跨 compose 项目用 external 网络按容器名访问
+    networks: [mkt-data]
     environment:
-      MYSQL_HOST: mysql
+      MYSQL_HOST: mkt-mysql
       MYSQL_PORT: "3306"
       MYSQL_DB: marketing
-      REDIS_HOST: redis
+      REDIS_HOST: mkt-redis
       # 预览形态消息通道：Redis Stream 替代 RocketMQ
       MQ_TYPE: redis-stream
       # 消费并行度：与 Full 形态 @RocketMQMessageListener(consumeThreadNumber=8) 对齐。
@@ -113,7 +47,7 @@ services:
       start_period: 60s
     restart: unless-stopped
     mem_limit: 768m
-    logging: *mkt-log
+    logging: *log
 
   gateway:
     build:
@@ -123,10 +57,9 @@ services:
     depends_on:
       standalone:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+    networks: [mkt-data]
     environment:
-      REDIS_HOST: redis
+      REDIS_HOST: mkt-redis
       # 四条路由统一指向 standalone（复用 prod 形态网关，仅改端口变量）
       ACTIVITY_HOST: standalone
       ACTIVITY_PORT: "8085"
@@ -147,8 +80,8 @@ services:
       start_period: 40s
     restart: unless-stopped
     mem_limit: 448m
-    logging: *mkt-log
+    logging: *log
 
-volumes:
-  mkt-preview-mysql-data:
-  mkt-preview-redis-aof:
+networks:
+  mkt-data:
+    external: true

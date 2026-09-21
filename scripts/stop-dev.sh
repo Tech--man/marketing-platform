@@ -8,7 +8,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-DEV_COMPOSE="$PWD/docker/docker-compose.dev.yml"
+DATA_COMPOSE="$PWD/docker/docker-compose.data.yml"
 STOPPED=0
 
 for name in marketing-standalone marketing-gateway; do
@@ -27,11 +27,12 @@ done
 
 case "${1:-}" in
   --down)
-    docker compose -f "$DEV_COMPOSE" down
-    echo "==> 开发中间件已停止（数据卷保留）"
+    docker compose -f "$DATA_COMPOSE" down
+    echo "==> 数据层已停止（卷保留）。注意它是三套形态共用的数据层。"
     ;;
   -v)
-    docker compose -f "$DEV_COMPOSE" down -v
-    echo "==> 开发中间件与数据卷已清空"
+    echo "!! -v 会清空三套形态共用的数据卷（mysql + redis AOF），不可恢复" >&2
+    docker compose -f "$DATA_COMPOSE" down -v
+    echo "==> 数据层与数据卷已清空"
     ;;
 esac

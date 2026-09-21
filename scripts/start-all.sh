@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
 # 正式环境形态（Full 拓扑）本机启动：网关 8090 + 四业务服务 8081-8084，5 个 JVM
-# 前置：docker compose -f docker/docker-compose.prod.yml up -d
+# 前置：./scripts/start-all.sh 会自动确保数据层；扩容档中间件另需
+#       docker compose -f docker/docker-compose.prod.yml up -d
 # 用法：./scripts/start-all.sh [服务名...]   不带参数启动全部
 # 说明：日常改代码请用 ./scripts/start-dev.sh（2 个 JVM，内存小一个数量级）
 # ============================================================
@@ -19,6 +20,10 @@ JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m}"
 
 # 中间件宿主机端口（与 dev 形态同一套，两套互斥）；Redis 避开 6379 见 compose 注释
 export MYSQL_PORT="${MYSQL_PORT:-3307}" REDIS_PORT="${REDIS_PORT:-6380}"
+# 默认与 LITE 共用同一个库 → 两档原地双向切换不需要搬数据
+# （7 张业务表表名全局唯一、idempotent_record/local_message 列定义一致，共用一库零冲突）
+# 想要"每服务一库"的生产隔离档：逐服务导出 MYSQL_DB=marketing_<模块> 并改用 docker/mysql/init
+export MYSQL_DB="${MYSQL_DB:-marketing}"
 
 ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill)
 SERVICES=("$@")
@@ -26,6 +31,9 @@ SERVICES=("$@")
 
 assert_port_not_shadowed "$MYSQL_PORT"
 assert_port_not_shadowed "$REDIS_PORT"
+
+echo "==> 数据层常驻检查（与 LITE 同一份数据，支持原地双向切换）"
+docker compose -f "$ROOT/docker/docker-compose.data.yml" up -d --wait
 
 # 先构建（跳过测试，测试已有独立阶段）
 echo "==> mvn package（首次构建约 1-2 分钟）"

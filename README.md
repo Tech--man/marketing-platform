@@ -52,7 +52,7 @@
 | 形态 | 定位 | 拓扑 | 消息通道 | 数据库 | 可靠性口径 |
 |---|---|---|---|---|---|
 | **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 4 容器：mysql / redis / standalone（四模块聚合）/ gateway | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
-| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 5 独立进程（8081-8084 + 8090）+ RocketMQ + Nacos + Prometheus | RocketMQ | 4 业务库 | 中间件默认全持久化 |
+| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 5 独立进程（8081-8084 + 8090）+ RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库） | 中间件默认全持久化 |
 | **dev 开发档** | 本机改代码，允许丢数据 | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 不持久化；**淘汰策略仍与 LITE 一致** |
 
 LITE 的省内存**一律不靠牺牲可靠性换**，四条不可退让：淘汰策略必须 `noeviction`
@@ -82,20 +82,52 @@ cd docker && docker compose -f docker-compose.prod.yml up -d && cd ..
 # ⚠ 该路径目前既没有脚本开关也没被实测过，见工单列表
 ```
 
-### 宿主机端口矩阵
+### 数据层与端口矩阵
 
-| 端口 | 用途 | dev | LITE(preview) | FULL(prod) |
-|---|---|---|---|---|
-| 8090 | 网关对外入口 | 本机进程 | 容器发布 | 本机进程 |
-| 8085 | 聚合服务（调试直连） | 本机进程 | 容器发布 | - |
-| 3307 | MySQL（仅绑回环） | 容器 | **不发布** | 容器 |
-| 6380 | Redis（仅绑回环） | 容器 | **不发布** | 容器 |
-| 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | - | - | 容器发布 |
+MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml` 单独常驻，三套形态共用
+同一份数据 —— 这是"原地双向切换"的结构前提（若每套形态各起一个 MySQL 去挂同一个卷，
+并发拉起就是卷级损坏）。三个启动脚本都会幂等地把它 `up -d --wait` 起来。
+
+| 端口 | 用途 | 归属 |
+|---|---|---|
+| 3307 | MySQL（仅绑回环，单库 `marketing`） | 数据层 `mkt-mysql` |
+| 6380 | Redis（仅绑回环，AOF + noeviction） | 数据层 `mkt-redis` |
+| 8090 | 网关对外入口 | 形态侧：dev/FULL 本机进程、LITE 容器 |
+| 8085 | 聚合服务（调试直连） | 形态侧：dev 本机进程、LITE 容器 |
+| 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | 仅 FULL 形态 |
+
+互斥的只有**形态侧**（8090/8085 与 FULL 的 5 个进程端口），切换时先停上一套的应用侧即可，
+数据层不用动。
 
 > **Redis 为什么不用 6379**：宿主机上常驻的 `redis-server`（Homebrew 之类）会占住
 > `127.0.0.1:6379`，其精确绑定优先于 Docker 对 `*:6379` 的发布，本机业务进程会静默连到那个
 > "外人"实例——三套环境当场退化成共用一套中间件，且只在库存/幂等数据对不上时才暴露。
 > `scripts/common.sh::assert_port_not_shadowed` 在启动前挡住这类遮蔽。
+
+### 原地双向切换（同一份数据）
+
+```bash
+# LITE 服役档 → FULL 扩容档（升档）
+./scripts/stop-preview.sh                                   # 只停应用容器，数据层不动
+(cd docker && docker compose -f docker-compose.prod.yml up -d --wait)   # RocketMQ/Nacos/Prometheus
+./scripts/start-all.sh                                      # 数据层已在跑；四进程 + 网关
+
+# FULL → LITE（降档）
+./scripts/stop-all.sh
+(cd docker && docker compose -f docker-compose.prod.yml down)  # 只拆扩容档专属中间件
+./scripts/deploy-preview.sh
+```
+
+两侧都不需要搬数据：`MYSQL_DB` 默认指向共享单库，Redis 状态（库存桶 / 幂等标记 / 限流窗口）
+随 AOF 卷原地保留。已实测一轮完整往返：LITE 冒烟 34/34 → 原地升 FULL（四进程连同一个
+`marketing` 库，LITE 留下的 61 条订单与 2 个活动可见）→ FULL 连跑 3 轮 34/34 → 降回 LITE
+34/34，累计数据连续（订单 366 / 活动 7 / 券 6 逐轮递增、无丢失无翻倍）。
+
+切换时**唯一需要留意的是消息通道**：升档瞬间 LITE 侧 Stream 里未被消费的消息不会自动转到
+RocketMQ。正确性靠本地消息表兜住（未 confirm 的消息由 `LocalMessageRetryer` 按退避重投，
+新进程装配的是新通道，因此会自动改投），代价是最多一个退避周期（≤ 300s）的处理延迟；
+降档方向同理。因此切换应选低峰期，并在切换后确认
+`SELECT status, COUNT(*) FROM local_message GROUP BY status` 无长期 PENDING/SENT 残留。
 
 ### 内存实测
 
@@ -264,9 +296,10 @@ marketing-platform/
 ├── docker/
 │   ├── docker-compose.prod.yml    # FULL 扩容档中间件：MySQL/Redis/RocketMQ/Nacos/Prometheus
 │   ├── docker-compose.preview.yml # LITE 服役档全栈（2 JVM 容器 + AOF/noeviction/restart/日志轮转）
-│   ├── docker-compose.dev.yml     # dev 开发档中间件（mysql + redis，小内存调参）
+│   ├── docker-compose.data.yml    # 常驻数据层（mysql 单库 + redis AOF），三套形态共用
 │   ├── mysql/init/01-schema.sql   # 4 库 DDL + 种子数据（FULL，自动执行）
-│   ├── mysql/init-lite/           # 单库 DDL + 种子数据（LITE / dev，自动执行）
+│   ├── mysql/init-lite/           # 单库 DDL + 种子数据（数据层默认，自动执行）
+│   ├── mysql/init/01-schema.sql   # 四库布局（可选隔离档，需逐服务导出 MYSQL_DB）
 │   └── prometheus/prometheus.yml
 └── scripts/
     ├── common.sh               # 公共前置：JDK 17 锁定 + 健康等待

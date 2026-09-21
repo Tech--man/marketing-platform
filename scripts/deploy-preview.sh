@@ -13,13 +13,17 @@ cd "$(dirname "$0")/.."
 source "$(dirname "$0")/common.sh"
 
 COMPOSE="$PWD/docker/docker-compose.preview.yml"
+DATA_COMPOSE="$PWD/docker/docker-compose.data.yml"
 
 if [ "${1:-}" != "--no-build" ]; then
   echo "==> mvn package（standalone + gateway fat jar）"
   mvn -q -DskipTests package -pl marketing-standalone,marketing-gateway -am
 fi
 
-echo "==> 构建并启动预览栈（standalone 首次启动约 40-90s）"
+echo "==> 数据层常驻检查（mysql + redis，与 FULL/dev 同一份数据）"
+docker compose -f "$DATA_COMPOSE" up -d --wait
+
+echo "==> 构建并启动 LITE 应用栈（standalone 首次启动约 40-90s）"
 docker compose -f "$COMPOSE" up -d --build --wait
 
 # compose 里的 healthcheck 只探 TCP 端口，而"端口在听"不等于"应用可用"——本轮开发环境

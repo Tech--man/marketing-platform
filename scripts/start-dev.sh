@@ -17,7 +17,7 @@ LOG_DIR="$ROOT/logs"
 RUN_DIR="$ROOT/run"
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
-DEV_COMPOSE="$ROOT/docker/docker-compose.dev.yml"
+DATA_COMPOSE="$ROOT/docker/docker-compose.data.yml"
 # 宿主机中间件端口：Redis 刻意避开 6379，见 docker-compose.dev.yml 注释
 DEV_MYSQL_PORT="${DEV_MYSQL_PORT:-3307}"
 DEV_REDIS_PORT="${DEV_REDIS_PORT:-6380}"
@@ -34,8 +34,8 @@ fi
 assert_port_not_shadowed "$DEV_MYSQL_PORT"
 assert_port_not_shadowed "$DEV_REDIS_PORT"
 
-echo "==> 启动开发中间件（mysql + redis）并等待健康检查"
-docker compose -f "$DEV_COMPOSE" up -d --wait
+echo "==> 数据层常驻检查（mysql + redis，与 LITE/FULL 同一份数据）"
+docker compose -f "$DATA_COMPOSE" up -d --wait
 
 export MYSQL_PORT="$DEV_MYSQL_PORT" REDIS_PORT="$DEV_REDIS_PORT"
 

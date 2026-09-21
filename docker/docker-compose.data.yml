@@ -1,0 +1,87 @@
+# ============================================================
+# 数据层（常驻，不属于任何形态）：MySQL 单库 marketing + Redis 持久化
+#
+#   为什么单独一层：这套脚手架的核心诉求是"同一份数据在 LITE 服役档与 FULL 扩容档之间
+#   原地双向切换"。数据只有独立于形态，切换才只是换应用侧进程形态与消息通道；
+#   若每套形态各自起一个 MySQL 去挂同一个卷，一旦并发拉起就是卷级损坏风险。
+#
+#   用法（各启动脚本都会幂等地把它拉起来，也可单独执行）：
+#     docker compose -f docker/docker-compose.data.yml up -d --wait
+#     docker compose -f docker/docker-compose.data.yml down      # 停数据层（卷保留）
+#
+#   库布局：默认单库 marketing（7 张业务表表名全局唯一 + 两张基础表定义一致，
+#   四进程共用一库零冲突）。需要"每服务一库"的生产隔离档时，改用 ./mysql/init
+#   目录并逐服务导出 MYSQL_DB=marketing_<模块>。
+# ============================================================
+name: mkt-data
+
+x-log: &log
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mysql:
+    image: mysql:8.0
+    platform: linux/amd64
+    container_name: mkt-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: marketing
+      MYSQL_USER: marketing
+      MYSQL_PASSWORD: marketing123
+    ports:
+      - "127.0.0.1:3307:3306"   # 只绑回环；宿主机 3306 常被本地 mysqld 占用
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init-lite:/docker-entrypoint-initdb.d:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+      # 无主从复制与 CDC 需求，binlog 只是白吃磁盘；InnoDB 保持默认 flush=1
+      - --skip-log-bin
+      # 连接预算需 ≥ 各应用池之和：LITE 单聚合进程 30、FULL 四服务各 20（可扩 2 实例=160）
+      - --max-connections=200
+    restart: unless-stopped
+    logging: *log
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: mkt-redis
+    ports:
+      # 故意不用 6379：宿主机常驻的 redis-server 会占住 127.0.0.1:6379，
+      # 其精确绑定优先于 Docker 对 *:6379 的发布，本机进程会静默连到那个实例
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis-aof:/data
+    # 这份 Redis 里是秒杀余量、券预扣、幂等标记、限流窗口 —— 会丢钱的状态。
+    # noeviction：写满必须报错（业务侧靠本地消息表退避重投兜住），
+    #              allkeys-lru 在常态服役下的后果是超卖与重复领券。
+    # AOF everysec + RDB 关：持久化开，但避免 fork 造成的瞬时内存翻倍。
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "",
+              "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    restart: unless-stopped
+    logging: *log
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql-data:
+  redis-aof:
+
+# 项目默认网络固定命名，供 dev/preview 形态以 external 方式接入同一张网
+networks:
+  default:
+    name: mkt-data
