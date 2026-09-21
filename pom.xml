@@ -169,7 +169,9 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <!-- 集成测试（依赖 compose 环境）以 *IT 结尾，默认跳过，-DintegrationTests=true 开启 -->
+                    <!-- 约定：需要中间件环境的测试打 @Tag("integration") 并默认排除。
+                          当前仓库还没有这类测试 —— 端到端验证走 scripts/smoke-test.sh，
+                          吞吐测量走 scripts/load-probe.sh。别在这里承诺不存在的开关。 -->
                     <excludedGroups>integration</excludedGroups>
                 </configuration>
             </plugin>

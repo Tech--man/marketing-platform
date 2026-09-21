@@ -68,6 +68,7 @@ GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结�
 ./scripts/smoke-test.sh               # 端到端验收（三套形态通用）
 ./scripts/stop-preview.sh             # -v 连数据卷清空
 ./scripts/reset-demo-data.sh          # 演示库存被压测吃掉后复位（不动业务数据）
+./scripts/load-probe.sh 600 80 3      # 吞吐测量：入口 / 消费排空 / 端到端 + 轮间方差
 
 # dev 开发档
 ./scripts/start-dev.sh                # mysql+redis 容器 → 构建 → 本机 2 JVM
@@ -179,6 +180,12 @@ mem_limit 按"堆 + 元空间 + code cache + 线程栈 + direct"重算留余量�
 实测收益只有 **1.5-2 倍**（入口 73-94 → 132-138 msg/s、消费 24 → 40-62 msg/s），不是数量级，
 而代价是 OS/主机崩溃丢最近 1 秒已提交事务（对秒杀意味着"已扣库存无订单"需人工对账），
 所以不做默认。
+
+**可复现测量入口**：`./scripts/load-probe.sh [条数] [并发] [轮数]`（LITE 下分别报入口速率、
+发送结束积压、消费排空速率、端到端速率，并打印 3 轮对比）。当前实测（600 条 / 并发 80 / 3 轮，
+机器：10 核 OrbStack、数据盘接近写满）：入口 127-173 msg/s、消费排空 108-142 msg/s、
+端到端 85-104 msg/s，轮间波动约 ±20%。**这就是 LITE 服役档的容量口径**：低峰常态承载足够，
+再往上就是升 FULL 的场景，而不是继续调 LITE 的参数。
 
 **剩余可挖**：同步入口每单仍打 4 个 autocommit，合并到 1-2 个约值同样 1.5 倍，但要注意
 幂等"抢占"与业务写同事务会失去 in-flight 抢占记录的可见性（并发重复请求将看不到彼此的
