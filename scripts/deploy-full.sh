@@ -4,8 +4,8 @@
 #   与本机进程形态（scripts/start-all.sh）二选一，二者都依赖同一常驻数据层
 # 用法：./scripts/deploy-full.sh [docker compose up 的额外参数]
 #       ./scripts/deploy-full.sh --scale marketing-discount=3
-#       SKIP_BUILD=1 ./scripts/deploy-full.sh        跳过 mvn 构建
-# 前置：docker + 已 mvn package（除非 SKIP_BUILD=1）
+#       SKIP_BUILD=1 ./scripts/deploy-full.sh        跳过 mvn 构建，并且复用已有 :full 镜像
+# 前置：docker + 已 mvn package（SKIP_BUILD=1 时改用现成镜像，改了 Java 代码就别用它）
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,12 +25,27 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   mvn -q -DskipTests package
 fi
 
+# SKIP_BUILD=1 时连镜像也不重建：compose 的 --build 会重新 COPY 一层 fat jar，
+# 实测一次全量重建多占 ~2 GB，而 broker 与 MySQL 的镜像层就写在这同一块盘上——
+# 盘涨到 90% 以上时 broker 直接以 CODE:14 拒写，异步链路会"看起来坏了"。
+# 用普通字符串而非数组：macOS 自带 bash 3.2 在 set -u 下展开空数组会直接报错。
+BUILD_FLAG="--build"
+[ "${SKIP_BUILD:-0}" = "1" ] && BUILD_FLAG=""
+
 echo "==> 数据层 + 扩容档中间件（nacos / rocketmq / prometheus）"
 docker compose -f "$DATA" up -d --wait
 docker compose -f "$MW" up -d --wait
 
-echo "==> 构建并启动 FULL 应用栈"
-docker compose -f "$APP" up -d --build "$@"
+# 起应用前先报 broker 的磁盘水位：分区使用率 ≥90% 时它以 CODE:14 service not available 拒写，
+# 症状和"异步链路坏了"完全一样（实测被这个坑过一整轮排查）。
+broker_used=$(docker exec mkt-rocketmq-broker df -P / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
+if [ -n "${broker_used:-}" ] && [ "$broker_used" -ge 85 ]; then
+  echo "!! broker 分区已用 ${broker_used}%：≥90% 会拒写异步投递（消息退回本地消息表，不丢但延迟）。" >&2
+  echo "   先回收空间：docker builder prune -f（实测一次释放 3.4 GB）" >&2
+fi
+
+echo "==> ${BUILD_FLAG:+构建并}启动 FULL 应用栈"
+docker compose -f "$APP" up -d $BUILD_FLAG "$@"
 
 echo "==> 等待网关就绪（服务启动 + 注册进 nacos 需要一点时间）"
 wait_healthy marketing-gateway 8090 180

@@ -22,8 +22,11 @@ JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m}"
 # PROFILES=nacos → 注册到 Nacos 且网关改用 lb:// 服务发现路由（多实例扩容的前置）；
 # 留空则是默认的 local 静态路由（按端口直连），单实例够用、启动更快
 PROFILES="${PROFILES:-}"
-APP_ARGS=()
-[ -n "$PROFILES" ] && APP_ARGS+=("--spring.profiles.active=$PROFILES")
+# 必须是普通字符串而不是数组：macOS 自带 bash 3.2 在 set -u 下展开空数组
+# ("${APP_ARGS[@]}") 会直接报 unbound variable 并放弃整条 java 命令，
+# 表现为"pid 写了、进程没起"。空串按词分割后就是零个参数，正是我们要的。
+APP_ARGS=""
+[ -n "$PROFILES" ] && APP_ARGS="--spring.profiles.active=$PROFILES"
 
 # 中间件宿主机端口（与 dev 形态同一套，两套互斥）；Redis 避开 6379 见 compose 注释
 export MYSQL_PORT="${MYSQL_PORT:-3307}" REDIS_PORT="${REDIS_PORT:-6380}"
@@ -58,19 +61,35 @@ start_one() {
     echo "!! 未找到 ${jar}，请先执行 mvn package" >&2
     exit 1
   fi
-  nohup java $JAVA_OPTS -jar "$jar" "${APP_ARGS[@]}" > "$LOG_DIR/$name.log" 2>&1 &
+  nohup java $JAVA_OPTS -jar "$jar" $APP_ARGS > "$LOG_DIR/$name.log" 2>&1 &
   echo $! > "$pid_file"
   echo "==> $name 已启动 pid $(cat "$pid_file")，日志 logs/$name.log"
+}
+
+# 本机进程形态的端口是静态路由的依据：只等本次真正拉起的那几个服务
+port_of() {
+  case $1 in
+    marketing-gateway) echo 8090 ;;
+    marketing-activity) echo 8081 ;;
+    marketing-coupon) echo 8082 ;;
+    marketing-discount) echo 8083 ;;
+    marketing-seckill) echo 8084 ;;
+  esac
 }
 
 for s in "${SERVICES[@]}"; do start_one "$s"; done
 
 echo "==> 等待健康检查 ..."
-wait_healthy marketing-gateway 8090 &
-wait_healthy marketing-activity 8081 &
-wait_healthy marketing-coupon 8082 &
-wait_healthy marketing-discount 8083 &
-wait_healthy marketing-seckill 8084 &
-wait
+PIDS=()
+for s in "${SERVICES[@]}"; do
+  wait_healthy "$s" "$(port_of "$s")" &
+  PIDS+=("$!")
+done
+rc=0
+for p in "${PIDS[@]}"; do wait "$p" || rc=1; done
+if [ $rc -ne 0 ]; then
+  echo "!! 有服务未就绪，冒烟测试不要执行：看 logs/<服务>.log，再 ./scripts/stop-all.sh 清理" >&2
+  exit 1
+fi
 
 echo "==> 全部就绪。冒烟测试：./scripts/smoke-test.sh"
