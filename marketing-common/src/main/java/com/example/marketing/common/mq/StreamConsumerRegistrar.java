@@ -113,8 +113,12 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
         }
         try {
             redisTemplate.opsForStream().acknowledge(key, handler.group(), record.getId());
+            // XACK 只把条目从消费组 PEL 摘除，条目本身永久留在流里——不删就是常态服役下的内存泄漏。
+            // 本形态每个 topic 只有一个消费组，删除安全；若将来引入第二个消费组（旁路审计/回放），
+            // 必须改掉这里，否则新组读不到已被删的条目。
+            redisTemplate.opsForStream().delete(key, record.getId());
         } catch (Exception e) {
-            log.warn("[stream-consumer] XACK 失败（不影响正确性）: {}", e.getMessage());
+            log.warn("[stream-consumer] XACK/XDEL 失败（不影响正确性）: {}", e.getMessage());
         }
     }
 
