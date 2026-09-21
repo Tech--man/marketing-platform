@@ -196,6 +196,7 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 | 差异 | 后果 |
 |---|---|
 | 消息重试语义：RocketMQ broker 侧持久化 + 指数退避重试队列 vs Redis Stream 容器内 3 次后放弃（靠本地消息表补偿重投） | 削峰行为不等价；Stream 无 broker 侧堆积策略 |
+| **容器化 FULL 访问不到 RocketMQ**：broker 只广播一个 `brokerIP1`，当前值是给本机进程形态用的 | 见 `docker-compose.full-app.yml` 头部说明与切换方法（同步链路与多副本 LB 不受影响） |
 | **单库共享**（LITE 一库，FULL 四库） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，LITE 把它拿掉了，只能靠约定 |
 | 单 JVM 承载四模块 | 掩盖服务间超时、部分不可用、连接池争用（hikari 10 vs 4×20） |
 | LITE 不带 Prometheus | `/actuator/prometheus` 暴露了但没人抓；`prometheus.yml` 的 target 写死 FULL 的宿主机端口 |

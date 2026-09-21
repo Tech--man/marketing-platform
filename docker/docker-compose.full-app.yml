@@ -1,0 +1,74 @@
+# ============================================================
+# FULL 扩容档 · 应用侧编排：5 个业务服务各自成容器，可 --scale 多副本
+#   · 数据层（mysql/redis）与扩容档中间件（rocketmq/nacos/prometheus）不在本文件：
+#     前者用 docker-compose.data.yml，后者用 docker-compose.prod.yml
+#   · 必须走 nacos 服务发现：网关按 lb:// 负载均衡到各服务的多个副本，
+#     因此本文件里的服务**不发布任何宿主机端口**（副本数无关端口冲突）
+#   · 已知限制（重要）：docker/rocketmq/broker.conf 里 brokerIP1 = 127.0.0.1，是为
+#     本机进程形态（scripts/start-all.sh）广播的。RocketMQ 客户端连的是 broker 广播的
+#     地址，因此**本文件跑起来的容器访问不到 broker**（容器内 127.0.0.1 是它自己）：
+#     同步链路（活动/优惠/查询）与多副本负载均衡均正常，异步落库链路会投递失败并退回
+#     本地消息表（不丢，但延迟）。要让容器化的 FULL 也跑通异步，把 brokerIP1 改为
+#     host.docker.internal（两侧都能解析）并重启 broker，同时确认磁盘余量充足 ——
+#     broker 所在分区使用率超过 90% 时会以 CODE:14 service not available 拒写。
+#   · 启动（需先 mvn package 产出各模块 fat jar）：
+#       ./scripts/deploy-full.sh              构建并起全量（默认每服务 1 副本）
+#       ./scripts/deploy-full.sh --scale marketing-discount=3
+# ============================================================
+x-app-defaults: &app-defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  # mkt-data = 数据层所在网络（mysql/redis）；mkt-mw = 扩容档中间件网络（nacos/rocketmq）
+  networks: [mkt-data, mkt-mw]
+  environment: &app-env
+    MYSQL_HOST: mkt-mysql
+    MYSQL_PORT: "3306"
+    MYSQL_DB: marketing          # 与 LITE 共用同一份数据 → 支持原地双向切换
+    REDIS_HOST: mkt-redis
+    REDIS_PORT: "6379"
+    ROCKETMQ_ADDR: mkt-rocketmq-namesrv:9876
+    NACOS_ADDR: mkt-nacos:8848
+    SPRING_PROFILES_ACTIVE: nacos
+    JAVA_OPTS: "-Xmx512m -Xss512k -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+
+services:
+  marketing-activity:
+    <<: *app-defaults
+    build: { context: ../marketing-activity }
+    image: marketing-activity:full
+
+  marketing-coupon:
+    <<: *app-defaults
+    build: { context: ../marketing-coupon }
+    image: marketing-coupon:full
+
+  marketing-discount:
+    <<: *app-defaults
+    build: { context: ../marketing-discount }
+    image: marketing-discount:full
+
+  marketing-seckill:
+    <<: *app-defaults
+    build: { context: ../marketing-seckill }
+    image: marketing-seckill:full
+
+  marketing-gateway:
+    <<: *app-defaults
+    build: { context: ../marketing-gateway }
+    image: marketing-gateway:full
+    ports:
+      - "8090:8090"     # 对外唯一入口
+    environment:
+      <<: *app-env
+      # 网关自己也要注册进 nacos，才能按服务名 lb:// 发现四个业务服务的副本
+      JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
+
+networks:
+  mkt-data:
+    external: true
+  # 扩容档中间件（docker-compose.prod.yml）的默认网络
+  mkt-mw:
+    external: true
+    name: docker_default
