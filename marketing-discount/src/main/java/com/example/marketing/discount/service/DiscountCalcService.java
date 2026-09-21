@@ -4,6 +4,7 @@ import com.example.marketing.discount.config.DiscountProperties;
 import com.example.marketing.discount.domain.CalcInput;
 import com.example.marketing.discount.domain.CalcResult;
 import com.example.marketing.discount.engine.PromoEngine;
+import com.example.marketing.discount.engine.RuleSnapshot;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -21,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  * 优惠计算应用服务：独立线程池执行 + 超时降级。
  *
  * <p>计算跑在专用池（与 Web 线程隔离，防止规则风暴拖垮整个服务）；
- * {@code orTimeout} 到期后立即返回原价兜底结果（degraded=true），
+ * {@code orTimeout} 只约束纯计算，到期后立即返回原价兜底结果（degraded=true），
  * 结算页可提示"优惠计算繁忙，以结算价为准"。队列打满同样走降级。</p>
  */
 @Slf4j
@@ -54,9 +55,11 @@ public class DiscountCalcService {
 
     public CalcResult calculate(CalcInput input) {
         long start = System.nanoTime();
+        // 快照读取放在超时预算之外：它可能回源 DB，一旦计入预算就会把冷路径误判成计算超时
+        RuleSnapshot snapshot = ruleCacheManager.snapshot();
         try {
             CalcResult result = CompletableFuture
-                    .supplyAsync(() -> promoEngine.calculate(input, ruleCacheManager.snapshot()), calcPool)
+                    .supplyAsync(() -> promoEngine.calculate(input, snapshot), calcPool)
                     .orTimeout(properties.getCalcTimeoutMs(), TimeUnit.MILLISECONDS)
                     .join();
             calcTimer.record(System.nanoTime() - start, TimeUnit.NANOSECONDS);

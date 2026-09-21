@@ -77,8 +77,8 @@ public class RuleCacheManager {
 
     /** 回源 DB 重建快照（synchronized 防并发重建风暴） */
     private synchronized RuleSnapshot rebuild(long version) {
-        // double check：等锁期间可能已被其他线程重建
-        if (local != null && local.getVersion() == version && version > 0) {
+        // double check：等锁期间可能已被其他线程重建；version 可为 0（Redis 无版本 key）
+        if (local != null && local.getVersion() == version) {
             localCheckedAt = System.currentTimeMillis();
             return local;
         }
