@@ -135,6 +135,19 @@ public class SeckillStockService {
                 Duration.ofSeconds(properties.getTokenTtlSeconds()));
     }
 
+    /**
+     * 受理占位：仅在结果键还没有值时写入。
+     *
+     * <p>受理态绝不能覆盖已产生的终态——消费端比同步链路先写完时（消费并行度提高后
+     * 这变得很常见），无条件 SET 会把 SUCCESS 打回 ACCEPTED，用户就再也轮询不到结果，
+     * 而订单其实已经建好。终态之间仍需互相覆盖（失败重试后转成功、支付后转取消），
+     * 所以只有受理这一步走 setIfAbsent。</p>
+     */
+    public void markAccepted(String token) {
+        redisTemplate.opsForValue().setIfAbsent(resultKey(token), "ACCEPTED",
+                Duration.ofSeconds(properties.getTokenTtlSeconds()));
+    }
+
     public String getResult(String token) {
         return redisTemplate.opsForValue().get(resultKey(token));
     }
