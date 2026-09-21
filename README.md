@@ -52,7 +52,7 @@
 | 形态 | 定位 | 拓扑 | 消息通道 | 数据库 | 可靠性口径 |
 |---|---|---|---|---|---|
 | **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 4 容器：mysql / redis / standalone（四模块聚合）/ gateway | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
-| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 5 独立进程（8081-8084 + 8090）+ RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库） | 中间件默认全持久化 |
+| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 两种交付形态二选一：**本机进程** 5 JVM（8081-8084 + 8090）／**容器化** 一容器一服务且可 `--scale` 多副本（只有网关发布端口）；配 RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库） | 中间件默认全持久化 |
 | **dev 开发档** | 本机改代码，允许丢数据 | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 不持久化；**淘汰策略仍与 LITE 一致** |
 
 LITE 的省内存**一律不靠牺牲可靠性换**，四条不可退让：淘汰策略必须 `noeviction`
@@ -74,13 +74,17 @@ GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结�
 ./scripts/start-dev.sh                # mysql+redis 容器 → 构建 → 本机 2 JVM
 ./scripts/stop-dev.sh --down
 
-# FULL 扩容档
+# FULL 扩容档 · 本机进程形态
 cd docker && docker compose -f docker-compose.prod.yml up -d && cd ..
-./scripts/start-all.sh                # 日志 logs/，pid run/；监控 http://localhost:9091
+./scripts/start-all.sh                # 日志 logs/，pid run/；PROFILES=nacos 走注册发现
+                                      # 注册中心控制台 http://localhost:8848/nacos，监控 :9091
 ./scripts/stop-all.sh && (cd docker && docker compose -f docker-compose.prod.yml down)
 
-# 注册中心（可选，仅 FULL）：http://localhost:8848/nacos，profile=nacos 开启 lb:// 路由
-# ⚠ 该路径目前既没有脚本开关也没被实测过，见工单列表
+# FULL 扩容档 · 容器化形态（一容器一服务，可 --scale 多副本）
+./scripts/deploy-full.sh              # mvn 构建 + 镜像 + 起全量（网关 8090，其余不发布端口）
+./scripts/deploy-full.sh --scale marketing-seckill=2 --scale marketing-coupon=2
+SKIP_BUILD=1 ./scripts/deploy-full.sh --scale marketing-discount=2   # 复用现成镜像，不重建
+docker compose -f docker/docker-compose.full-app.yml down            # 拆应用侧，中间件/数据层不动
 ```
 
 ### 数据层与端口矩阵
@@ -100,9 +104,21 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 **注册中心模式已实测**（`PROFILES=nacos ./scripts/start-all.sh`）：5 个服务全部注册进 Nacos；
 再起第二个 discount 实例（`SERVER_PORT=8093`）后 Nacos 显示两个 host，经网关打 20 次同步请求，
 `mkt_discount_calc_seconds_count` 计数 **8083 与 8093 各 10 次** —— lb:// 轮询负载均衡成立，
-这是 FULL "加实例承接洪流" 的前提。异步链路依赖 RocketMQ 可写，本机磁盘水位 95% 时 broker 会
-以 `CODE:14 service not available` 拒写（此时消息全部退回本地消息表，`local_message` 可见 124 条
-PENDING 等补偿重投，零丢失），需在磁盘余量恢复后复验。
+这是 FULL "加实例承接洪流" 的前提。
+
+**FULL 的异步链路两种交付形态都已实测**（2026-09-22，见上节"快速开始"的两条命令）：
+本机进程形态与容器化形态各跑满 34/34，`local_message` 全程无 PENDING 残留、Redis 里
+没有任何 Stream 键（证明确实走 RocketMQ 而不是 LITE 通道），broker 侧两个消费组积压为 0。
+容器化形态还额外验到多副本三件事：入口侧网关 lb 把流量打到两个 seckill 副本（自启动起各自
+累计 61 / 62 次 `grab` 请求，两边都不是全量即证明被分流）；消费侧同一消费组把消息分给两个副本
+（`seckill_order_persisted` 分别 35 / 26，且冒烟的"账实一致"断言未被破坏，说明不是各自重复消费）；
+`@Scheduled` 跨副本互斥（两副本 `mkt_job_dedup_skipped_total` 累计 109 次跳过，即同一周期只有一个实例真跑）。
+
+**磁盘水位是 broker 的隐形开关**：所在分区使用率超过 90% 时它以 `CODE:14 service not available`
+拒写（实测踩过 92%），表现与"链路坏了"完全一样，但消息不丢——全部退回本地消息表。
+本次实测到补偿链路真实闭环：拒写窗口内积压 61 条 PENDING，磁盘回到 78% 后由
+`LocalMessageRetryer` 重投、容器化消费端落库，61 条全部转 CONFIRMED（`sold_stock` 13 → 74），
+零丢失。运维上先 `df` 再看代码，`--build` 一次全量镜像重建约多占 2 GB。
 
 互斥的只有**形态侧**（8090/8085 与 FULL 的 5 个进程端口），切换时先停上一套的应用侧即可，
 数据层不用动。
@@ -143,9 +159,10 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 
 | 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
-| **LITE 服役档** | standalone 554 + gateway 334 MiB | mysql 232 + redis 14 MiB | **≈ 1.1 GiB** | `docker stats` |
+| **LITE 服役档** | standalone 567 + gateway 323 MiB | mysql 172 + redis 8 MiB | **≈ 1.05 GiB** | `docker stats` |
 | **dev 开发档** | 2 个本机 JVM ≈ 244 MiB | 数据层 256 MiB | **≈ 0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比 |
-| **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.6 GiB | nacos 1.09 GiB + rocketmq 1.5 GiB + 数据层 0.25 GiB + prometheus 55 MiB | **≈ 5.4 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
+| **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.7 GiB（484-689 MiB/个） | nacos 1.11 + rocketmq 1.68 + 数据层 0.26 + prometheus 0.03 GiB | **≈ 5.8 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
+| **FULL 扩容档**（本机进程，5 JVM） | 5 JVM `ps` RSS 合计 253 MiB（**刚启动即采样**；同一进程跑 10 分钟后到 309 MiB，ps RSS 随负载爬升） | rocketmq 1.77 GiB（nacos/prometheus 未起） | **≈ 2.0 GiB** | 混合口径 + 采样时点不一致，只作量级参考，别与上三行比 |
 
 > 口径说明：跨形态比较一律用 `docker stats`。本机进程的 `ps` RSS 在 macOS 上系统性偏低
 > （实测同一服务在容器里 440-600 MiB、在宿主机 `ps` 只报 44-132 MiB），混用两种口径会得出
@@ -191,11 +208,24 @@ LITE 服役档按实测排空能力定档：会进异步队列的领券/秒杀 *
 纯同步的优惠计算 500/s。实测超阈值爆发（400 条 / 并发 100）得 **327 受理 + 73 个 HTTP 429**，
 受理吞吐稳定在 104 msg/s ≈ 排空能力 —— 洪流不会变成无限排队。
 
-**可复现测量入口**：`./scripts/load-probe.sh [条数] [并发] [轮数]`（LITE 下分别报入口速率、
-发送结束积压、消费排空速率、端到端速率，并打印 3 轮对比）。当前实测（600 条 / 并发 80 / 3 轮，
-机器：10 核 OrbStack、数据盘接近写满）：入口 127-173 msg/s、消费排空 108-142 msg/s、
-端到端 85-104 msg/s，轮间波动约 ±20%。**这就是 LITE 服役档的容量口径**：低峰常态承载足够，
-再往上就是升 FULL 的场景，而不是继续调 LITE 的参数。
+**可复现测量入口**：`./scripts/load-probe.sh [条数] [并发] [轮数]`。探针的排空口径是
+**业务落库数**而不是队列长度——RocketMQ 的队列在 broker 里读不到（`XLEN` 恒为 0），
+只有"受理成功的条数最终变成多少张券"对两种通道同时成立；队列深度只在 LITE 额外打印，
+用来算真实净排空。同一参数（400 条 / 并发 80，机器：10 核 OrbStack）两形态实测：
+
+| 形态 | 入口 | 受理 | 端到端 | 尾部排空 | 队列 |
+|---|---|---|---|---|---|
+| LITE（8 worker 消费） | 2.1-2.7s | 240-327 条（其余 117-160 个 **429**，形态阈值生效） | ~70 msg/s | 1.3s | 发送结束积压 68-182，净排空 50-138 msg/s（小积压时不可信） |
+| FULL（1 coupon 副本） | 4.5-7.0s | **400/400，0 个 429**（FULL 口径阈值更高） | 55-68 msg/s | 0.34-1.34s（消费跟得上入口） | broker 侧不可读 |
+> 上表取"连跑两轮后的稳态"。冷启动首轮明显偏差：FULL 刚起来的第一个 400 条测到入口 8.4s、
+> 端到端 18 msg/s、尾部排空 13.3s —— JIT、连接池、broker 路由注册都还没热，别拿它当容量。
+
+> 别把这张表读成"FULL 比 LITE 慢"：FULL 的入口多了一跳 nacos `lb://` 和一次向 **x86 模拟
+> （Rosetta）运行的 broker** 同步投递，这两项在这台 Apple Silicon 上是纯开销，真机 x86 上
+> 不成立。这台机器上真正成立的结论是：LITE 的洪流保护（早拒 + 有界积压）按设计生效，
+> 而 FULL 把同一批流量从"拒掉 40%"变成"全收 + 无积压"，代价是入口单请求更贵。
+
+**这就是 LITE 服役档的容量口径**：低峰常态承载足够，再往上就是升 FULL 的场景，而不是继续调 LITE 的参数。
 
 **剩余可挖**：同步入口每单仍打 4 个 autocommit，合并到 1-2 个约值同样 1.5 倍，但要注意
 幂等"抢占"与业务写同事务会失去 in-flight 抢占记录的可见性（并发重复请求将看不到彼此的
@@ -206,10 +236,10 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 | 差异 | 后果 |
 |---|---|
 | 消息重试语义：RocketMQ broker 侧持久化 + 指数退避重试队列 vs Redis Stream 容器内 3 次后放弃（靠本地消息表补偿重投） | 削峰行为不等价；Stream 无 broker 侧堆积策略 |
-| **容器化 FULL 访问不到 RocketMQ**：broker 只广播一个 `brokerIP1`，当前值是给本机进程形态用的 | 见 `docker-compose.full-app.yml` 头部说明与切换方法（同步链路与多副本 LB 不受影响） |
-| **单库共享**（LITE 一库，FULL 四库） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，LITE 把它拿掉了，只能靠约定 |
-| 单 JVM 承载四模块 | 掩盖服务间超时、部分不可用、连接池争用（hikari 10 vs 4×20） |
-| LITE 不带 Prometheus | `/actuator/prometheus` 暴露了但没人抓；`prometheus.yml` 的 target 写死 FULL 的宿主机端口 |
+| ~~容器化 FULL 访问不到 RocketMQ~~ **已修并实测**：broker 只广播一个 `brokerIP1`，取 `host.docker.internal` 后本机进程形态与容器形态都能解析 | 两形态各跑满 34/34，见第三节；改回 127.0.0.1 会让容器侧异步全失败并退回本地消息表 |
+| **单库共享**（两个形态默认都是单库 `marketing`） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，现在只能靠约定（FULL 想隔离需逐服务导出 `MYSQL_DB=marketing_<模块>` 并改用 `docker/mysql/init`） |
+| 单 JVM 承载四模块 | 掩盖服务间超时、部分不可用、连接池争用（LITE 一个 30 连接的池养四模块 + 8 worker + 补偿 Job；FULL 是 4×20 各管各的） |
+| LITE 不带 Prometheus | `/actuator/prometheus` 暴露了但没人抓。`prometheus.yml` 两个 job 分别覆盖 FULL 的两种交付形态（`marketing-local` 打宿主机端口、`marketing-full-container` 打 compose DNS 名），**只有当前形态的 targets 会 UP** |
 | ~~消费并行度：FULL 8 线程 / LITE 1 线程~~ 已对齐（默认 8） | 见上文；两形态消费并发不再不等价，但并行度需与连接池一起调（池 30 才吃得住 8 worker） |
 
 数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；
@@ -298,6 +328,16 @@ mvn test                 # 26 个单测：见下
 并发段的库存基线**从接口读、不写死**，并断言恒等式 `分桶余量 + DB 已售 == 总库存`
 （对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测
 连跑 3 轮均 34/34。
+
+**三套形态的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）：
+
+| 形态 | 最近一次 | 通道证据 |
+|---|---|---|
+| LITE 服役档（容器） | 34/34 | Redis Stream 键 + XDEL 生效 |
+| dev 开发档（本机 2 JVM） | 34/34 | 同上 |
+| FULL · 本机进程形态 | 34/34 | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0 |
+| FULL · 容器化 1 副本 | 34/34 | 同上 |
+| FULL · 容器化 2 副本（seckill + coupon） | 34/34 | 同上 + 第三节的多副本三条证据 |
 
 ## 七、扩展点（占位 → 生产的升级路径）
 
