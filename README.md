@@ -75,8 +75,10 @@ GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结�
 ./scripts/stop-dev.sh --down
 
 # FULL 扩容档 · 本机进程形态
-cd docker && docker compose -f docker-compose.prod.yml up -d && cd ..
-./scripts/start-all.sh                # 日志 logs/，pid run/；PROFILES=nacos 走注册发现
+./scripts/start-all.sh                # 自带数据层 + RocketMQ（进程形态广播 127.0.0.1）
+                                      # 日志 logs/，pid run/；PROFILES=nacos 走注册发现
+                                      # 四库隔离档：MYSQL_DB_PER_SERVICE=1 ./scripts/start-all.sh
+(cd docker && docker compose -f docker-compose.prod.yml up -d)   # 想连带 nacos/prometheus 才需要
                                       # 注册中心控制台 http://localhost:8848/nacos，监控 :9091
 ./scripts/stop-all.sh && (cd docker && docker compose -f docker-compose.prod.yml down)
 
@@ -114,6 +116,28 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 （`seckill_order_persisted` 分别 35 / 26，且冒烟的"账实一致"断言未被破坏，说明不是各自重复消费）；
 `@Scheduled` 跨副本互斥（两副本 `mkt_job_dedup_skipped_total` 累计 109 次跳过，即同一周期只有一个实例真跑）。
 
+**一台 broker 只能广播一个地址，两种交付形态要的却不同**，所以 broker 配置分成两份、
+由各自的启动脚本调和：本机进程形态用 `rocketmq/broker.conf`（`brokerIP1=127.0.0.1`），
+容器化形态用 `rocketmq/broker.container.conf`（`brokerIP1=host.docker.internal`，经
+`docker-compose.prod.container.yml` 这一层覆盖挂载）。为什么不能一个取值通吃：在
+Apple Silicon + OrbStack 上实测，容器内 `host.docker.internal` 通，宿主机上原生 socket 也通，
+但**宿主机 JVM 里的 RocketMQ Netty 客户端连不通它**（`RemotingConnectException`）；反过来
+广播 127.0.0.1 时容器把回环当成自己。两个脚本都用 `--force-recreate rocketmq-broker`：
+bind 挂载钉的是 inode，只改 conf 内容时 compose 认为服务没变、不会重建（这个坑今天踩过一次，
+表现是"改了地址但 broker 还在广播旧值"）。
+
+**FULL 的四库隔离档也实测过**（`MYSQL_DB_PER_SERVICE=1` + 独立的一套 MySQL）：34/34，
+数据确实按服务落在 `marketing_activity` / `marketing_coupon` / `marketing_seckill` 各自库里
+（活动 4 行、券 1 行、订单 61 行），两张 `local_message` 补偿表零残留。这条路径此前**从未跑过，
+而且是坏的**：`docker/mysql/init/01-schema.sql` 给 `marketing_activity` 授了权、也 `USE` 了它，
+却没有 `CREATE DATABASE` —— GRANT 不建库，初始化会在第一个 USE 处报错并让 MySQL 容器整体起不来。
+
+**一次没定住的偶发**：容器化 FULL 在 7 轮冒烟里失败过 1 次（33/34）。失败断言当时没留证据
+（只截了输出尾部），但那两行关键不变式都在：**"账实一致"与"无超卖"均通过**，事后查
+`mkt_discount_degraded_total=0` 也排除了优惠计算降级那条。此后连续 6 轮 34/34 未复现，
+按"部署后首轮冷启动窗口"记录，不假装修好了；再遇到时保留完整输出即可定位（脚本会打印
+失败断言的上下文）。
+
 **磁盘水位是 broker 的隐形开关**：所在分区使用率超过 90% 时它以 `CODE:14 service not available`
 拒写（实测踩过 92%），表现与"链路坏了"完全一样，但消息不丢——全部退回本地消息表。
 本次实测到补偿链路真实闭环：拒写窗口内积压 61 条 PENDING，磁盘回到 78% 后由
@@ -131,21 +155,27 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 ### 原地双向切换（同一份数据）
 
 ```bash
-# LITE 服役档 → FULL 扩容档（升档）
-./scripts/stop-preview.sh                                   # 只停应用容器，数据层不动
-(cd docker && docker compose -f docker-compose.prod.yml up -d --wait)   # RocketMQ/Nacos/Prometheus
-./scripts/start-all.sh                                      # 数据层已在跑；四进程 + 网关
+# LITE 服役档 → FULL 扩容档·本机进程形态（升档）
+./scripts/stop-preview.sh             # 只停应用容器，数据层不动
+./scripts/start-all.sh                # 自己拉起数据层 + RocketMQ，并把 broker 调和成
+                                      # brokerIP1=127.0.0.1（进程形态要的地址）
+
+# LITE 服役档 → FULL 扩容档·容器化形态（要水平扩容时）
+./scripts/stop-preview.sh
+./scripts/deploy-full.sh --scale marketing-seckill=2   # 中间件带容器版 broker conf，自动重建
 
 # FULL → LITE（降档）
-./scripts/stop-all.sh
+./scripts/stop-all.sh                                    # 进程形态
+# docker compose -f docker/docker-compose.full-app.yml down   # 容器化形态
 (cd docker && docker compose -f docker-compose.prod.yml down)  # 只拆扩容档专属中间件
 ./scripts/deploy-preview.sh
 ```
 
 两侧都不需要搬数据：`MYSQL_DB` 默认指向共享单库，Redis 状态（库存桶 / 幂等标记 / 限流窗口）
-随 AOF 卷原地保留。已实测一轮完整往返：LITE 冒烟 34/34 → 原地升 FULL（四进程连同一个
-`marketing` 库，LITE 留下的 61 条订单与 2 个活动可见）→ FULL 连跑 3 轮 34/34 → 降回 LITE
-34/34，累计数据连续（订单 366 / 活动 7 / 券 6 逐轮递增、无丢失无翻倍）。
+随 AOF 卷原地保留。2026-09-22 实测的完整链路：LITE 34/34 → 原地升 FULL 进程形态 34/34 →
+再原地换 FULL 容器形态（1 副本、2 副本各 34/34）→ 降回 LITE 34/34，四段全程共用同一个
+`marketing` 库与同一套 Redis 状态，累计数据连续（秒杀 `sold_stock` 从 13 一路涨到 362，
+逐段递增、无丢失无翻倍）。更早一轮还验过 LITE 留下的订单与活动在升档后立即可见。
 
 切换时**唯一需要留意的是消息通道**：升档瞬间 LITE 侧 Stream 里未被消费的消息不会自动转到
 RocketMQ。正确性靠本地消息表兜住（未 confirm 的消息由 `LocalMessageRetryer` 按退避重投，
@@ -236,8 +266,8 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 | 差异 | 后果 |
 |---|---|
 | 消息重试语义：RocketMQ broker 侧持久化 + 指数退避重试队列 vs Redis Stream 容器内 3 次后放弃（靠本地消息表补偿重投） | 削峰行为不等价；Stream 无 broker 侧堆积策略 |
-| ~~容器化 FULL 访问不到 RocketMQ~~ **已修并实测**：broker 只广播一个 `brokerIP1`，取 `host.docker.internal` 后本机进程形态与容器形态都能解析 | 两形态各跑满 34/34，见第三节；改回 127.0.0.1 会让容器侧异步全失败并退回本地消息表 |
-| **单库共享**（两个形态默认都是单库 `marketing`） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，现在只能靠约定（FULL 想隔离需逐服务导出 `MYSQL_DB=marketing_<模块>` 并改用 `docker/mysql/init`） |
+| **broker 广播地址按交付形态分两份**：一台 broker 只广播一个 `brokerIP1`，而本机进程要 127.0.0.1、容器要 `host.docker.internal`（宿主机 JVM 连不通那个 fake-IP，实测 RemotingConnectException） | 两个启动脚本各自 `--force-recreate` broker；挂错会当场异步全失败并退回本地消息表（不丢但延迟），见第三节 |
+| **单库共享**（两个形态默认都是单库 `marketing`） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，现在只能靠约定（FULL 想隔离：`MYSQL_DB_PER_SERVICE=1 ./scripts/start-all.sh` + 挂 `docker/mysql/init` 的四库 DDL，已实测 34/34；代价是数据不再与 LITE 共用，也就不能原地来回切） |
 | 单 JVM 承载四模块 | 掩盖服务间超时、部分不可用、连接池争用（LITE 一个 30 连接的池养四模块 + 8 worker + 补偿 Job；FULL 是 4×20 各管各的） |
 | LITE 不带 Prometheus | `/actuator/prometheus` 暴露了但没人抓。`prometheus.yml` 两个 job 分别覆盖 FULL 的两种交付形态（`marketing-local` 打宿主机端口、`marketing-full-container` 打 compose DNS 名），**只有当前形态的 targets 会 UP** |
 | ~~消费并行度：FULL 8 线程 / LITE 1 线程~~ 已对齐（默认 8） | 见上文；两形态消费并发不再不等价，但并行度需与连接池一起调（池 30 才吃得住 8 worker） |
@@ -346,6 +376,7 @@ Connection prematurely closed BEFORE response` → 该请求 500。机制：上�
 | LITE 服役档（容器） | 34/34 | Redis Stream 键 + XDEL 生效 |
 | dev 开发档（本机 2 JVM） | 34/34 | 同上 |
 | FULL · 本机进程形态 | 34/34 | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0 |
+| FULL · 本机进程 · 四库隔离档 | 34/34 | 数据按服务落在 4 个库、两张补偿表零残留 |
 | FULL · 容器化 1 副本 | 34/34 | 同上 |
 | FULL · 容器化 2 副本（seckill + coupon） | 34/34 | 同上 + 第三节的多副本三条证据 |
 
@@ -379,7 +410,7 @@ marketing-platform/
 │   ├── docker-compose.data.yml    # 常驻数据层（mysql 单库 + redis AOF），三套形态共用
 │   ├── mysql/init/01-schema.sql   # 4 库 DDL + 种子数据（FULL，自动执行）
 │   ├── mysql/init-lite/           # 单库 DDL + 种子数据（数据层默认，自动执行）
-│   ├── mysql/init/01-schema.sql   # 四库布局（可选隔离档，需逐服务导出 MYSQL_DB）
+│   ├── mysql/init/01-schema.sql   # 四库布局（可选隔离档，配合 MYSQL_DB_PER_SERVICE=1）
 │   └── prometheus/prometheus.yml
 └── scripts/
     ├── common.sh               # 公共前置：JDK 17 锁定 + 健康等待
