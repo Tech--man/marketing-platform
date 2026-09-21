@@ -16,12 +16,17 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Redis Stream 消费容器（Lite 形态）：为每个 {@link StreamMessageHandler} 起一条
- * 守护线程轮询 XREADGROUP，处理成功 XACK；失败重试 3 次后放弃本条投递。
+ * Redis Stream 消费容器（Lite 形态）：为每个 {@link StreamMessageHandler} 起
+ * {@code concurrency} 条守护线程轮询 XREADGROUP（同组内 consumer 名唯一，Redis 原生
+ * 保证一条消息只投给组内一个 consumer），处理成功 XACK + XDEL；失败重试 3 次后放弃本条投递。
  *
  * <p>可靠性说明：放弃的消息一定未被本地消息表 confirm（confirm 在 handler 成功后
  * 才执行），{@code LocalMessageRetryer} 会按退避重新 publish 一条新消息，
  * "至少一次 + 消费幂等"闭环不依赖 Stream 的 PEL 重投。</p>
+ *
+ * <p>并行度默认 8 是为了与 Full 形态对齐：同一段落库逻辑在 Full 由
+ * {@code @RocketMQMessageListener(consumeThreadNumber = 8)} 驱动，若 LITE 只跑单线程，
+ * 两形态就不只是容量差异，而是行为不等价。</p>
  */
 @Slf4j
 public class StreamConsumerRegistrar implements InitializingBean, DisposableBean {
@@ -35,21 +40,27 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
 
     private final StringRedisTemplate redisTemplate;
     private final List<StreamMessageHandler> handlers;
+    private final int concurrency;
     private final List<Thread> workers = new ArrayList<>();
     private volatile boolean running;
 
-    public StreamConsumerRegistrar(StringRedisTemplate redisTemplate, List<StreamMessageHandler> handlers) {
+    public StreamConsumerRegistrar(StringRedisTemplate redisTemplate, List<StreamMessageHandler> handlers,
+                                   int concurrency) {
         this.redisTemplate = redisTemplate;
         this.handlers = handlers;
+        this.concurrency = Math.max(1, concurrency);
     }
 
     @Override
     public void afterPropertiesSet() {
         running = true;
         for (StreamMessageHandler handler : handlers) {
-            startWorker(handler);
+            for (int i = 1; i <= concurrency; i++) {
+                startWorker(handler, i);
+            }
         }
-        log.info("[stream-consumer] Redis Stream 消费容器启动，订阅 topic 数: {}", handlers.size());
+        log.info("[stream-consumer] Redis Stream 消费容器启动，订阅 topic 数: {}, 每 topic 并发: {}",
+                handlers.size(), concurrency);
     }
 
     @Override
@@ -58,12 +69,12 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
         workers.forEach(Thread::interrupt);
     }
 
-    private void startWorker(StreamMessageHandler handler) {
+    private void startWorker(StreamMessageHandler handler, int index) {
         String key = RedisStreamEventPublisher.streamKey(handler.topic());
         ensureGroup(key, handler.group());
         org.springframework.data.redis.connection.stream.Consumer consumer =
                 org.springframework.data.redis.connection.stream.Consumer
-                        .from(handler.group(), handler.group() + "-c1");
+                        .from(handler.group(), handler.group() + "-c" + index);
         StreamOffset<String> offset = StreamOffset.create(key, ReadOffset.lastConsumed());
 
         Thread worker = new Thread(() -> {
@@ -88,7 +99,7 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
                     deliver(handler, key, record);
                 }
             }
-        }, "stream-consumer-" + handler.topic());
+        }, "stream-consumer-" + handler.topic() + "-" + index);
         worker.setDaemon(true);
         worker.start();
         workers.add(worker);

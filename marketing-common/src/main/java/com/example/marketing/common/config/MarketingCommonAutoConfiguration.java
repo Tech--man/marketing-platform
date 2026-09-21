@@ -10,6 +10,7 @@ import com.example.marketing.common.mq.RocketMqEventPublisher;
 import com.example.marketing.common.mq.StreamConsumerRegistrar;
 import com.example.marketing.common.mq.StreamMessageHandler;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -110,8 +111,9 @@ public class MarketingCommonAutoConfiguration {
         @Bean
         @ConditionalOnBean(StreamMessageHandler.class)
         public StreamConsumerRegistrar streamConsumerRegistrar(StringRedisTemplate stringRedisTemplate,
-                List<StreamMessageHandler> handlers) {
-            return new StreamConsumerRegistrar(stringRedisTemplate, handlers);
+                List<StreamMessageHandler> handlers,
+                @Value("${marketing.mq.stream-concurrency:8}") int concurrency) {
+            return new StreamConsumerRegistrar(stringRedisTemplate, handlers, concurrency);
         }
 
         @Bean

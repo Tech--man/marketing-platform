@@ -91,6 +91,10 @@ services:
       REDIS_HOST: redis
       # 预览形态消息通道：Redis Stream 替代 RocketMQ
       MQ_TYPE: redis-stream
+      # 消费并行度：与 Full 形态 @RocketMQMessageListener(consumeThreadNumber=8) 对齐。
+      # 默认 1 worker 时实测消费净速率只有 ~24 msg/s（单线程 × 每条 2-3 次提交等 fsync），
+      # 这既是吞吐墙也是两形态行为不等价，故显式可调：宿主机 MQ_STREAM_CONCURRENCY 覆盖
+      MARKETING_MQ_STREAM_CONCURRENCY: ${MQ_STREAM_CONCURRENCY:-8}
       # 320M 堆够四个模块低峰承载；GC 用 G1 而非 SerialGC —— SerialGC 的 Full GC 会把
       # 结算线程全停，"小机器常态服役"下这是可见的业务抖动。mem_limit 按
       # 堆 320 + 元空间 160 + code cache/线程栈/direct ~150 给足余量，避免容器 OOMKill。

@@ -119,9 +119,22 @@ mem_limit 按"堆 + 元空间 + code cache + 线程栈 + direct"重算留余量�
 **入口 98-103 msg/s、消费 22-25 msg/s、两轮方差 ±5%** —— 也就是说池是当时读数抖动的来源，
 修好后测量才可用。
 
-**当前第一限制因子：单线程消费端 ~25 msg/s**。每个 topic 一条 worker、每轮 16 条、
-每条 2-3 次提交各自等 fsync；异步落库链路（领券/秒杀建单）到顶就是这里。同步链路
-（优惠计算、活动查询）不受此限，实测入口约 100 msg/s。
+**消费并行度已对齐（LITE 1 → 8 worker）**：`StreamConsumerRegistrar` 起初每个 topic 只起
+一条 worker，而同一段落库逻辑在 FULL 由 `@RocketMQMessageListener(consumeThreadNumber = 8)`
+驱动 —— 这既是吞吐墙也是形态不等价。现在默认 8（`MQ_STREAM_CONCURRENCY` 可调），实测同一负载
+（600 条 / 并发 80，让积压必然形成）：
+
+| 消费并行度 | 消费净速率 |
+|---|---|
+| 1（改前） | 25 msg/s |
+| 4 | 54 msg/s |
+| 8（默认） | **115 msg/s** |
+
+并行度提到 8 的同时暴露并修复了一个真 bug（见 `fix(seckill)` 提交）：同步链路先投递消息、
+后无条件 `SET result=ACCEPTED`，消费端变快之后会把已写好的 `SUCCESS` 覆盖回 `ACCEPTED`，
+表现为"订单已建、用户永远轮询到处理中"。FULL 侧 8 线程同样会撞，只是此前没被测出来。
+
+**当前限制因子回到同步请求路径**：入口实测 ~90-100 msg/s（每单 4 个 autocommit × fsync）。
 
 **尚未拿到、也不承诺的数**：升档阈值。要给出可写进文档的 QPS 阈值，仍需一次
 入口事务合并（每单 4 提交 → 1-2）与消费端并行化/批量的实测对比。`flush=2` 作为显式容量
@@ -136,6 +149,7 @@ OS 崩溃会丢最近 1 秒已提交事务）。
 | **单库共享**（LITE 一库，FULL 四库） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，LITE 把它拿掉了，只能靠约定 |
 | 单 JVM 承载四模块 | 掩盖服务间超时、部分不可用、连接池争用（hikari 10 vs 4×20） |
 | LITE 不带 Prometheus | `/actuator/prometheus` 暴露了但没人抓；`prometheus.yml` 的 target 写死 FULL 的宿主机端口 |
+| ~~消费并行度：FULL 8 线程 / LITE 1 线程~~ 已对齐（默认 8） | 见上文；两形态消费并发不再不等价，但并行度需与连接池一起调（池 30 才吃得住 8 worker） |
 
 数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；
 网关演示 Token `demo-token-123`（环境变量 `GATEWAY_TOKEN` 覆盖）。
