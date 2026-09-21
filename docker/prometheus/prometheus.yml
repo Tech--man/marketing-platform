@@ -1,4 +1,7 @@
 # Prometheus 采集配置：抓取四个业务服务 + 网关的 /actuator/prometheus
+# 两个 job 各自对应一个 FULL 交付形态（本机进程 / 容器化）。同一时刻只有当前形态的
+# targets 是 UP，另一形态的 up=0 属正常，不是故障；唯一例外是 8090——容器网关也发布
+# 在宿主机 8090，所以 marketing-local 的那条会串到容器网关上。
 global:
   scrape_interval: 10s
   evaluation_interval: 15s
@@ -17,3 +20,22 @@ scrape_configs:
           - host.docker.internal:8084
         labels:
           env: local
+
+  # 容器化 FULL（scripts/deploy-full.sh）：应用容器**不发布宿主机端口**（多副本前提），
+  # 上面那份按宿主机端口静态列举的 targets 在这个形态全部 down，必须走 compose 网络内的 DNS 名。
+  # 副本数注意：compose 服务名（marketing-seckill）在 Docker 内是轮询解析，一次抓取只会命中一个副本，
+  # 计数会在一台/另一台之间跳。要按副本单独看：加 docker-marketing-<svc>-<序号> 形式的目标
+  # （实测两副本时 docker-marketing-seckill-1/-2 各自可解析且独立出指标），
+  # 生产上应换成注册中心/ dns_sd 一类的动态发现而不是手工列举。
+  - job_name: marketing-full-container
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - marketing-gateway:8090
+          - marketing-activity:8081
+          - marketing-coupon:8082
+          - marketing-discount:8083
+          - marketing-seckill:8084
+        labels:
+          env: full-container
+

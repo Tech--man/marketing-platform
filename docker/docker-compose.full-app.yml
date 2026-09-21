@@ -4,16 +4,18 @@
 #     前者用 docker-compose.data.yml，后者用 docker-compose.prod.yml
 #   · 必须走 nacos 服务发现：网关按 lb:// 负载均衡到各服务的多个副本，
 #     因此本文件里的服务**不发布任何宿主机端口**（副本数无关端口冲突）
-#   · 已知限制（重要）：docker/rocketmq/broker.conf 里 brokerIP1 = 127.0.0.1，是为
-#     本机进程形态（scripts/start-all.sh）广播的。RocketMQ 客户端连的是 broker 广播的
-#     地址，因此**本文件跑起来的容器访问不到 broker**（容器内 127.0.0.1 是它自己）：
-#     同步链路（活动/优惠/查询）与多副本负载均衡均正常，异步落库链路会投递失败并退回
-#     本地消息表（不丢，但延迟）。要让容器化的 FULL 也跑通异步，把 brokerIP1 改为
-#     host.docker.internal（两侧都能解析）并重启 broker，同时确认磁盘余量充足 ——
-#     broker 所在分区使用率超过 90% 时会以 CODE:14 service not available 拒写。
+#   · broker 广播地址：RocketMQ 客户端连的是 broker 向 namesrv 广播的那个地址，而 broker
+#     只能广播一个。docker/rocketmq/broker.conf 里取 brokerIP1 = host.docker.internal，
+#     因为它是"本机进程形态"和"本文件形态"唯一都能解析的取值（容器内经它访问宿主机
+#     published 端口，宿主机内经 fake-IP 解析回到同一处）。曾经取 127.0.0.1 时，本形态的
+#     容器把 127.0.0.1 当成自己，异步投递全失败、退回本地消息表（消息不丢但延迟）。
+#   · 运维前置条件（实测踩过）：broker 所在分区使用率 > 90% 会以
+#     CODE:14 service not available 拒写，表现和"链路坏了"一模一样。一次 --build
+#     全量重建约多占 2 GB，磁盘紧张时用 SKIP_BUILD=1 复用现成镜像。
 #   · 启动（需先 mvn package 产出各模块 fat jar）：
 #       ./scripts/deploy-full.sh              构建并起全量（默认每服务 1 副本）
 #       ./scripts/deploy-full.sh --scale marketing-discount=3
+#       SKIP_BUILD=1 ./scripts/deploy-full.sh --scale marketing-seckill=2
 # ============================================================
 x-app-defaults: &app-defaults
   restart: unless-stopped
