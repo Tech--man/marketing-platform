@@ -2,7 +2,7 @@
 # 开发环境（dev）：只容器化中间件，业务 JVM 跑在本机
 #   · 形态：mysql + redis 两个容器；standalone(8085) 与 gateway(8090) 由
 #     ./scripts/start-dev.sh 以本机进程启动，改代码后秒级重启、可直接打断点
-#   · 内存：极致小为第一目标，够跑通三条链路即可（无 MQ/Nacos/Prometheus）
+#   · 内存：极致小为第一目标（无 MQ/Nacos/Prometheus）；服役档口径见 docker-compose.preview.yml
 #   · 消息：Redis Stream（standalone 默认 marketing.mq.type=redis-stream）
 #   · 库：单库 marketing（docker/mysql/init-lite），与预览环境同一份 DDL
 # 与 prod 形态共用宿主机端口（mysql 3307 / redis 6380），两套互斥，切换前先停另一套
@@ -47,9 +47,12 @@ services:
       # 故意不用 6379：Homebrew 等常驻的 redis-server 会占住 127.0.0.1:6379，
       # 精确绑定优先于 Docker 的 *:6379 发布，本机 JVM 会静默连到那个实例
       - "127.0.0.1:6380:6379"
-    # 关闭持久化：开发环境重启即重建预热，省掉 RDB fork 的额外内存
-    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru"]
-    mem_limit: 128m
+    # 淘汰策略与服役档一致：allkeys-lru 会静默丢掉库存/幂等键，让开发环境跑出生产
+    # 不可能出现的怪现象；noeviction 写满即报错，行为可预期。
+    # 只有持久化可以省（AOF 与 RDB 都关）：开发档允许重启即重建预热。
+    command: ["redis-server", "--appendonly", "no", "--save", "",
+              "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    mem_limit: 192m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
