@@ -3,7 +3,8 @@
 # 正式环境形态（Full 拓扑）本机启动：网关 8090 + 四业务服务 8081-8084，5 个 JVM
 # 前置：./scripts/start-all.sh 会自动确保数据层；扩容档中间件另需
 #       docker compose -f docker/docker-compose.prod.yml up -d
-# 用法：./scripts/start-all.sh [服务名...]   不带参数启动全部
+# 用法：./scripts/start-all.sh [服务名...]        不带参数启动全部（local 静态路由）
+#       PROFILES=nacos ./scripts/start-all.sh     注册中心模式：注册发现 + lb:// 路由
 # 说明：日常改代码请用 ./scripts/start-dev.sh（2 个 JVM，内存小一个数量级）
 # ============================================================
 set -euo pipefail
@@ -17,6 +18,12 @@ mkdir -p "$LOG_DIR" "$RUN_DIR"
 
 # 每个服务一份独立堆：不给定则 JVM 默认按物理内存 1/4 取堆，5 个进程会失控
 JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m}"
+
+# PROFILES=nacos → 注册到 Nacos 且网关改用 lb:// 服务发现路由（多实例扩容的前置）；
+# 留空则是默认的 local 静态路由（按端口直连），单实例够用、启动更快
+PROFILES="${PROFILES:-}"
+APP_ARGS=()
+[ -n "$PROFILES" ] && APP_ARGS+=("--spring.profiles.active=$PROFILES")
 
 # 中间件宿主机端口（与 dev 形态同一套，两套互斥）；Redis 避开 6379 见 compose 注释
 export MYSQL_PORT="${MYSQL_PORT:-3307}" REDIS_PORT="${REDIS_PORT:-6380}"
@@ -51,7 +58,7 @@ start_one() {
     echo "!! 未找到 ${jar}，请先执行 mvn package" >&2
     exit 1
   fi
-  nohup java $JAVA_OPTS -jar "$jar" > "$LOG_DIR/$name.log" 2>&1 &
+  nohup java $JAVA_OPTS -jar "$jar" "${APP_ARGS[@]}" > "$LOG_DIR/$name.log" 2>&1 &
   echo $! > "$pid_file"
   echo "==> $name 已启动 pid $(cat "$pid_file")，日志 logs/$name.log"
 }

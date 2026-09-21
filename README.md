@@ -96,6 +96,13 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | 8085 | 聚合服务（调试直连） | 形态侧：dev 本机进程、LITE 容器 |
 | 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | 仅 FULL 形态 |
 
+**注册中心模式已实测**（`PROFILES=nacos ./scripts/start-all.sh`）：5 个服务全部注册进 Nacos；
+再起第二个 discount 实例（`SERVER_PORT=8093`）后 Nacos 显示两个 host，经网关打 20 次同步请求，
+`mkt_discount_calc_seconds_count` 计数 **8083 与 8093 各 10 次** —— lb:// 轮询负载均衡成立，
+这是 FULL "加实例承接洪流" 的前提。异步链路依赖 RocketMQ 可写，本机磁盘水位 95% 时 broker 会
+以 `CODE:14 service not available` 拒写（此时消息全部退回本地消息表，`local_message` 可见 124 条
+PENDING 等补偿重投，零丢失），需在磁盘余量恢复后复验。
+
 互斥的只有**形态侧**（8090/8085 与 FULL 的 5 个进程端口），切换时先停上一套的应用侧即可，
 数据层不用动。
 
