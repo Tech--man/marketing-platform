@@ -28,7 +28,8 @@ wait_healthy() {
     fi
     sleep 1
   done
-  echo "!! $name ${deadline}s 内未就绪，请查看 logs/$name.log" >&2
+  echo "!! $name ${deadline}s 内未就绪：:$port 的 /actuator/health 没有出现 UP" >&2
+  echo "   排查：本机进程看 logs/$name.log；容器形态看 docker logs ${name#marketing-}-…（compose 服务名）" >&2
   return 1
 }
 

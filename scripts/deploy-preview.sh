@@ -22,5 +22,12 @@ fi
 echo "==> 构建并启动预览栈（standalone 首次启动约 40-90s）"
 docker compose -f "$COMPOSE" up -d --build --wait
 
+# compose 里的 healthcheck 只探 TCP 端口，而"端口在听"不等于"应用可用"——本轮开发环境
+# 就撞到过 JVM 起来、8085 监听、但 /actuator/health 返回 503 DOWN 的情况，--wait 会照样
+# 判就绪。所以就绪判定用应用自己的 health 端点收口（这两个端口编排里都对宿主机发布）。
+echo "==> 等待应用级就绪（actuator/health）"
+wait_healthy marketing-standalone 8085 90
+wait_healthy marketing-gateway 8090 60
+
 echo "==> 预览栈就绪。验收：./scripts/smoke-test.sh"
 docker compose -f "$COMPOSE" ps
