@@ -12,20 +12,32 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *
  * <p>与正式环境形态（四个独立进程 + RocketMQ）的关系：</p>
  * <ul>
- *   <li>业务代码零改动，仅装配层聚合（本类位于 com.example.marketing 包根，
- *       组件扫描天然覆盖各模块 controller/service/mapper）；</li>
+ *   <li>业务代码零改动，仅装配层聚合（扫描四个业务模块包，
+ *       controller/service/mapper 一次装齐）；</li>
  *   <li>MQ 换成 Redis Stream：排除 RocketMQAutoConfiguration（无消费容器/生产者），
  *       common 自动装配按 marketing.mq.type=redis-stream 选择 Stream 实现；</li>
  *   <li>各模块独立启动类与重复定义的 MybatisPlusConfig 通过 excludeFilters 排除，
  *       由本模块统一提供一份。</li>
  * </ul>
  *
+ * <p>扫描范围必须避开 common / open-api 两个包：它们的装配类是
+ * {@code @AutoConfiguration}，靠 AutoConfiguration.imports 在 DataSource 等
+ * Bean 定义注册之后才评估条件。一旦被组件扫描提前收编，
+ * {@code @ConditionalOnBean(DataSource)} 会在数据源出现前判false，
+ * 整个自动配置静默不生效（表现为 IdempotentExecutor 等 Bean 缺失）。</p>
+ *
  * <p>适用场景：开发自测与对外预览（够功能验证即可）；正式环境与生产同构的 Full 拓扑
  * 见 scripts/start-all.sh + docker-compose.prod.yml。</p>
  */
 @SpringBootApplication(exclude = RocketMQAutoConfiguration.class)
 @EnableScheduling
-@ComponentScan(basePackages = "com.example.marketing",
+@ComponentScan(basePackages = {
+        "com.example.marketing.standalone",
+        "com.example.marketing.activity",
+        "com.example.marketing.coupon",
+        "com.example.marketing.discount",
+        "com.example.marketing.seckill"
+        },
         excludeFilters = {
                 // 各模块独立启动类（避免二次 @ComponentScan 与多 @SpringBootConfiguration）
                 @ComponentScan.Filter(type = FilterType.REGEX,
