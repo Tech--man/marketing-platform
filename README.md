@@ -280,6 +280,11 @@ mvn test                 # 26 个单测：见下
 **装配层回归**（聚合形态扫描边界 + common 条件装配矩阵，用 ApplicationContextRunner + H2
 不依赖中间件）。后者把"预览栈起不来"这类装配 bug 从一次 2-3 分钟的构建+部署排查压到秒级。
 
+**已知噪音**：网关启动时会固定打一条 `Unable to load io.netty.resolver.dns.macos
+.MacOSDnsServerAddressStreamProvider` 的 ERROR —— macOS 上 netty 原生 DNS 解析器的可选本地库缺失，
+回落到系统解析器，功能无影响。不为它往交付物里加平台特定依赖（`netty-resolver-dns-native-macos`
+只在 macOS 有意义，会污染 Linux 部署）。除这条之外，三套形态跑完冒烟的 ERROR 计数为 0。
+
 **冒烟（34 条，四链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、预算扣减与 bizKey 幂等、超预算 41003、灰度命中、可参与位切换）；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖。
