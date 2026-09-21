@@ -17,9 +17,15 @@ mkdir -p "$LOG_DIR" "$RUN_DIR"
 # 每个服务一份独立堆：不给定则 JVM 默认按物理内存 1/4 取堆，5 个进程会失控
 JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m}"
 
+# 中间件宿主机端口（与 dev 形态同一套，两套互斥）；Redis 避开 6379 见 compose 注释
+export MYSQL_PORT="${MYSQL_PORT:-3307}" REDIS_PORT="${REDIS_PORT:-6380}"
+
 ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill)
 SERVICES=("$@")
 [ ${#SERVICES[@]} -eq 0 ] && SERVICES=("${ALL_SERVICES[@]}")
+
+assert_port_not_shadowed "$MYSQL_PORT"
+assert_port_not_shadowed "$REDIS_PORT"
 
 # 先构建（跳过测试，测试已有独立阶段）
 echo "==> mvn package（首次构建约 1-2 分钟）"

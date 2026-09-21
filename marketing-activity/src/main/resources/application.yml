@@ -22,6 +22,9 @@ spring:
         enabled: false
         server-addr: ${NACOS_ADDR:127.0.0.1:8848}
       config:
+        # local 模式整体关闭 nacos 配置客户端：否则它常驻一条 gRPC 重连线程，
+        # 每 3s 刷一次 "Server check fail"，并把 /actuator/health 拖成 DOWN
+        enabled: false
         server-addr: ${NACOS_ADDR:127.0.0.1:8848}
         # local 模式不从 nacos 导入配置，关闭 starter 的强制导入检查
         import-check:
@@ -64,4 +67,6 @@ spring:
   cloud:
     nacos:
       discovery:
+        enabled: true
+      config:
         enabled: true

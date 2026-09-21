@@ -3,7 +3,8 @@
 #   · 定位：与生产同构的全链路（MQ 削峰、注册发现、指标抓取），业务服务
 #     以 5 个独立进程运行（./scripts/start-all.sh），每个进程可独立扩缩容
 #   · 内存：不做极限压缩，按吞吐配；建议 8C16G 起
-#   · 与 dev / preview 形态端口冲突（3307 / 6379 / 8090），同一台机器上互斥
+#   · 与 dev 形态共用宿主机端口（mysql 3307 / redis 6380 / 网关 8090），两套互斥；
+#     preview 形态不占用宿主机中间件端口
 # 启动：docker compose -f docker-compose.prod.yml up -d（在本目录执行，
 #       或 cd docker && docker compose up -d 走默认解析）
 # ============================================================
@@ -19,7 +20,7 @@ services:
       MYSQL_USER: marketing
       MYSQL_PASSWORD: marketing123
     ports:
-      - "3307:3306"   # 宿主机 3306 常被本地 mysqld 占用，改用 3307
+      - "127.0.0.1:3307:3306"   # 只绑回环；宿主机 3306 常被本地 mysqld 占用
     volumes:
       - mkt-mysql-data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
@@ -37,7 +38,8 @@ services:
     image: redis:7-alpine
     container_name: mkt-redis
     ports:
-      - "6379:6379"
+      # 避开宿主机常驻 redis-server 的 6379（精确绑定会遮蔽容器发布）
+      - "127.0.0.1:6380:6379"
     command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

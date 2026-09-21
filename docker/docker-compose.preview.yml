@@ -18,8 +18,7 @@ services:
       MYSQL_DATABASE: marketing
       MYSQL_USER: marketing
       MYSQL_PASSWORD: marketing123
-    ports:
-      - "3307:3306"   # 宿主机 3306 常被本地 mysqld 占用，改用 3307
+    # 不对宿主机发布：预览栈自给自足，容器网络内按服务名访问，避免与 dev/prod 抢端口
     volumes:
       - mkt-preview-mysql-data:/var/lib/mysql
       # 单库初始化脚本（4 库合并版，种子数据一致）
@@ -45,8 +44,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: mkt-preview-redis
-    ports:
-      - "6379:6379"
     # 关闭持久化：预览环境重启即重新预热，省掉 RDB fork 的额外内存
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru"]
     mem_limit: 128m

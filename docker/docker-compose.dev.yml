@@ -5,7 +5,7 @@
 #   · 内存：极致小为第一目标，够跑通三条链路即可（无 MQ/Nacos/Prometheus）
 #   · 消息：Redis Stream（standalone 默认 marketing.mq.type=redis-stream）
 #   · 库：单库 marketing（docker/mysql/init-lite），与预览环境同一份 DDL
-# 端口与 prod 形态（docker-compose.prod.yml）冲突，切换前先 down 掉另一套
+# 与 prod 形态共用宿主机端口（mysql 3307 / redis 6380），两套互斥，切换前先停另一套
 # ============================================================
 services:
   mysql:
@@ -18,7 +18,7 @@ services:
       MYSQL_USER: marketing
       MYSQL_PASSWORD: marketing123
     ports:
-      - "3307:3306"   # 宿主机 3306 常被本地 mysqld 占用，改用 3307
+      - "127.0.0.1:3307:3306"   # 只绑回环；宿主机 3306 常被本地 mysqld 占用
     volumes:
       - mkt-dev-mysql-data:/var/lib/mysql
       - ./mysql/init-lite:/docker-entrypoint-initdb.d:ro
@@ -44,7 +44,9 @@ services:
     image: redis:7-alpine
     container_name: mkt-dev-redis
     ports:
-      - "6379:6379"
+      # 故意不用 6379：Homebrew 等常驻的 redis-server 会占住 127.0.0.1:6379，
+      # 精确绑定优先于 Docker 的 *:6379 发布，本机 JVM 会静默连到那个实例
+      - "127.0.0.1:6380:6379"
     # 关闭持久化：开发环境重启即重建预热，省掉 RDB fork 的额外内存
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru"]
     mem_limit: 128m

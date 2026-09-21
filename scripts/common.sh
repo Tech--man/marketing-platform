@@ -31,3 +31,27 @@ wait_healthy() {
   echo "!! $name ${deadline}s 内未就绪，请查看 logs/$name.log" >&2
   return 1
 }
+
+# ---- 端口归属自检 --------------------------------------------
+# 宿主机上若已有同名服务常驻默认端口（典型：Homebrew 的 redis-server 占着
+# 127.0.0.1:6379），它的精确地址绑定会优先于 Docker 对 *:port 的发布，本机进程
+# 会静默连到那个"外人"实例——三套环境瞬间退化成共用一个中间件，且现象只在数据
+# 对不上时才暴露。启动前先挡住。
+assert_port_not_shadowed() { # <宿主机端口>
+  local port=$1 pids pid comm
+  command -v lsof >/dev/null 2>&1 || return 0
+  pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
+  [ -z "$pids" ] && return 0
+  for pid in $pids; do
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+    case "$comm" in
+      *redis-server* | *mysqld* | *mariadb*)
+        echo "!! 宿主机进程 ${comm:-未知} (pid $pid) 正在监听 :$port" >&2
+        echo "   它会遮蔽容器发布的同一端口，业务进程会连到它而不是本环境的中间件。" >&2
+        echo "   处理：停掉该进程，或把本形态的宿主机端口改成其它端口" >&2
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}

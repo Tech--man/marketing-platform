@@ -18,6 +18,9 @@ RUN_DIR="$ROOT/run"
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
 DEV_COMPOSE="$ROOT/docker/docker-compose.dev.yml"
+# 宿主机中间件端口：Redis 刻意避开 6379，见 docker-compose.dev.yml 注释
+DEV_MYSQL_PORT="${DEV_MYSQL_PORT:-3307}"
+DEV_REDIS_PORT="${DEV_REDIS_PORT:-6380}"
 # 小堆 + SerialGC + 只跑 C1：换更快的启动与更小的常驻，牺牲峰值吞吐
 STANDALONE_OPTS="${STANDALONE_OPTS:--Xmx320m -Xss512k -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -XX:TieredStopAtLevel=1}"
 GATEWAY_OPTS="${GATEWAY_OPTS:--Xmx192m -Xss512k -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1}"
@@ -27,8 +30,14 @@ if [ "${1:-}" != "--no-build" ]; then
   mvn -q -DskipTests package -pl marketing-standalone,marketing-gateway -am
 fi
 
+# 宿主机若已有 redis-server/mysqld 占住这两个端口，容器发布会被遮蔽、进程会连错实例
+assert_port_not_shadowed "$DEV_MYSQL_PORT"
+assert_port_not_shadowed "$DEV_REDIS_PORT"
+
 echo "==> 启动开发中间件（mysql + redis）并等待健康检查"
 docker compose -f "$DEV_COMPOSE" up -d --wait
+
+export MYSQL_PORT="$DEV_MYSQL_PORT" REDIS_PORT="$DEV_REDIS_PORT"
 
 start_jvm() { # name jar opts
   local name=$1 jar=$2 opts=$3
