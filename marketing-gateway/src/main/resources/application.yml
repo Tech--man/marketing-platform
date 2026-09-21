@@ -1,0 +1,94 @@
+server:
+  port: 8090   # 宿主机 8080 常被其他服务占用，网关默认 8090
+
+spring:
+  application:
+    name: marketing-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      discovery:
+        # 默认 local 模式静态路由；--spring.profiles.active=nacos 切换为服务发现 + lb:// 路由
+        enabled: false
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+    gateway:
+      routes:
+        - id: activity-route
+          uri: http://${ACTIVITY_HOST:127.0.0.1}:${ACTIVITY_PORT:8081}
+          predicates:
+            - Path=/api/activity/**
+        - id: coupon-route
+          uri: http://${COUPON_HOST:127.0.0.1}:${COUPON_PORT:8082}
+          predicates:
+            - Path=/api/coupon/**
+        - id: discount-route
+          uri: http://${DISCOUNT_HOST:127.0.0.1}:${DISCOUNT_PORT:8083}
+          predicates:
+            - Path=/api/discount/**
+        - id: seckill-route
+          uri: http://${SECKILL_HOST:127.0.0.1}:${SECKILL_PORT:8084}
+          predicates:
+            - Path=/api/seckill/**
+
+marketing:
+  gateway:
+    auth:
+      enabled: true
+      token: ${GATEWAY_TOKEN:demo-token-123}
+    whitelist:
+      - /actuator/**
+    # 分层限流·网关层：按路由配置滑动窗口阈值（秒杀最严格，超限返回排队码）
+    rate-limit:
+      activity-route:
+        limit: 500
+        window-seconds: 1
+      coupon-route:
+        limit: 1000
+        window-seconds: 1
+      discount-route:
+        limit: 2000
+        window-seconds: 1
+      seckill-route:
+        limit: 200
+        window-seconds: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    com.example.marketing: INFO
+
+---
+# nacos profile：注册中心模式，路由改经服务发现（uri 用 lb://，同名服务多实例自动负载均衡）
+spring:
+  config:
+    activate:
+      on-profile: nacos
+  cloud:
+    nacos:
+      discovery:
+        enabled: true
+    gateway:
+      routes:
+        - id: activity-route
+          uri: lb://marketing-activity
+          predicates: [ Path=/api/activity/** ]
+        - id: coupon-route
+          uri: lb://marketing-coupon
+          predicates: [ Path=/api/coupon/** ]
+        - id: discount-route
+          uri: lb://marketing-discount
+          predicates: [ Path=/api/discount/** ]
+        - id: seckill-route
+          uri: lb://marketing-seckill
+          predicates: [ Path=/api/seckill/** ]

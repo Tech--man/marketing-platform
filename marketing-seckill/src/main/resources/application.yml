@@ -1,0 +1,73 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: marketing-seckill
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3307}/marketing_seckill?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:marketing}
+    password: ${MYSQL_PASSWORD:marketing123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      config:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        # local 模式不从 nacos 导入配置，关闭 starter 的强制导入检查
+        import-check:
+          enabled: false
+
+mybatis-plus:
+  global-config:
+    banner: false
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+rocketmq:
+  name-server: ${ROCKETMQ_ADDR:127.0.0.1:9876}
+  producer:
+    group: PID_MARKETING_SECKILL
+
+marketing:
+  seckill:
+    buckets: 16
+    token-ttl-seconds: 600
+    pay-timeout-seconds: 300
+    bought-mark-ttl-seconds: 86400
+    timeout-scan-interval-ms: 5000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    com.example.marketing: INFO
+
+---
+spring:
+  config:
+    import: optional:nacos:marketing-seckill.yaml
+    activate:
+      on-profile: nacos
+  cloud:
+    nacos:
+      discovery:
+        enabled: true

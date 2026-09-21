@@ -1,0 +1,109 @@
+# ============================================================
+# Lite 部署形态：单库 MySQL + Redis + 聚合服务 + 网关（2 JVM）
+# 目标环境：2C4G 云服务器 / 本地功能演示（内存预算约 2.2G）
+# 启动（模块构建完成后，在本目录执行）：
+#   docker compose -f docker-compose.lite.yml up -d --build
+# 与 docker-compose.yml（Full 形态）互不干扰，数据卷独立
+# ============================================================
+services:
+  mysql:
+    image: mysql:8.0
+    platform: linux/amd64
+    container_name: mkt-lite-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: marketing
+      MYSQL_USER: marketing
+      MYSQL_PASSWORD: marketing123
+    ports:
+      - "3307:3306"   # 与 Full 形态一致，避开本地 mysqld 占用的 3306
+    volumes:
+      - mkt-lite-mysql-data:/var/lib/mysql
+      # 单库初始化脚本（4 库合并版，种子数据一致）
+      - ./mysql/init-lite:/docker-entrypoint-initdb.d:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      # 小内存调参：缓冲池 128M、关闭 performance_schema 与 binlog
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+      - --skip-binlog
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: mkt-lite-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  standalone:
+    build:
+      context: ../marketing-standalone
+    image: marketing-standalone:lite
+    container_name: mkt-lite-standalone
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DB: marketing
+      REDIS_HOST: redis
+      # Lite 形态消息通道：Redis Stream 替代 RocketMQ
+      MQ_TYPE: redis-stream
+      JAVA_OPTS: "-Xmx1024m -XX:MaxMetaspaceSize=256m -XX:+UseSerialGC"
+    ports:
+      - "8085:8085"   # 调试用；生产仅暴露网关
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8085'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  gateway:
+    build:
+      context: ../marketing-gateway
+    image: marketing-gateway:lite
+    container_name: mkt-lite-gateway
+    depends_on:
+      standalone:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      # 四条路由统一指向 standalone（复用 Full 形态网关，仅改端口变量）
+      ACTIVITY_HOST: standalone
+      ACTIVITY_PORT: "8085"
+      COUPON_HOST: standalone
+      COUPON_PORT: "8085"
+      DISCOUNT_HOST: standalone
+      DISCOUNT_PORT: "8085"
+      SECKILL_HOST: standalone
+      SECKILL_PORT: "8085"
+      JAVA_OPTS: "-Xmx512m -XX:MaxMetaspaceSize=192m"
+    ports:
+      - "8090:8090"   # 服务器对外唯一入口（可映射 80:8090）
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+volumes:
+  mkt-lite-mysql-data:

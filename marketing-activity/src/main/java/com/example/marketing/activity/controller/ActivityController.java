@@ -1,0 +1,85 @@
+package com.example.marketing.activity.controller;
+
+import com.example.marketing.activity.domain.ActivityEvent;
+import com.example.marketing.activity.dto.CreateActivityRequest;
+import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
+import com.example.marketing.activity.service.ActivityService;
+import com.example.marketing.activity.service.BudgetService;
+import com.example.marketing.activity.service.GrayService;
+import com.example.marketing.common.api.Result;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 活动中心对外接口（经网关 /api/activity/** 转发）。
+ */
+@Validated
+@RestController
+@RequestMapping("/api/activity")
+@RequiredArgsConstructor
+public class ActivityController {
+
+    private final ActivityService activityService;
+    private final BudgetService budgetService;
+    private final GrayService grayService;
+
+    /** 创建草稿活动 */
+    @PostMapping
+    public Result<ActivityEntity> create(@Valid @RequestBody CreateActivityRequest request) {
+        return Result.ok(activityService.create(request));
+    }
+
+    /** 查询活动 */
+    @GetMapping("/{activityNo}")
+    public Result<ActivityEntity> get(@PathVariable String activityNo) {
+        return Result.ok(activityService.getByNo(activityNo));
+    }
+
+    /** 状态机流转 */
+    @PutMapping("/{activityNo}/transition")
+    public Result<ActivityEntity> transition(@PathVariable String activityNo,
+                                             @RequestParam ActivityEvent event) {
+        return Result.ok(activityService.transition(activityNo, event));
+    }
+
+    /** 活动是否可参与（下游校验位点） */
+    @GetMapping("/{activityNo}/participatable")
+    public Result<Boolean> participatable(@PathVariable String activityNo) {
+        return Result.ok(activityService.participatable(activityNo));
+    }
+
+    /** 灰度命中判断 */
+    @GetMapping("/{activityNo}/gray-hit")
+    public Result<Boolean> grayHit(@PathVariable String activityNo, @RequestParam Long userId) {
+        return Result.ok(grayService.hit(activityNo, userId));
+    }
+
+    /** 扣减预算（幂等：bizKey） */
+    @PostMapping("/{activityNo}/budget/deduct")
+    public Result<Void> deductBudget(@PathVariable String activityNo, @Valid @RequestBody DeductRequest request) {
+        budgetService.deduct(activityNo, request.amountCents(), request.bizKey());
+        return Result.ok();
+    }
+
+    /** 查询剩余预算（分） */
+    @GetMapping("/{activityNo}/budget/remain")
+    public Result<Long> remainBudget(@PathVariable String activityNo) {
+        return Result.ok(budgetService.remainCents(activityNo));
+    }
+
+    /** 预算扣减请求体 */
+    public record DeductRequest(@NotNull(message = "amountCents 必填") Long amountCents,
+                                @NotBlank(message = "bizKey 必填") String bizKey) {
+    }
+}

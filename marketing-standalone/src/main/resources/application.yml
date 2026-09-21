@@ -1,0 +1,76 @@
+# ============================================================
+# Lite 部署形态：四业务模块单 JVM 聚合 + Redis Stream 消息
+# 与 Full 形态的差异只在本文件 + MQ_TYPE 环境变量，业务代码零改动
+# ============================================================
+server:
+  port: 8085
+
+spring:
+  application:
+    name: marketing-standalone
+  datasource:
+    # Lite 单库：表结构见 docker/mysql/init-lite/01-schema-lite.sql
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3307}/${MYSQL_DB:marketing}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:marketing}
+    password: ${MYSQL_PASSWORD:marketing123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 单机演示环境的连接预算
+      maximum-pool-size: 10
+      minimum-idle: 2
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      config:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        import-check:
+          enabled: false
+
+mybatis-plus:
+  global-config:
+    banner: false
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# Lite 形态消息通道：Redis Stream 替代 RocketMQ（common 自动装配按此选型）
+marketing:
+  mq:
+    type: ${MQ_TYPE:redis-stream}
+  coupon:
+    result-ttl-seconds: 300
+  discount:
+    calc-timeout-ms: 50
+    max-rules-per-order: 5
+    version-key: discount:rule:version
+    snapshot-check-seconds: 5
+  seckill:
+    buckets: 16
+    token-ttl-seconds: 600
+    pay-timeout-seconds: 300
+    bought-mark-ttl-seconds: 86400
+    timeout-scan-interval-ms: 5000
+  gray:
+    ACT2026001:
+      percent: 100
+      whitelist: [ ]
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    com.example.marketing: INFO

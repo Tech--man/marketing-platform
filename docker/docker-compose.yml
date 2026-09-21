@@ -1,0 +1,109 @@
+# 营销平台本地中间件编排
+# 启动：docker compose up -d（在本目录下执行）
+# 说明：所有端口仅绑定到宿主机，业务服务以本地进程方式运行（见 scripts/start-all.sh）
+services:
+  mysql:
+    image: mysql:8.0
+    # Apple Silicon 上无 arm64 官方镜像，固定 amd64 走 Rosetta 模拟
+    platform: linux/amd64
+    container_name: mkt-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: marketing_activity
+      MYSQL_USER: marketing
+      MYSQL_PASSWORD: marketing123
+    ports:
+      - "3307:3306"   # 宿主机 3306 常被本地 mysqld 占用，改用 3307
+    volumes:
+      - mkt-mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: mkt-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.2.0
+    platform: linux/amd64
+    container_name: mkt-rocketmq-namesrv
+    ports:
+      - "9876:9876"
+    environment:
+      JAVA_MIN_MEM: 512M
+      JAVA_MAX_MEM: 512M
+    command: ["sh", "mqnamesrv"]
+    healthcheck:
+      test: ["CMD-SHELL", "jps | grep -c NamesrvStartup || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.2.0
+    platform: linux/amd64
+    container_name: mkt-rocketmq-broker
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+      JAVA_MIN_MEM: 512M
+      JAVA_MAX_MEM: 1024M
+    # brokerIP1 指向宿主机回环：业务服务在本机（容器外）以 127.0.0.1:9876 直连
+    volumes:
+      - ./rocketmq/broker.conf:/home/rocketmq/broker.conf:ro
+    command: ["sh", "mqbroker", "-c", "/home/rocketmq/broker.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "jps | grep -c BrokerStartup || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    platform: linux/amd64
+    container_name: mkt-nacos
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    environment:
+      MODE: standalone
+      JVM_XMS: 512m
+      JVM_XMX: 512m
+      NACOS_AUTH_ENABLE: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8848/nacos/v1/console/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: mkt-prometheus
+    ports:
+      - "9091:9090"   # 宿主机 9090 常被占用，改用 9091
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  mkt-mysql-data:

@@ -1,0 +1,106 @@
+package com.example.marketing.coupon.service;
+
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.exception.BizException;
+import com.example.marketing.common.idempotent.IdempotentExecutor;
+import com.example.marketing.common.message.LocalMessageService;
+import com.example.marketing.common.mq.CouponGrantEvent;
+import com.example.marketing.common.mq.MqTopics;
+import com.example.marketing.common.util.JsonUtils;
+import com.example.marketing.coupon.dto.GrantRequest;
+import com.example.marketing.coupon.dto.GrantResultVO;
+import com.example.marketing.coupon.dto.GrantTicket;
+import com.example.marketing.coupon.infrastructure.entity.CouponTemplateEntity;
+import com.example.marketing.coupon.infrastructure.entity.UserCouponEntity;
+import com.example.marketing.coupon.infrastructure.mapper.UserCouponMapper;
+import com.example.marketing.openapi.risk.RiskCheckService;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+/**
+ * 领券编排：风控 → 模板校验 → Redis Lua 原子预扣 → 本地消息表 + MQ → 异步落库。
+ *
+ * <p>幂等三层：IdempotentExecutor（bizKey=grant:requestId）+ 本地消息表 biz_key 唯一索引
+ * + user_coupon.request_id 唯一索引，保证"客户端重试 / MQ 重投"下最多成功一次。</p>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class CouponGrantService {
+
+    private static final String SCENE = "COUPON_GRANT";
+
+    private final IdempotentExecutor idempotentExecutor;
+    private final CouponTemplateService templateService;
+    private final CouponStockService stockService;
+    private final LocalMessageService localMessageService;
+    private final RiskCheckService riskCheckService;
+    private final UserCouponMapper userCouponMapper;
+    private final MeterRegistry meterRegistry;
+
+    /**
+     * 发起领券（同步返回受理凭证，券码经结果查询接口获取）。
+     */
+    public GrantTicket grant(GrantRequest request) {
+        String bizKey = "grant:" + request.requestId();
+        return idempotentExecutor.execute(bizKey, GrantTicket.class, () -> doGrant(request));
+    }
+
+    /**
+     * 查询领券结果：SUCCESS 带券码；无券且未失败则 PROCESSING。
+     */
+    public GrantResultVO queryResult(String requestId) {
+        UserCouponEntity coupon = userCouponMapper.selectOne(Wrappers.<UserCouponEntity>lambdaQuery()
+                .eq(UserCouponEntity::getRequestId, requestId));
+        if (coupon != null) {
+            return GrantResultVO.success(coupon.getCouponCode());
+        }
+        if (idempotentExecutor.isDone("grant:" + requestId)) {
+            // 受理成功但券未落库：仍在削峰队列中
+            return GrantResultVO.processing();
+        }
+        return GrantResultVO.processing();
+    }
+
+    private GrantTicket doGrant(GrantRequest request) {
+        // 1. 风控（占位放行；生产接入黑名单/行为规则，异常时降级放行）
+        RiskCheckService.RiskCheckResult risk =
+                riskCheckService.check(SCENE, request.userId(), request.templateNo());
+        if (!risk.pass()) {
+            Counter.builder("coupon.grant.risk.rejected").register(meterRegistry).increment();
+            throw new BizException(ErrorCode.RISK_REJECTED, risk.reason());
+        }
+        // 2. 模板校验（状态 + 时间窗）
+        CouponTemplateEntity template = templateService.getRequiringGrantable(request.templateNo());
+        // 3. Redis 原子预扣（库存 + 个人限领）
+        CouponStockService.DeductResult deduct = stockService.deduct(
+                template.getId(), request.userId(), 1, template.getPerUserLimit());
+        if (deduct == CouponStockService.DeductResult.NOT_WARMED) {
+            templateService.warmStock(template);
+            deduct = stockService.deduct(template.getId(), request.userId(), 1, template.getPerUserLimit());
+        }
+        switch (deduct) {
+            case SOLD_OUT -> {
+                Counter.builder("coupon.grant.sold_out").register(meterRegistry).increment();
+                throw BizException.of(ErrorCode.STOCK_NOT_ENOUGH);
+            }
+            case EXCEED_LIMIT -> throw new BizException(ErrorCode.BIZ_ERROR, "已超过单人限领数量");
+            case NOT_WARMED -> throw BizException.of(ErrorCode.SYSTEM_ERROR);
+            default -> {
+                // 4. 本地消息表 + MQ（发送失败由补偿定时器重发；消费端幂等落库）
+                CouponGrantEvent event = new CouponGrantEvent(request.requestId(), request.userId(),
+                        template.getId(), template.getActivityNo(), 1);
+                localMessageService.recordIfAbsent(MqTopics.TOPIC_COUPON_GRANT, MqTopics.TAG_GRANT,
+                        request.requestId(), JsonUtils.toJson(event));
+                localMessageService.publish(request.requestId());
+                Counter.builder("coupon.grant.accepted").register(meterRegistry).increment();
+                return GrantTicket.accepted(request.requestId());
+            }
+        }
+        // switch 各分支均已 return/throw，此处不可达，无需兜底语句
+    }
+}
