@@ -144,7 +144,7 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 | 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
 | **LITE 服役档** | standalone 554 + gateway 334 MiB | mysql 232 + redis 14 MiB | **≈ 1.1 GiB** | `docker stats` |
-| **dev 开发档** | 2 个本机 JVM ≈ 176 MiB | 数据层 246 MiB | **≈ 0.4 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比 |
+| **dev 开发档** | 2 个本机 JVM ≈ 244 MiB | 数据层 256 MiB | **≈ 0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比 |
 | **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.6 GiB | nacos 1.09 GiB + rocketmq 1.5 GiB + 数据层 0.25 GiB + prometheus 55 MiB | **≈ 5.4 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
 
 > 口径说明：跨形态比较一律用 `docker stats`。本机进程的 `ps` RSS 在 macOS 上系统性偏低
