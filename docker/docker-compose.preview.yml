@@ -40,6 +40,10 @@ services:
       - --performance-schema=OFF
       # 无主从复制与 CDC 需求，binlog 只是白吃磁盘；InnoDB 保持默认 flush=1（每次提交刷盘）
       - --skip-log-bin
+      # 可选容量旋钮（默认不开）：加一行 --innodb-flush-log-at-trx-commit=2，
+      # 实测入口 73-94 → 132-138 msg/s、消费 24 → 40-62 msg/s（约 1.5-2 倍，非数量级）。
+      # 代价是 OS/主机崩溃时丢最近 1 秒已提交事务（MySQL 进程崩溃不丢）——对秒杀等于
+      # "已扣库存无订单"需人工对账。只在读多写少、能容忍该窗口、单机无 BBU 时才开。
       # 连接预算需 ≥ 各应用池之和：LITE 单聚合进程 30，这里留一倍余量
       - --max-connections=60
       - --table-open-cache=400
