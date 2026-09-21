@@ -18,6 +18,7 @@ import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.ThreadLocalRandom;
@@ -57,6 +58,14 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
         return MqTopics.GROUP_COUPON;
     }
 
+    /**
+     * 落库与确认合成一个事务：原本 insert 与 confirm 各自 autocommit，每条消息要等两次
+     * InnoDB redo fsync —— 实测这决定了 LITE 消费端 ~22 msg/s 的天花板（A-B-A 对照验证）。
+     *
+     * <p>{@code onMessage} 也必须标注：它是 RocketMQ 容器的入口，内部再调 {@code handle}
+     * 属于自调用、绕过代理，只标 handle 会让 Full 形态静默没有事务。</p>
+     */
+    @Transactional
     @Override
     public void handle(String payload) {
         CouponGrantEvent event = JsonUtils.parse(payload, CouponGrantEvent.class);
@@ -64,12 +73,14 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
             insertCoupon(event);
             Counter.builder("coupon.grant.persisted").register(meterRegistry).increment();
         } catch (DuplicateKeyException e) {
+            // InnoDB 的唯一键冲突只回滚该语句、不中止事务，因此后续 confirm 仍可提交
             log.info("[grant-consumer] 重复消息幂等忽略 requestId={}", event.getRequestId());
         }
         // 无论首次还是重复，确认消息使补偿链路闭环
         localMessageService.confirm(event.getRequestId());
     }
 
+    @Transactional
     @Override
     public void onMessage(String payload) {
         handle(payload);

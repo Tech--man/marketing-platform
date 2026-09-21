@@ -21,6 +21,7 @@ import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -62,6 +63,15 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
         return MqTopics.GROUP_SECKILL;
     }
 
+    /**
+     * 建单、已售数递增、消息确认合成一个事务：原本三条语句各自 autocommit，每条消息要等
+     * 三次 InnoDB redo fsync，这是 LITE 消费端吞吐的数量级瓶颈；顺带也让"有单必有库存递增"
+     * 从"最终一致"变成真原子。
+     *
+     * <p>{@code onMessage} 同样必须标注：内部自调用绕过代理，只标 handle 会让 Full 形态
+     * 静默没有事务。</p>
+     */
+    @Transactional
     @Override
     public void handle(String payload) {
         SeckillOrderEvent event = JsonUtils.parse(payload, SeckillOrderEvent.class);
@@ -69,13 +79,15 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
             persistOrder(event);
             localMessageService.confirm("seckill:" + event.getToken());
         } catch (Exception e) {
-            // 下单失败：写 FAIL 结果（用户轮询可见），抛异常交给重试；
+            // 下单失败：写 FAIL 结果（用户轮询可见），抛异常交给重试（事务随之回滚，
+            // 本条结果以重投后的写入为准）；
             // 重试仍失败后由本地消息表补偿重发，库存由超时回补 Job 兜底归还
             stockService.saveResult(event.getToken(), "FAIL:" + brief(e));
             throw e;
         }
     }
 
+    @Transactional
     @Override
     public void onMessage(String payload) {
         handle(payload);
