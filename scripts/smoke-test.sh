@@ -12,6 +12,7 @@ AUTH="Authorization: Bearer $TOKEN"
 JSON="Content-Type: application/json"
 PASS=0; FAIL=0
 
+stock_raw() { curl -s -H "$AUTH" "$GW/api/seckill/stock/SK2026001" | sed -n 's/.*"data":\[\([^]]*\)\].*/\1/p'; }
 ok()   { echo "  ✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ❌ $1"; echo "     响应: $2"; FAIL=$((FAIL+1)); }
 head2() { echo; echo "== $1"; }
@@ -30,6 +31,51 @@ poll() { # url needle max_seconds
   done
   echo "$body"; return 1
 }
+
+head2 "链路 0：活动中心（状态机 → 灰度 → 预算）"
+# 每次用全新活动编号，创建→流转→预算全程自给自足，不依赖也不消耗共享种子数据
+ACT_NO="ACT-SMOKE-$(date +%s)-$RANDOM"
+TS_START=$(date -v-1H +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '-1 hour' +%Y-%m-%dT%H:%M:%S)
+TS_END=$(date -v+2d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '+2 days' +%Y-%m-%dT%H:%M:%S)
+R=$(curl -s -X POST "$GW/api/activity" -H "$AUTH" -H "$JSON" \
+  -d "{\"activityNo\":\"$ACT_NO\",\"name\":\"冒烟活动\",\"startTime\":\"$TS_START\",\"endTime\":\"$TS_END\",\"budgetAmount\":100.00}")
+expect "创建草稿活动（$ACT_NO）" '"status":"DRAFT"' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
+expect "草稿态不可参与" '"data":false' "$R"
+R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=APPROVE" -H "$AUTH")
+expect "DRAFT 直接 APPROVE 被状态机拒绝（41001）" '"code":41001' "$R"
+R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=SUBMIT" -H "$AUTH")
+expect "SUBMIT → AUDITING" '"status":"AUDITING"' "$R"
+R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=APPROVE" -H "$AUTH")
+expect "APPROVE → GRAY" '"status":"GRAY"' "$R"
+R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=PROMOTE" -H "$AUTH")
+expect "PROMOTE → ONLINE" '"status":"ONLINE"' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
+expect "上线后可参与" '"data":true' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70001")
+expect "未配灰度规则按全量放行" '"data":true' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit?userId=70001")
+expect "已配灰度活动（ACT2026001 percent=100）命中" '"data":true' "$R"
+R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
+  -d "{\"amountCents\":3000,\"bizKey\":\"$ACT_NO-B1\"}")
+expect "预算扣减 30 元成功" '"code":0' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain")
+expect "剩余预算 7000 分" '"data":7000' "$R"
+R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
+  -d "{\"amountCents\":3000,\"bizKey\":\"$ACT_NO-B1\"}")
+expect "同 bizKey 重复扣减幂等返回" '"code":0' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain")
+expect "重复扣减未二次扣款（仍 7000 分）" '"data":7000' "$R"
+R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
+  -d "{\"amountCents\":8000,\"bizKey\":\"$ACT_NO-B2\"}")
+expect "超余额扣减被拒（41003 预算不足）" '"code":41003' "$R"
+R=$(curl -s -X POST "$GW/api/activity" -H "$AUTH" -H "$JSON" \
+  -d "{\"activityNo\":\"$ACT_NO\",\"name\":\"重复\",\"startTime\":\"$TS_START\",\"endTime\":\"$TS_END\",\"budgetAmount\":1.00}")
+expect "重复活动编号被拒" '"code":41000' "$R"
+R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=FINISH" -H "$AUTH")
+expect "FINISH 进入终态" '"status":"FINISHED"' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
+expect "终态后不可参与" '"data":false' "$R"
 
 head2 "链路 1：领券（网关 → 风控 → Lua 预扣 → MQ → 幂等落库 → 轮询 → 核销）"
 REQ_ID="SMOKE-$(date +%s)-$RANDOM"
@@ -80,16 +126,31 @@ R=$(curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
   -d "{\"activityNo\":\"SK2026001\",\"userId\":$SK_BASE}")
 expect "同用户重复抢购被拒绝" '"code":[1-9]' "$R"
 
-head2 "链路 3+：并发防超卖（60 个不同用户并发抢购）"
+head2 "链路 3+：并发防超卖（按当前余量自适应并发）"
+# 库存基线从接口取，不写死：压测/复跑会消耗共享种子库存，写死会让冒烟不可重复
+SK_ACT=$(curl -s -H "$AUTH" "$GW/api/seckill/activities")
+TOTAL=$(echo "$SK_ACT" | python3 -c "import sys,json;print([a['totalStock'] for a in json.load(sys.stdin)['data'] if a['activityNo']=='SK2026001'][0])" 2>/dev/null || echo "?")
+SOLD0=$(echo "$SK_ACT" | python3 -c "import sys,json;print([a['soldStock'] for a in json.load(sys.stdin)['data'] if a['activityNo']=='SK2026001'][0])" 2>/dev/null || echo "?")
+REMAIN0=$(python3 -c "print(sum(int(x) for x in '$(stock_raw)' .split(',') if x.strip()))" 2>/dev/null || echo "?")
+if [ "$TOTAL" = "?" ] || [ "$REMAIN0" = "?" ]; then
+  bad "读取秒杀库存基线失败（接口或数据异常）" "$SK_ACT"
+  CONC=0
+else
+  CONC=$(( REMAIN0 < 60 ? REMAIN0 : 60 ))
+  [ "$CONC" -gt 0 ] && ok "库存基线可读（total=$TOTAL sold=$SOLD0 余量=$REMAIN0，本轮并发 $CONC）" \
+    || bad "余量为 0，无法做并发防超卖验证；先执行 ./scripts/reset-demo-data.sh" "remain=$REMAIN0"
+fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-for i in $(seq 1 60); do
+for i in $(seq 1 "$CONC"); do
   ( curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
       -d "{\"activityNo\":\"SK2026001\",\"userId\":$((SK_BASE + 100 + i))}" > "$TMP/$i.resp" ) &
 done
 wait
 ACCEPTED=$(grep -l '"code":0' "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' ')
-REJECTED=$(ls "$TMP"/*.resp | wc -l | tr -d ' '); REJECTED=$((REJECTED-ACCEPTED))
+REJECTED=$(ls "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' '); REJECTED=$((REJECTED-ACCEPTED))
 echo "  受理 $ACCEPTED / 拒绝 ${REJECTED}（售罄或限流）"
+[ "$CONC" = "$((ACCEPTED + REJECTED))" ] \
+  && ok "受理+拒绝守恒等于并发数（$CONC）" || bad "并发请求丢失应答" "accepted=$ACCEPTED rejected=$REJECTED conc=$CONC"
 # 多轮扫描未终态 token（broker 在 Rosetta 模拟下投递可能有分钟级抖动）
 OK_ALL=1
 PENDING=()
@@ -114,14 +175,31 @@ for _round in $(seq 1 8); do
 done
 for item in "${PENDING[@]:-}"; do
   [ -z "$item" ] && continue
-  OK_ALL=0; echo "  用户 #${item%%:*} 超时未成交(token=${item#*:})"
+  i=${item%%:*}
+  OK_ALL=0
+  echo "  用户 #$i 超时未成交(token=${item#*:})"
+  # 失败时把原始应答与再查一次的结果一起打出来：多数"未成交"其实是取 token 或轮询侧的问题
+  echo "     受理应答: $(cat "$TMP/$i.resp" 2>/dev/null | head -c 200)"
+  echo "     复查结果: $(curl -s -H "$AUTH" "$GW/api/seckill/grab/result/${item#*:}" | head -c 200)"
 done
 [ $OK_ALL -eq 1 ] && ok "全部受理请求最终下单成功（异步链路闭环）" || bad "存在受理未成交" ""
-STOCK=$(curl -s -H "$AUTH" "$GW/api/seckill/stock/SK2026001" | sed -n 's/.*"data":\[\([^]]*\)\].*/\1/p')
-REMAIN=$(python3 -c "print(sum([int(x) for x in '$STOCK'.split(',') if x.strip()]))" 2>/dev/null || echo "?")
-echo "  Redis 分桶剩余合计: ${REMAIN}（初始 200，已扣 $(python3 -c "print(200-($REMAIN))" 2>/dev/null || echo '?')）"
+REMAIN=$(python3 -c "print(sum(int(x) for x in '$(stock_raw)'.split(',') if x.strip()))" 2>/dev/null || echo "?")
 [ "$REMAIN" != "?" ] && [ "$REMAIN" -ge 0 ] \
-  && ok "库存无超卖（剩余 >= 0）" || bad "库存异常" "$STOCK"
+  && ok "Redis 分桶无超卖（余量 $REMAIN ≥ 0）" || bad "库存异常" "$REMAIN"
+# 账实一致：DB 已售增量必须等于最终成交数（桶扣了但没建单、或建单了但没扣桶都会被抓出来）
+SOLD1=$(curl -s -H "$AUTH" "$GW/api/seckill/activities" \
+  | python3 -c "import sys,json;print([a['soldStock'] for a in json.load(sys.stdin)['data'] if a['activityNo']=='SK2026001'][0])" 2>/dev/null || echo "?")
+SUCC=$(grep -ho '"token":"[^"]*"' "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' ')
+# 恒等式而非增量：超时取消 Job 会在窗口内递减 sold_stock，用"增量==受理数"会偶发假失败；
+# 而 分桶余量 + DB 已售 == 总库存 对取消抖动免疫，且超卖/漏扣/桶与库不一致都会破坏它。
+if [ "$SOLD1" != "?" ] && [ "$REMAIN" != "?" ] && [ "$TOTAL" != "?" ]; then
+  echo "  DB sold_stock: $SOLD0 → $SOLD1；Redis 余量 $REMAIN；总库存 $TOTAL"
+  [ "$((REMAIN + SOLD1))" -eq "$TOTAL" ] \
+    && ok "账实一致：分桶余量 + DB 已售 == 总库存（$REMAIN + $SOLD1 == $TOTAL）" \
+    || bad "库存账实不符（超卖 / 漏扣 / 回补异常）" "remain=$REMAIN sold=$SOLD1 total=$TOTAL"
+else
+  bad "读取库存基线或结算数失败" "sold=$SOLD1 remain=$REMAIN total=$TOTAL"
+fi
 
 echo
 echo "================ 冒烟结果：通过 $PASS / 失败 $FAIL ================"

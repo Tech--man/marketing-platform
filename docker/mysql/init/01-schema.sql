@@ -327,6 +327,6 @@ CREATE TABLE IF NOT EXISTS local_message (
 -- 种子：一个在线秒杀活动（200 件 / 16 桶）
 INSERT INTO seckill_activity (activity_no, item_id, item_name, seckill_price, total_stock, sold_stock,
                               buckets, status, start_time, end_time)
-SELECT 'SK2026001', 10001, '旗舰手机 秒杀特惠', 1999.00, 200, 0, 16, 'ONLINE',
+SELECT 'SK2026001', 10001, '旗舰手机 秒杀特惠', 1999.00, 5000, 0, 16, 'ONLINE',
        NOW() - INTERVAL 1 DAY, NOW() + INTERVAL 30 DAY
 WHERE NOT EXISTS (SELECT 1 FROM seckill_activity WHERE activity_no = 'SK2026001');

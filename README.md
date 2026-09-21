@@ -67,6 +67,7 @@ GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结�
 ./scripts/deploy-preview.sh           # mvn 构建 → compose up -d --build --wait → actuator 就绪收口
 ./scripts/smoke-test.sh               # 端到端验收（三套形态通用）
 ./scripts/stop-preview.sh             # -v 连数据卷清空
+./scripts/reset-demo-data.sh          # 演示库存被压测吃掉后复位（不动业务数据）
 
 # dev 开发档
 ./scripts/start-dev.sh                # mysql+redis 容器 → 构建 → 本机 2 JVM
@@ -184,7 +185,7 @@ POST /api/seckill/grab
 | POST | /api/activity | 创建活动（DRAFT） |
 | PUT | /api/activity/{no}/transition?event= | 状态机流转（SUBMIT/APPROVE/REJECT/PROMOTE/OFFLINE/RE_ONLINE/FINISH） |
 | GET | /api/activity/{no}/participatable · /gray-hit?userId= | 可参与校验 · 灰度命中判断 |
-| POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减（bizKey 幂等）/ 实时余额 |
+| POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减（bizKey 幂等）/ 实时余额<br>⚠ `biz_key` 是**全局唯一**索引（非活动内唯一），跨活动复用同一 bizKey 会被判重复而静默跳过扣减，调用方必须自带命名空间 |
 | POST | /api/coupon/grant · /consume | 领券受理 · 核销 |
 | GET | /api/coupon/grant/result/{requestId} · /usable?userId= · /stock/{templateNo} | 轮询 / 可用券 / 模板余量 |
 | POST | /api/discount/calculate · /rules | 优惠计算 · 规则 upsert（触发快照刷新） |
@@ -194,12 +195,23 @@ POST /api/seckill/grab
 ## 六、测试与验证
 
 ```bash
-mvn test    # 幂等执行器(H2) / 状态机 / 分摊尾差与行级cap / 组合选择枚举 / 分桶规划 / 引擎基准
-./scripts/smoke-test.sh   # 端到端三链路 + 并发防超卖断言（需中间件与服务已启动）
+mvn test                 # 26 个单测：见下
+./scripts/smoke-test.sh  # 端到端 34 条断言（三套形态通用，需服务已启动）
+./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000）
 ```
 
-已覆盖单测：三层幂等语义、非法状态流转拒绝、比例分摊尾差归末项、末行占满顺延、
-互斥组最优（priority desc → discount desc）、叠加超限精确枚举、1 万规则基准耗时。
+**单测（26）**：三层幂等语义、非法状态流转拒绝、比例分摊尾差归末项、末行占满顺延、
+互斥组最优（priority desc → discount desc）、叠加超限精确枚举、1 万规则基准耗时、
+**装配层回归**（聚合形态扫描边界 + common 条件装配矩阵，用 ApplicationContextRunner + H2
+不依赖中间件）。后者把"预览栈起不来"这类装配 bug 从一次 2-3 分钟的构建+部署排查压到秒级。
+
+**冒烟（34 条，四链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+重复活动号 41000、预算扣减与 bizKey 幂等、超预算 41003、灰度命中、可参与位切换）；
+链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖。
+
+并发段的库存基线**从接口读、不写死**，并断言恒等式 `分桶余量 + DB 已售 == 总库存`
+（对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测
+连跑 3 轮均 34/34。
 
 ## 七、扩展点（占位 → 生产的升级路径）
 
