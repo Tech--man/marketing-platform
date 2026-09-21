@@ -47,10 +47,11 @@ if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
     curl -fs --max-time 3 http://127.0.0.1:8085/actuator/health 2>/dev/null | grep -q '"UP"' && break
     sleep 1
   done
-elif docker ps --format '{{.Names}}' | grep -q '^docker-marketing-seckill-1$'; then
-  # FULL 容器形态：应用容器不发布端口（多副本设计），就绪只能看"分桶键是否被重建"
-  docker restart docker-marketing-seckill-1 >/dev/null
-  echo "    已重启 docker-marketing-seckill-1（FULL 容器形态）"
+elif sk=$(docker ps --format '{{.Names}}' | grep -m1 -E '(^|-)marketing-seckill-[0-9]+$'); then
+  # FULL 容器形态：应用容器不发布端口（多副本设计），就绪只能看"分桶键是否被重建"。
+  # 容器名按后缀匹配：项目名前缀随 compose 的 name 变（现在是 mkt-full-）
+  docker restart "$sk" >/dev/null
+  echo "    已重启 $sk（FULL 容器形态）"
   for _ in $(seq 1 90); do
     n=$(docker exec "$REDIS" sh -c "redis-cli --scan --pattern 'seckill:stock:${ACT}:*' | wc -l" | tr -d '\r')
     [ "${n:-0}" -gt 0 ] && { echo "    分桶已重建（键数 $n）"; break; }

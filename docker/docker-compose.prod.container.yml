@@ -1,0 +1,13 @@
+# ============================================================
+# 容器化 FULL 的中间件覆盖层：只换 broker 广播的那一个地址
+#   为什么要有这一层：broker 向 namesrv 只广播一个 brokerIP1，而"业务进程在宿主机"
+#   与"业务进程在容器"两类客户端需要不同的地址（127.0.0.1 vs host.docker.internal，
+#   实测两侧各只有一个通）。两台 broker 没必要，就把差异收在这个覆盖文件里。
+#   volumes 按挂载目标合并，同目标以本层为准，因此换 conf 会让 compose 重建 broker。
+# 用法（scripts/deploy-full.sh 已内置）：
+#   cd docker && docker compose -f docker-compose.prod.yml -f docker-compose.prod.container.yml up -d --wait
+# ============================================================
+services:
+  rocketmq-broker:
+    volumes:
+      - ./rocketmq/broker.container.conf:/home/rocketmq/broker.conf:ro

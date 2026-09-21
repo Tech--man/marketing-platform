@@ -13,6 +13,8 @@ source "$(dirname "$0")/common.sh"
 
 DATA="$PWD/docker/docker-compose.data.yml"
 MW="$PWD/docker/docker-compose.prod.yml"
+# 容器形态的 broker 广播地址覆盖层（详见该文件头注释）
+MW_C="$PWD/docker/docker-compose.prod.container.yml"
 APP="$PWD/docker/docker-compose.full-app.yml"
 
 if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
@@ -32,9 +34,11 @@ fi
 BUILD_FLAG="--build"
 [ "${SKIP_BUILD:-0}" = "1" ] && BUILD_FLAG=""
 
-echo "==> 数据层 + 扩容档中间件（nacos / rocketmq / prometheus）"
+echo "==> 数据层 + 扩容档中间件（nacos / rocketmq / prometheus，broker 用容器形态广播地址）"
 docker compose -f "$DATA" up -d --wait
-docker compose -f "$MW" up -d --wait
+docker compose -f "$MW" -f "$MW_C" up -d --wait
+# 单独重建 broker：bind 挂载钉 inode，只改 conf 内容时 compose 不会认为服务有变化（详见 start-all.sh 同处注释）
+docker compose -f "$MW" -f "$MW_C" up -d --wait --force-recreate rocketmq-broker
 
 # 起应用前先报 broker 的磁盘水位：分区使用率 ≥90% 时它以 CODE:14 service not available 拒写，
 # 症状和"异步链路坏了"完全一样（实测被这个坑过一整轮排查）。

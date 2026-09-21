@@ -11,7 +11,7 @@
 #
 #   库布局：默认单库 marketing（7 张业务表表名全局唯一 + 两张基础表定义一致，
 #   四进程共用一库零冲突）。需要"每服务一库"的生产隔离档时，改用 ./mysql/init
-#   目录并逐服务导出 MYSQL_DB=marketing_<模块>。
+#   目录并逐服务导出 MYSQL_DB=marketing_<模块>（现成开关：MYSQL_DB_PER_SERVICE=1 ./scripts/start-all.sh，已实测）。
 # ============================================================
 name: mkt-data
 

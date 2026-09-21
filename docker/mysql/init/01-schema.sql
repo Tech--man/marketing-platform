@@ -5,6 +5,9 @@
 -- ============================================================
 
 -- ---------- 1. 建库 ----------
+-- 四个都要显式 CREATE：GRANT 只写授权表、不会建库，漏一个就会在下面第一个 USE 处报错，
+-- 而 docker-entrypoint-initdb.d 里任何一条 SQL 失败都会让 MySQL 容器初始化整体中断。
+CREATE DATABASE IF NOT EXISTS marketing_activity DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_coupon  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_discount DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_seckill  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

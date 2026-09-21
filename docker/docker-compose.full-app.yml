@@ -4,11 +4,16 @@
 #     前者用 docker-compose.data.yml，后者用 docker-compose.prod.yml
 #   · 必须走 nacos 服务发现：网关按 lb:// 负载均衡到各服务的多个副本，
 #     因此本文件里的服务**不发布任何宿主机端口**（副本数无关端口冲突）
-#   · broker 广播地址：RocketMQ 客户端连的是 broker 向 namesrv 广播的那个地址，而 broker
-#     只能广播一个。docker/rocketmq/broker.conf 里取 brokerIP1 = host.docker.internal，
-#     因为它是"本机进程形态"和"本文件形态"唯一都能解析的取值（容器内经它访问宿主机
-#     published 端口，宿主机内经 fake-IP 解析回到同一处）。曾经取 127.0.0.1 时，本形态的
-#     容器把 127.0.0.1 当成自己，异步投递全失败、退回本地消息表（消息不丢但延迟）。
+#   · broker 广播地址：RocketMQ 客户端连的是 broker 向 namesrv 广播的那个地址，而一台 broker
+#     只能广播一个，两类客户端要的却不一样：
+#       - 本机进程形态（scripts/start-all.sh）→ brokerIP1=127.0.0.1（rocketmq/broker.conf）
+#       - 本文件的形态 → brokerIP1=host.docker.internal（rocketmq/broker.container.conf，
+#         由 docker-compose.prod.container.yml 这层覆盖挂上）
+#     实测依据（Apple Silicon + OrbStack）：容器内 host.docker.internal 可用；宿主机上原生
+#     socket 也连得通它，但 JVM 里的 RocketMQ Netty 客户端连不通（RemotingConnectException）
+#     —— 所以两侧不能共用一个取值。deploy-full.sh 每次都用覆盖层起中间件并显式重建 broker。
+#   · 项目名固定 mkt-full：与中间件编排在同一目录，不命名会共用默认项目名 "docker"，
+#     那时 compose 把 nacos/rocketmq 报成孤儿容器，带 --remove-orphans 的 down 会顺手拆掉中间件。
 #   · 运维前置条件（实测踩过）：broker 所在分区使用率 > 90% 会以
 #     CODE:14 service not available 拒写，表现和"链路坏了"一模一样。一次 --build
 #     全量重建约多占 2 GB，磁盘紧张时用 SKIP_BUILD=1 复用现成镜像。
@@ -17,6 +22,10 @@
 #       ./scripts/deploy-full.sh --scale marketing-discount=3
 #       SKIP_BUILD=1 ./scripts/deploy-full.sh --scale marketing-seckill=2
 # ============================================================
+#   · 独立项目名 mkt-full：本文件与中间件编排在同一目录，若不命名会共用默认项目名
+#     "docker"，于是 compose 把 nacos/rocketmq 当成孤儿容器告警，而带 --remove-orphans
+#     的 down 会顺手把中间件拆了。网络仍走 external 的 mkt-data / mkt-mw，不受项目名影响。
+name: mkt-full
 x-app-defaults: &app-defaults
   restart: unless-stopped
   logging:

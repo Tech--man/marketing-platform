@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # 正式环境形态（Full 拓扑）本机启动：网关 8090 + 四业务服务 8081-8084，5 个 JVM
-# 前置：./scripts/start-all.sh 会自动确保数据层；扩容档中间件另需
-#       docker compose -f docker/docker-compose.prod.yml up -d
+# 前置：docker + 本机 JDK17。RocketMQ 由本脚本按需拉起（进程形态要 127.0.0.1 广播）；
+#       nacos / prometheus 仍可选：docker compose -f docker/docker-compose.prod.yml up -d
 # 用法：./scripts/start-all.sh [服务名...]        不带参数启动全部（local 静态路由）
 #       PROFILES=nacos ./scripts/start-all.sh     注册中心模式：注册发现 + lb:// 路由
+#       MYSQL_DB_PER_SERVICE=1 ./scripts/start-all.sh   每服务一库（四库隔离档，需四库 DDL）
 # 说明：日常改代码请用 ./scripts/start-dev.sh（2 个 JVM，内存小一个数量级）
 # ============================================================
 set -euo pipefail
@@ -32,8 +33,11 @@ APP_ARGS=""
 export MYSQL_PORT="${MYSQL_PORT:-3307}" REDIS_PORT="${REDIS_PORT:-6380}"
 # 默认与 LITE 共用同一个库 → 两档原地双向切换不需要搬数据
 # （7 张业务表表名全局唯一、idempotent_record/local_message 列定义一致，共用一库零冲突）
-# 想要"每服务一库"的生产隔离档：逐服务导出 MYSQL_DB=marketing_<模块> 并改用 docker/mysql/init
 export MYSQL_DB="${MYSQL_DB:-marketing}"
+# MYSQL_DB_PER_SERVICE=1 → 每服务一库（marketing_activity / _coupon / _discount / _seckill），
+# 配合 docker/mysql/init 的四库 DDL。这是另一种生产姿态：数据不再与 LITE 共用，
+# 也就不能"原地"来回切；隔离的收益是跨模块 join 由 DB 拦住。
+MYSQL_DB_PER_SERVICE="${MYSQL_DB_PER_SERVICE:-0}"
 
 ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill)
 SERVICES=("$@")
@@ -44,6 +48,16 @@ assert_port_not_shadowed "$REDIS_PORT"
 
 echo "==> 数据层常驻检查（与 LITE 同一份数据，支持原地双向切换）"
 docker compose -f "$ROOT/docker/docker-compose.data.yml" up -d --wait
+
+# 进程形态需要 broker 广播 127.0.0.1；容器形态（deploy-full.sh）挂的是另一份
+# broker.container.conf。两边都 --force-recreate broker：bind 挂载钉的是 inode，
+# 光改文件内容 compose 认为"没变化"不会重建（今天就被这个坑过一次），而换形态
+# 必须让新的广播地址真正生效。本机 broker 没有持久卷，在途消息由本地消息表兜底。
+# 只有确实要用本机默认 broker 时才管它（ROCKETMQ_ADDR 指向别处就说明中间件不由本脚本负责）。
+if [ -z "${ROCKETMQ_ADDR:-}" ] || [ "${ROCKETMQ_ADDR:-}" = "127.0.0.1:9876" ]; then
+  echo "==> 调和扩容档 RocketMQ（进程形态：brokerIP1=127.0.0.1）"
+  docker compose -f "$ROOT/docker/docker-compose.prod.yml" up -d --wait --force-recreate rocketmq-broker
+fi
 
 # 先构建（跳过测试，测试已有独立阶段）
 echo "==> mvn package（首次构建约 1-2 分钟）"
@@ -61,7 +75,10 @@ start_one() {
     echo "!! 未找到 ${jar}，请先执行 mvn package" >&2
     exit 1
   fi
-  nohup java $JAVA_OPTS -jar "$jar" $APP_ARGS > "$LOG_DIR/$name.log" 2>&1 &
+  # 四库隔离档：逐服务覆盖库名（env 不带赋值时直接 exec，所以关闭时留空即可）
+  local svc_db_env=""
+  [ "$MYSQL_DB_PER_SERVICE" = "1" ] && svc_db_env="MYSQL_DB=marketing_${name#marketing-}"
+  nohup env $svc_db_env java $JAVA_OPTS -jar "$jar" $APP_ARGS > "$LOG_DIR/$name.log" 2>&1 &
   echo $! > "$pid_file"
   echo "==> $name 已启动 pid $(cat "$pid_file")，日志 logs/$name.log"
 }
