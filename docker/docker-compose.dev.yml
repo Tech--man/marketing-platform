@@ -30,6 +30,7 @@ services:
       - --innodb-buffer-pool-size=64M
       - --performance-schema=OFF
       - --skip-log-bin
+      # 连接预算需 ≥ 各应用池之和：LITE 单聚合进程 30，这里留一倍余量
       - --max-connections=60
       - --table-open-cache=400
       - --table-definition-cache=400

@@ -15,9 +15,12 @@ spring:
     password: ${MYSQL_PASSWORD:marketing123}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      # 单机演示环境的连接预算
-      maximum-pool-size: 10
-      minimum-idle: 2
+      # 连接预算的算法：一个 JVM 承载四模块 + 两个 Stream 消费线程 + 补偿 Job，
+      # 而慢提交会让连接被持有到 fsync 完成。池=10 时实测 25 并发就打满
+      # （hikaricp_connections_timeout_total 累加、请求在等连接上超时到 20s），
+      # 是 LITE 常态服役的第一限制因子。30 与下面 MySQL max-connections=60 留一倍余量。
+      maximum-pool-size: ${DB_POOL_MAX:30}
+      minimum-idle: 4
   data:
     redis:
       host: ${REDIS_HOST:127.0.0.1}

@@ -40,6 +40,7 @@ services:
       - --performance-schema=OFF
       # 无主从复制与 CDC 需求，binlog 只是白吃磁盘；InnoDB 保持默认 flush=1（每次提交刷盘）
       - --skip-log-bin
+      # 连接预算需 ≥ 各应用池之和：LITE 单聚合进程 30，这里留一倍余量
       - --max-connections=60
       - --table-open-cache=400
       - --table-definition-cache=400

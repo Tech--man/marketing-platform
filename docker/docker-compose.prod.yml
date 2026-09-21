@@ -25,6 +25,9 @@ services:
       - mkt-mysql-data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
     command:
+      # 连接预算：FULL 四个服务各 20 = 80，按可扩到 2 实例（160）留量 → 显式 200，
+      # 不吃默认 151 这个刚好会被撞上的边界
+      - --max-connections=200
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --default-time-zone=+08:00
