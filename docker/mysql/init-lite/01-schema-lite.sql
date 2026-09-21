@@ -1,5 +1,6 @@
 -- ============================================================
--- Lite 形态单库初始化（docker-compose.lite.yml 专用）
+-- 单库初始化：开发环境（docker-compose.dev.yml）与预览环境
+-- （docker-compose.preview.yml）共用，对应 standalone 聚合形态
 -- 由 init/01-schema.sql 程序化合并：4 库 → 1 库 marketing，
 -- idempotent_record / local_message 共享一套（bizKey 自带业务前缀，无冲突）
 -- ============================================================

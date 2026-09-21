@@ -12,7 +12,7 @@
 
     <artifactId>marketing-standalone</artifactId>
     <name>marketing-standalone</name>
-    <description>Lite 部署形态：四业务模块单 JVM 聚合启动 + Redis Stream 替代 RocketMQ，适配 2C4G 小内存环境</description>
+    <description>开发与预览环境形态：四业务模块单 JVM 聚合启动 + Redis Stream 替代 RocketMQ，内存占用极致小</description>
 
     <dependencies>
         <!-- 四个业务模块（thin jar 主构件），组件扫描装配全部 Controller/Service/Mapper -->

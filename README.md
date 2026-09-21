@@ -6,6 +6,7 @@
 - 券中心 / 优惠计算引擎 / 秒杀中心 **深度实现**
 - 活动中心（状态机 + 预算 + 灰度）/ 风控 / 分销 / ROI **基础能力或扩展点占位**
 - 标准拓扑：Gateway + Nacos + 4 业务服务；Seata / Flink / ClickHouse / ES / XXL-Job 留扩展点
+- 环境形态：开发 / 预览跑单 JVM 聚合进程（standalone + Redis Stream 代替 MQ，内存极致小）；正式环境跑上面的标准拓扑（见第三节）
 
 ## 一、架构总览
 
@@ -40,28 +41,43 @@
 | marketing-coupon | 8082 | 券模板/库存预热、领券、结果轮询、核销 |
 | marketing-discount | 8083 | 规则 DSL、位图倒排索引、最优组合、分摊、超时降级 |
 | marketing-seckill | 8084 | 分桶预热、Lua 抢购、MQ 异步下单、支付、超时回补 |
+| marketing-standalone | 8085 | 开发/预览形态聚合进程：四业务模块单 JVM + Redis Stream 消息（见第三节） |
 
-## 三、快速开始
+## 三、三套环境与快速开始
+
+同一套业务代码，按用途分三档形态；**三套共用宿主机端口 3307 / 6379 / 8090，同一台机器上互斥**，切换前先停掉上一套。
+
+| 环境 | 拓扑 | 消息通道 | 数据库 | 定位 |
+|---|---|---|---|---|
+| **开发 dev** | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 改代码即重启，可打断点，内存极致小 |
+| **预览 preview** | 全栈容器化 4 容器（mysql / redis / standalone / gateway） | Redis Stream | 单库 `marketing` | 发给别人就能点，硬内存上限，内存极致小 |
+| **正式 prod** | 5 JVM 独立进程（8081-8084 + 8090）+ RocketMQ + Nacos + Prometheus | RocketMQ | 4 个业务库 | 与生产同构，按吞吐配资源 |
 
 ```bash
-# 1. 启动中间件（MySQL 自动执行 docker/mysql/init/01-schema.sql 建 4 库 + 种子数据）
-cd docker && docker compose up -d && cd ..
+# 开发环境（日常推荐）
+./scripts/start-dev.sh            # 起 mysql+redis 容器 → 构建 → 拉起 2 个 JVM
+./scripts/smoke-test.sh           # 三条链路端到端验收
+./scripts/stop-dev.sh --down      # 停 JVM 与中间件（-v 连数据卷清空）
 
-# 2. 构建并启动 5 个服务（日志 logs/，pid run/）
-./scripts/start-all.sh
-
-# 3. 三条链路冒烟（领券 / 优惠计算 / 秒杀 + 60 用户并发防超卖）
+# 预览环境
+./scripts/deploy-preview.sh       # mvn 构建 → docker compose up -d --build --wait
 ./scripts/smoke-test.sh
+./scripts/stop-preview.sh
 
-# 4. 停止服务 / 中间件
-./scripts/stop-all.sh
-cd docker && docker compose down          # 加 -v 清空数据卷
+# 正式环境形态
+cd docker && docker compose -f docker-compose.prod.yml up -d && cd ..
+./scripts/start-all.sh            # 日志 logs/，pid run/
+./scripts/smoke-test.sh           # 监控：Prometheus http://localhost:9091
+./scripts/stop-all.sh && (cd docker && docker compose -f docker-compose.prod.yml down)
 
-# 监控：Prometheus http://localhost:9091（已配置抓取 5 个服务的 /actuator/prometheus）
-# 注册中心（可选）：http://localhost:8848/nacos，服务加 --spring.profiles.active=nacos 开启注册与 lb 路由
+# 注册中心（可选，仅正式形态）：http://localhost:8848/nacos
+# 服务与网关加 --spring.profiles.active=nacos 开启注册发现与 lb:// 路由
 ```
 
 数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；网关演示 Token `demo-token-123`（环境变量 `GATEWAY_TOKEN` 覆盖）。
+
+**构建要求**：Maven 必须跑在 **JDK 17**，`scripts/*.sh` 已通过 `scripts/common.sh` 自动锁定。
+Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏 `cannot find symbol: log / setXxx`。
 
 ## 四、三条核心链路
 
@@ -152,10 +168,18 @@ marketing-platform/
 ├── marketing-discount/         # 8083 优惠计算引擎
 ├── marketing-seckill/          # 8084 秒杀中心
 ├── docker/
-│   ├── docker-compose.yml      # MySQL/Redis/RocketMQ/Nacos/Prometheus
-│   ├── mysql/init/01-schema.sql# 4 库 DDL + 种子数据（自动执行）
+│   ├── docker-compose.prod.yml    # 正式环境中间件：MySQL/Redis/RocketMQ/Nacos/Prometheus
+│   ├── docker-compose.preview.yml # 预览环境全栈（含 2 个 JVM 容器，带 mem_limit）
+│   ├── docker-compose.dev.yml     # 开发环境中间件（mysql + redis，小内存调参）
+│   ├── mysql/init/01-schema.sql   # 4 库 DDL + 种子数据（正式环境，自动执行）
+│   ├── mysql/init-lite/           # 单库 DDL + 种子数据（开发/预览环境，自动执行）
 │   └── prometheus/prometheus.yml
-└── scripts/                    # start-all / stop-all / smoke-test
+└── scripts/
+    ├── common.sh               # 公共前置：JDK 17 锁定 + 健康等待
+    ├── start-dev.sh / stop-dev.sh             # 开发环境（2 个本机 JVM）
+    ├── deploy-preview.sh / stop-preview.sh    # 预览环境（全栈容器）
+    ├── start-all.sh / stop-all.sh             # 正式环境形态（5 个 JVM）
+    └── smoke-test.sh           # 三链路端到端冒烟（三套形态通用）
 ```
 
 种子数据：活动 `ACT2026001`、券模板 `CT2026001`(5元无门槛)/`CT2026002`(满100减20)、

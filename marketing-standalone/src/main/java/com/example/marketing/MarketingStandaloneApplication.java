@@ -8,9 +8,9 @@ import org.springframework.context.annotation.FilterType;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Lite 部署形态聚合启动入口：单 JVM 装配活动/券/优惠/秒杀四个业务模块。
+ * 开发/预览环境聚合启动入口：单 JVM 装配活动/券/优惠/秒杀四个业务模块。
  *
- * <p>与 Full 形态（四个独立进程 + RocketMQ）的关系：</p>
+ * <p>与正式环境形态（四个独立进程 + RocketMQ）的关系：</p>
  * <ul>
  *   <li>业务代码零改动，仅装配层聚合（本类位于 com.example.marketing 包根，
  *       组件扫描天然覆盖各模块 controller/service/mapper）；</li>
@@ -20,7 +20,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *       由本模块统一提供一份。</li>
  * </ul>
  *
- * <p>适用场景：2C4G 级小内存单机演示/功能验证；8G+ 环境请用 Full 形态。</p>
+ * <p>适用场景：开发自测与对外预览（够功能验证即可）；正式环境与生产同构的 Full 拓扑
+ * 见 scripts/start-all.sh + docker-compose.prod.yml。</p>
  */
 @SpringBootApplication(exclude = RocketMQAutoConfiguration.class)
 @EnableScheduling

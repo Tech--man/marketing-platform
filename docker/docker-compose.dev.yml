@@ -1,0 +1,58 @@
+# ============================================================
+# 开发环境（dev）：只容器化中间件，业务 JVM 跑在本机
+#   · 形态：mysql + redis 两个容器；standalone(8085) 与 gateway(8090) 由
+#     ./scripts/start-dev.sh 以本机进程启动，改代码后秒级重启、可直接打断点
+#   · 内存：极致小为第一目标，够跑通三条链路即可（无 MQ/Nacos/Prometheus）
+#   · 消息：Redis Stream（standalone 默认 marketing.mq.type=redis-stream）
+#   · 库：单库 marketing（docker/mysql/init-lite），与预览环境同一份 DDL
+# 端口与 prod 形态（docker-compose.prod.yml）冲突，切换前先 down 掉另一套
+# ============================================================
+services:
+  mysql:
+    image: mysql:8.0
+    platform: linux/amd64
+    container_name: mkt-dev-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: marketing
+      MYSQL_USER: marketing
+      MYSQL_PASSWORD: marketing123
+    ports:
+      - "3307:3306"   # 宿主机 3306 常被本地 mysqld 占用，改用 3307
+    volumes:
+      - mkt-dev-mysql-data:/var/lib/mysql
+      - ./mysql/init-lite:/docker-entrypoint-initdb.d:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      # 小内存调参：缓冲池 64M，关掉 performance_schema / binlog / 连接与表缓存
+      - --innodb-buffer-pool-size=64M
+      - --performance-schema=OFF
+      - --skip-log-bin
+      - --max-connections=60
+      - --table-open-cache=400
+      - --table-definition-cache=400
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: mkt-dev-redis
+    ports:
+      - "6379:6379"
+    # 关闭持久化：开发环境重启即重建预热，省掉 RDB fork 的额外内存
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mkt-dev-mysql-data:

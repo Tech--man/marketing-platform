@@ -1,6 +1,12 @@
-# 营销平台本地中间件编排
-# 启动：docker compose up -d（在本目录下执行）
-# 说明：所有端口仅绑定到宿主机，业务服务以本地进程方式运行（见 scripts/start-all.sh）
+# ============================================================
+# 正式环境（prod）中间件编排：MySQL 四业务库 + Redis + RocketMQ + Nacos + Prometheus
+#   · 定位：与生产同构的全链路（MQ 削峰、注册发现、指标抓取），业务服务
+#     以 5 个独立进程运行（./scripts/start-all.sh），每个进程可独立扩缩容
+#   · 内存：不做极限压缩，按吞吐配；建议 8C16G 起
+#   · 与 dev / preview 形态端口冲突（3307 / 6379 / 8090），同一台机器上互斥
+# 启动：docker compose -f docker-compose.prod.yml up -d（在本目录执行，
+#       或 cd docker && docker compose up -d 走默认解析）
+# ============================================================
 services:
   mysql:
     image: mysql:8.0

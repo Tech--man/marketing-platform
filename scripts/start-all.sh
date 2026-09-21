@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================
-# 一键启动五个服务（网关 8090 + 四业务服务 8081-8084）
-# 前置：docker compose 中间件已启动（见 docker/README 或 README.md）
+# 正式环境形态（Full 拓扑）本机启动：网关 8090 + 四业务服务 8081-8084，5 个 JVM
+# 前置：docker compose -f docker/docker-compose.prod.yml up -d
 # 用法：./scripts/start-all.sh [服务名...]   不带参数启动全部
+# 说明：日常改代码请用 ./scripts/start-dev.sh（2 个 JVM，内存小一个数量级）
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source "$(dirname "$0")/common.sh"
 
 ROOT="$(pwd)"
 LOG_DIR="$ROOT/logs"
 RUN_DIR="$ROOT/run"
 mkdir -p "$LOG_DIR" "$RUN_DIR"
+
+# 每个服务一份独立堆：不给定则 JVM 默认按物理内存 1/4 取堆，5 个进程会失控
+JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m}"
 
 ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill)
 SERVICES=("$@")
@@ -32,22 +37,9 @@ start_one() {
     echo "!! 未找到 ${jar}，请先执行 mvn package" >&2
     exit 1
   fi
-  nohup java -jar "$jar" > "$LOG_DIR/$name.log" 2>&1 &
+  nohup java $JAVA_OPTS -jar "$jar" > "$LOG_DIR/$name.log" 2>&1 &
   echo $! > "$pid_file"
   echo "==> $name 已启动 pid $(cat "$pid_file")，日志 logs/$name.log"
-}
-
-wait_healthy() {
-  local name=$1 port=$2
-  for i in $(seq 1 60); do
-    if curl -fs "http://127.0.0.1:$port/actuator/health" 2>/dev/null | grep -q '"UP"'; then
-      echo "==> $name 健康检查通过 (:$port)"
-      return 0
-    fi
-    sleep 1
-  done
-  echo "!! $name 60s 内未就绪，请查看 logs/$name.log" >&2
-  return 1
 }
 
 for s in "${SERVICES[@]}"; do start_one "$s"; done
