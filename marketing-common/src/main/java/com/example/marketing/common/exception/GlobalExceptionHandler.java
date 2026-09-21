@@ -9,6 +9,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 全局异常处理器：业务异常转统一响应，系统异常兜底并告警日志。
@@ -38,6 +39,14 @@ public class GlobalExceptionHandler {
     public Result<Void> handleUnknown(Exception e) {
         log.error("[system] 未预期异常", e);
         return Result.fail(ErrorCode.SYSTEM_ERROR);
+    }
+
+    /** 根路径与 favicon 等探测请求不是系统异常，按 404 静默返回，避免污染错误日志 */
+    @ExceptionHandler(NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Result<Void> handleNoResource(NoResourceFoundException e) {
+        log.debug("[web] 资源不存在: {}", e.getResourcePath());
+        return Result.fail(ErrorCode.NOT_FOUND);
     }
 
     private String defaultMessage(FieldError error) {

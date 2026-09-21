@@ -10,6 +10,7 @@ public enum ErrorCode {
     SUCCESS(0, "OK"),
 
     BAD_REQUEST(40000, "请求参数错误"),
+    NOT_FOUND(40400, "资源不存在"),
     UNAUTHORIZED(40100, "鉴权失败"),
     TOO_MANY_REQUESTS(42900, "请求过于频繁，请稍后再试"),
 
