@@ -9,6 +9,8 @@ import com.example.marketing.common.mq.RedisStreamEventPublisher;
 import com.example.marketing.common.mq.RocketMqEventPublisher;
 import com.example.marketing.common.mq.StreamConsumerRegistrar;
 import com.example.marketing.common.mq.StreamMessageHandler;
+import com.example.marketing.common.schedule.RedisLeaseLock;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -52,6 +54,17 @@ public class MarketingCommonAutoConfiguration {
     }
 
     /**
+     * 周期任务去重锁：一个调度周期内只让一个实例执行补偿/回补/过期扫描。
+     * 正确性仍由业务侧幂等与状态 CAS 兜底，这把锁只负责不重复干活、不重复投消息。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(StringRedisTemplate.class)
+    public RedisLeaseLock redisLeaseLock(StringRedisTemplate stringRedisTemplate, MeterRegistry meterRegistry) {
+        return new RedisLeaseLock(stringRedisTemplate, meterRegistry);
+    }
+
+    /**
      * Servlet Web 环境下的全局异常处理。
      */
     @Configuration(proxyBeanMethods = false)
@@ -91,8 +104,9 @@ public class MarketingCommonAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean
-        public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService) {
-            return new LocalMessageRetryer(localMessageService);
+        public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService,
+                RedisLeaseLock leaseLock) {
+            return new LocalMessageRetryer(localMessageService, leaseLock);
         }
     }
 
@@ -125,8 +139,9 @@ public class MarketingCommonAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean
-        public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService) {
-            return new LocalMessageRetryer(localMessageService);
+        public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService,
+                RedisLeaseLock leaseLock) {
+            return new LocalMessageRetryer(localMessageService, leaseLock);
         }
     }
 }

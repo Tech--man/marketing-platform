@@ -49,6 +49,8 @@ class MarketingCommonAutoConfigurationTest {
                 .withBean(DataSource.class, () -> dataSource)
                 .withBean(JdbcTemplate.class, () -> new JdbcTemplate(dataSource))
                 .withBean(StringRedisTemplate.class, () -> new StringRedisTemplate(factory))
+                .withBean(io.micrometer.core.instrument.MeterRegistry.class,
+                        io.micrometer.core.instrument.simple.SimpleMeterRegistry::new)
                 .withConfiguration(AutoConfigurations.of(MarketingCommonAutoConfiguration.class));
     }
 

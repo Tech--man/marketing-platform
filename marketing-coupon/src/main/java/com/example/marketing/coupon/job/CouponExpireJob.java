@@ -1,6 +1,7 @@
 package com.example.marketing.coupon.job;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.example.marketing.common.schedule.RedisLeaseLock;
 import com.example.marketing.coupon.domain.UserCouponStatus;
 import com.example.marketing.coupon.infrastructure.entity.UserCouponEntity;
 import com.example.marketing.coupon.infrastructure.mapper.UserCouponMapper;
@@ -9,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -16,7 +18,7 @@ import java.util.List;
  * 券过期定时任务：UNUSED 且已过 expire_at → EXPIRED。
  *
  * <p>生产环境（演进路线）：替换为 XXL-Job 分片 + 按 user_id 路由，避免大表扫描；
- * 此处 batch limit 循环保证单轮可控。</p>
+ * 此处 batch limit 循环保证单轮可控，并用租约锁收敛为多实例中只有一个实例在扫。</p>
  */
 @Slf4j
 @Component
@@ -26,9 +28,14 @@ public class CouponExpireJob {
     private static final int BATCH_SIZE = 500;
 
     private final UserCouponMapper userCouponMapper;
+    private final RedisLeaseLock leaseLock;
 
     @Scheduled(fixedDelayString = "${marketing.coupon.expire-interval-ms:60000}")
     public void expire() {
+        leaseLock.runExclusive("coupon-expire", Duration.ofMinutes(1), this::doExpire);
+    }
+
+    private void doExpire() {
         int total = 0;
         while (true) {
             List<UserCouponEntity> batch = userCouponMapper.selectList(

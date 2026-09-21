@@ -1,6 +1,7 @@
 package com.example.marketing.seckill.job;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.marketing.common.schedule.RedisLeaseLock;
 import com.example.marketing.seckill.config.SeckillProperties;
 import com.example.marketing.seckill.domain.SeckillOrderStatus;
 import com.example.marketing.seckill.infrastructure.entity.SeckillActivityEntity;
@@ -15,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -37,9 +39,14 @@ public class SeckillTimeoutJob {
     private final SeckillOrderService orderService;
     private final SeckillProperties properties;
     private final MeterRegistry meterRegistry;
+    private final RedisLeaseLock leaseLock;
 
     @Scheduled(fixedDelayString = "${marketing.seckill.timeout-scan-interval-ms:5000}")
     public void cancelTimeoutOrders() {
+        leaseLock.runExclusive("seckill-timeout", Duration.ofSeconds(5), this::doCancelTimeoutOrders);
+    }
+
+    private void doCancelTimeoutOrders() {
         LocalDateTime deadline = LocalDateTime.now().minusSeconds(properties.getPayTimeoutSeconds());
         List<SeckillOrderEntity> timeoutOrders = orderMapper.selectList(
                 new LambdaQueryWrapper<SeckillOrderEntity>()

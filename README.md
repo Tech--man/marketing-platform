@@ -275,7 +275,7 @@ mvn test                 # 26 个单测：见下
 |---|---|
 | `AllowAllRiskCheckService` | 风控中心 RPC + 设备指纹 + 黑名单布隆过滤器（接口不变） |
 | 网关演示 Token 鉴权 | OAuth2/JWT 网关鉴权 + 用户维度限流键 |
-| `@Scheduled` 超时回补/消息补偿 | XXL-Job / SchedulerX 分片调度 |
+| `@Scheduled` 超时回补/消息补偿 | 已做多实例去重（Redis 周期租约，见 `RedisLeaseLock`）；按 user_id 分片仍是 XXL-Job / SchedulerX 的事 |
 | 本地消息表最终一致 | 强一致场景接 Seata AT（订单/预算服务已按 bizKey 幂等设计） |
 | volatile 规则快照 | 规模增长后演进 ES 标签检索 / 多维索引 |
 | MQ 削峰计数 | Flink 实时 ROI 大盘 + ClickHouse 明细 |
