@@ -42,17 +42,20 @@ marketing:
       - /actuator/**
     # 分层限流·网关层：按路由配置滑动窗口阈值（秒杀最严格，超限返回排队码）
     rate-limit:
+      # 阈值随形态给（默认值即 FULL 口径）。LITE 单机实测异步排空约 110-140 msg/s/topic，
+      # 所以服役档把"会进队列"的两条路收到 ≈120/s：接得进来就要消化得掉，
+      # 否则只是把洪流换成排队，还会把 Redis Stream 顶到 maxmemory 后触发退避。
       activity-route:
-        limit: 500
+        limit: ${RL_ACTIVITY:500}
         window-seconds: 1
       coupon-route:
-        limit: 1000
+        limit: ${RL_COUPON:1000}
         window-seconds: 1
       discount-route:
-        limit: 2000
+        limit: ${RL_DISCOUNT:2000}
         window-seconds: 1
       seckill-route:
-        limit: 200
+        limit: ${RL_SECKILL:200}
         window-seconds: 1
 
 management:

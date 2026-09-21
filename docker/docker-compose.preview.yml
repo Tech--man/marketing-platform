@@ -70,6 +70,12 @@ services:
       SECKILL_HOST: standalone
       SECKILL_PORT: "8085"
       JAVA_OPTS: "-Xmx192m -Xss512k -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      # 入口阈值随形态收口：与实测排空能力（108-142 msg/s/topic）对齐，
+      # 纯同步的优惠计算给到 500/s 不影响（单次 ~0.4ms）
+      RL_COUPON: "120"
+      RL_SECKILL: "120"
+      RL_ACTIVITY: "200"
+      RL_DISCOUNT: "500"
     ports:
       - "8090:8090"   # 对外唯一入口（服务器可映射 80:8090）
     healthcheck:
