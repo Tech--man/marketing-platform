@@ -1,12 +1,12 @@
 # 营销管理平台脚手架（marketing-platform）
 
-面向 **日常 QPS 万级 / 大促 10 万+ / 秒杀 50 万+** 场景的可运行微服务脚手架。
+面向 **日常 QPS 万级 / 大促 10 万+ / 秒杀 50 万+** 场景的可运行微服务脚手架（该量级是 **FULL 档的设计口径**，LITE 档当前实测容量见第三节末）。
 架构原则：**分层限流、规则可编排、活动可灰度、全链路可降级、最终一致、ROI 可实时度量**。
 
 - 券中心 / 优惠计算引擎 / 秒杀中心 **深度实现**
 - 活动中心（状态机 + 预算 + 灰度）/ 风控 / 分销 / ROI **基础能力或扩展点占位**
 - 标准拓扑：Gateway + Nacos + 4 业务服务；Seata / Flink / ClickHouse / ES / XXL-Job 留扩展点
-- 环境形态：开发 / 预览跑单 JVM 聚合进程（standalone + Redis Stream 代替 MQ，内存极致小）；正式环境跑上面的标准拓扑（见第三节）
+- 形态：上面的标准拓扑是 **FULL 扩容档**（活跃期承接洪流）；非活跃期由 **LITE 服役档** 单 JVM 聚合进程承载（Redis Stream 代替 MQ，≈1 GiB），两档共享同一份数据原地双向切换（见第三节）
 
 ## 一、架构总览
 
@@ -41,73 +41,101 @@
 | marketing-coupon | 8082 | 券模板/库存预热、领券、结果轮询、核销 |
 | marketing-discount | 8083 | 规则 DSL、位图倒排索引、最优组合、分摊、超时降级 |
 | marketing-seckill | 8084 | 分桶预热、Lua 抢购、MQ 异步下单、支付、超时回补 |
-| marketing-standalone | 8085 | 开发/预览形态聚合进程：四业务模块单 JVM + Redis Stream 消息（见第三节） |
+| marketing-standalone | 8085 | LITE 服役档 / dev 开发档的聚合进程：四业务模块单 JVM + Redis Stream 消息（见第三节） |
 
-## 三、三套环境与快速开始
+## 三、形态与环境
 
-同一套业务代码，按用途分三档形态；**三套共用宿主机端口 3307 / 6379 / 8090，同一台机器上互斥**，切换前先停掉上一套。
+这套脚手架的**核心目的**：同一份业务代码按流量在两个容量档之间原地切换——非活跃期由小机器
+（LITE）常态承载服务，活跃期升档到与生产同构的 FULL 承接洪流。**切换只换应用侧进程形态与
+消息通道，不动数据、不改代码**；允许双向（升档也降档）。
 
-| 环境 | 拓扑 | 消息通道 | 数据库 | 定位 |
-|---|---|---|---|---|
-| **开发 dev** | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 改代码即重启，可打断点，内存极致小 |
-| **预览 preview** | 全栈容器化 4 容器（mysql / redis / standalone / gateway） | Redis Stream | 单库 `marketing` | 发给别人就能点，硬内存上限，内存极致小 |
-| **正式 prod** | 5 JVM 独立进程（8081-8084 + 8090）+ RocketMQ + Nacos + Prometheus | RocketMQ | 4 个业务库 | 与生产同构，按吞吐配资源 |
+| 形态 | 定位 | 拓扑 | 消息通道 | 数据库 | 可靠性口径 |
+|---|---|---|---|---|---|
+| **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 4 容器：mysql / redis / standalone（四模块聚合）/ gateway | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
+| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 5 独立进程（8081-8084 + 8090）+ RocketMQ + Nacos + Prometheus | RocketMQ | 4 业务库 | 中间件默认全持久化 |
+| **dev 开发档** | 本机改代码，允许丢数据 | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 不持久化；**淘汰策略仍与 LITE 一致** |
+
+LITE 的省内存**一律不靠牺牲可靠性换**，四条不可退让：淘汰策略必须 `noeviction`
+（`allkeys-lru` 会静默丢掉库存/券预扣/幂等键，后果是超卖与重复领券）；状态要落 AOF 且挂卷；
+容器要有 restart 与 json-file 日志轮转（默认 json-file 不限量，长期跑撑爆磁盘）；
+GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结算秒级尖峰）。
+
+### 快速开始
 
 ```bash
-# 开发环境（日常推荐）
-./scripts/start-dev.sh            # 起 mysql+redis 容器 → 构建 → 拉起 2 个 JVM
-./scripts/smoke-test.sh           # 三条链路端到端验收
-./scripts/stop-dev.sh --down      # 停 JVM 与中间件（-v 连数据卷清空）
+# LITE 服役档（默认推荐）
+./scripts/deploy-preview.sh           # mvn 构建 → compose up -d --build --wait → actuator 就绪收口
+./scripts/smoke-test.sh               # 端到端验收（三套形态通用）
+./scripts/stop-preview.sh             # -v 连数据卷清空
 
-# 预览环境
-./scripts/deploy-preview.sh       # mvn 构建 → docker compose up -d --build --wait
-./scripts/smoke-test.sh
-./scripts/stop-preview.sh
+# dev 开发档
+./scripts/start-dev.sh                # mysql+redis 容器 → 构建 → 本机 2 JVM
+./scripts/stop-dev.sh --down
 
-# 正式环境形态
+# FULL 扩容档
 cd docker && docker compose -f docker-compose.prod.yml up -d && cd ..
-./scripts/start-all.sh            # 日志 logs/，pid run/
-./scripts/smoke-test.sh           # 监控：Prometheus http://localhost:9091
+./scripts/start-all.sh                # 日志 logs/，pid run/；监控 http://localhost:9091
 ./scripts/stop-all.sh && (cd docker && docker compose -f docker-compose.prod.yml down)
 
-# 注册中心（可选，仅正式形态）：http://localhost:8848/nacos
-# 服务与网关加 --spring.profiles.active=nacos 开启注册发现与 lb:// 路由
+# 注册中心（可选，仅 FULL）：http://localhost:8848/nacos，profile=nacos 开启 lb:// 路由
+# ⚠ 该路径目前既没有脚本开关也没被实测过，见工单列表
 ```
 
-**宿主机端口矩阵**（三套形态在同一台机器上互斥，切换前先停上一套）：
+### 宿主机端口矩阵
 
-| 端口 | 用途 | dev | preview | prod |
+| 端口 | 用途 | dev | LITE(preview) | FULL(prod) |
 |---|---|---|---|---|
 | 8090 | 网关对外入口 | 本机进程 | 容器发布 | 本机进程 |
 | 8085 | 聚合服务（调试直连） | 本机进程 | 容器发布 | - |
-| 3307 | MySQL（仅绑回环） | 容器 | 不发布 | 容器 |
-| 6380 | Redis（仅绑回环） | 容器 | 不发布 | 容器 |
+| 3307 | MySQL（仅绑回环） | 容器 | **不发布** | 容器 |
+| 6380 | Redis（仅绑回环） | 容器 | **不发布** | 容器 |
 | 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | - | - | 容器发布 |
 
 > **Redis 为什么不用 6379**：宿主机上常驻的 `redis-server`（Homebrew 之类）会占住
-> `127.0.0.1:6379`，精确绑定优先于 Docker 对 `*:6379` 的发布，本机业务进程会静默连到
-> 那个"外人"实例——三套环境当场退化成共用一套中间件，且只在库存/幂等数据对不上时才暴露。
-> `scripts/common.sh` 的 `assert_port_not_shadowed` 会在启动前挡住这类端口遮蔽。
+> `127.0.0.1:6379`，其精确绑定优先于 Docker 对 `*:6379` 的发布，本机业务进程会静默连到那个
+> "外人"实例——三套环境当场退化成共用一套中间件，且只在库存/幂等数据对不上时才暴露。
+> `scripts/common.sh::assert_port_not_shadowed` 在启动前挡住这类遮蔽。
 
-**内存实测**（Apple Silicon 开发机 + OrbStack，各形态跑完一轮冒烟后采样；容器取 `docker stats`，
-本机进程取 `ps` RSS，口径一致可横向比）：
+### 内存实测
 
-| 形态 | 应用侧 | 中间件侧 | 合计 |
-|---|---|---|---|
-| 开发 dev | 2 JVM ≈ 176 MiB（standalone 110 / gateway 66） | mysql 168 + redis 13 MiB | **≈ 0.35 GiB** |
-| 预览 preview | standalone 416 + gateway 229 MiB | mysql 171 + redis 14 MiB | **≈ 0.81 GiB** |
-| 正式 prod | 5 JVM ≈ 306 MiB | RocketMQ 1.44 GiB + Nacos 1.06 GiB + mysql 0.44 GiB + 其它 0.07 GiB | **≈ 3.3 GiB** |
+Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 `ps` RSS（口径一致可横向比）。
 
-dev/preview 的内存压缩来自三处：只跑 1 个业务 JVM（聚合形态）、消息通道用 Redis Stream
-（省掉 RocketMQ）、不启 Nacos 与 Prometheus；JVM 侧再按"够用"给定小堆 + SerialGC +
-`TieredStopAtLevel=1`（只跑 C1，换启动速度与常驻集，不追峰值吞吐），并配 `mem_limit` 硬上限。
-正式形态中间件的堆也显式给定（RocketMQ 通过 `JAVA_OPT_EXT`；镜像自带的
-`JAVA_MIN_MEM/JAVA_MAX_MEM` 对其启动脚本无效，不给定会按容器内存 1/4 吃 2 GiB）。
+| 形态 | 应用侧 | 中间件侧 | 合计 | 备注 |
+|---|---|---|---|---|
+| LITE 服役档 | standalone 554 + gateway 334 MiB | mysql 185 + redis 15 MiB | **≈ 1.04 GiB** | 2026-09-21 idle 实测 |
+| dev 开发档 | 2 JVM ≈ 176 MiB | mysql 168 + redis 13 MiB | **≈ 0.35 GiB** | 改服役口径前测，待复测 |
+| FULL 扩容档 | 5 JVM ≈ 306 MiB | RocketMQ 1.44 + Nacos 1.06 + mysql 0.44 + 其它 0.07 GiB | **≈ 3.3 GiB** | RocketMQ 堆需经 `JAVA_OPT_EXT` 显式给定（镜像自带的 `JAVA_MIN_MEM/JAVA_MAX_MEM` 对其启动脚本无效，不给定会按容器内存 1/4 吃 2 GiB） |
 
-数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；网关演示 Token `demo-token-123`（环境变量 `GATEWAY_TOKEN` 覆盖）。
+LITE 从 0.81 GiB 涨到 1.04 GiB（+27%）就是上面那四条可靠性换来的：G1 取代 SerialGC、AOF、
+mem_limit 按"堆 + 元空间 + code cache + 线程栈 + direct"重算留余量。
+
+### 容量现状（别把 LITE 当洪峰档）
+
+实测 LITE 当前只能维持 **~20 单/s 量级**，根因链是三段叠加：一次领券在 HTTP 线程上打 **4 个
+autocommit**、消费端再 2-3 个 → 每次提交等 InnoDB redo fsync（本机卷上平均持有连接 221ms）→
+standalone 的 Hikari 池只有 **10** → 并发下请求在"等连接"上超时（实测累计 54 次
+`hikaricp_connections_timeout_total`，表现为单请求 20 秒）。
+
+**这里只给量级、不给阈值**：现有测量工具方差过大（同一构建入口速率在 1↔31 msg/s 间摆动 30 倍），
+任何写死的 QPS 阈值都是假的。待可复现夹具落地后再定；相关工单：入口事务合并、连接池按形态重定、
+`flush=2` 作为显式容量变体（它与 Redis AOF everysec 同属"最多 1 秒窗口"口径，不是额外妥协，
+但意味着 OS 崩溃会丢最近 1 秒已提交事务）。
+
+### LITE 跑通 ≠ FULL 跑通
+
+| 差异 | 后果 |
+|---|---|
+| 消息重试语义：RocketMQ broker 侧持久化 + 指数退避重试队列 vs Redis Stream 容器内 3 次后放弃（靠本地消息表补偿重投） | 削峰行为不等价；Stream 无 broker 侧堆积策略 |
+| **单库共享**（LITE 一库，FULL 四库） | 跨模块 join 在**两个形态里都不会被 DB 拦住**——原四库隔离本来是一道真防线，LITE 把它拿掉了，只能靠约定 |
+| 单 JVM 承载四模块 | 掩盖服务间超时、部分不可用、连接池争用（hikari 10 vs 4×20） |
+| LITE 不带 Prometheus | `/actuator/prometheus` 暴露了但没人抓；`prometheus.yml` 的 target 写死 FULL 的宿主机端口 |
+
+数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；
+网关演示 Token `demo-token-123`（环境变量 `GATEWAY_TOKEN` 覆盖）。
 
 **构建要求**：Maven 必须跑在 **JDK 17**，`scripts/*.sh` 已通过 `scripts/common.sh` 自动锁定。
-Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏 `cannot find symbol: log / setXxx`。
+Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏
+`cannot find symbol: log / setXxx`。
 
 ## 四、三条核心链路
 
@@ -198,17 +226,17 @@ marketing-platform/
 ├── marketing-discount/         # 8083 优惠计算引擎
 ├── marketing-seckill/          # 8084 秒杀中心
 ├── docker/
-│   ├── docker-compose.prod.yml    # 正式环境中间件：MySQL/Redis/RocketMQ/Nacos/Prometheus
-│   ├── docker-compose.preview.yml # 预览环境全栈（含 2 个 JVM 容器，带 mem_limit）
-│   ├── docker-compose.dev.yml     # 开发环境中间件（mysql + redis，小内存调参）
-│   ├── mysql/init/01-schema.sql   # 4 库 DDL + 种子数据（正式环境，自动执行）
-│   ├── mysql/init-lite/           # 单库 DDL + 种子数据（开发/预览环境，自动执行）
+│   ├── docker-compose.prod.yml    # FULL 扩容档中间件：MySQL/Redis/RocketMQ/Nacos/Prometheus
+│   ├── docker-compose.preview.yml # LITE 服役档全栈（2 JVM 容器 + AOF/noeviction/restart/日志轮转）
+│   ├── docker-compose.dev.yml     # dev 开发档中间件（mysql + redis，小内存调参）
+│   ├── mysql/init/01-schema.sql   # 4 库 DDL + 种子数据（FULL，自动执行）
+│   ├── mysql/init-lite/           # 单库 DDL + 种子数据（LITE / dev，自动执行）
 │   └── prometheus/prometheus.yml
 └── scripts/
     ├── common.sh               # 公共前置：JDK 17 锁定 + 健康等待
-    ├── start-dev.sh / stop-dev.sh             # 开发环境（2 个本机 JVM）
-    ├── deploy-preview.sh / stop-preview.sh    # 预览环境（全栈容器）
-    ├── start-all.sh / stop-all.sh             # 正式环境形态（5 个 JVM）
+    ├── start-dev.sh / stop-dev.sh             # dev 开发档（2 个本机 JVM）
+    ├── deploy-preview.sh / stop-preview.sh    # LITE 服役档（全栈容器）
+    ├── start-all.sh / stop-all.sh             # FULL 扩容档（5 个 JVM）
     └── smoke-test.sh           # 三链路端到端冒烟（三套形态通用）
 ```
 
