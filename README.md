@@ -141,13 +141,17 @@ RocketMQ。正确性靠本地消息表兜住（未 confirm 的消息由 `LocalMe
 
 Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 `ps` RSS（口径一致可横向比）。
 
-| 形态 | 应用侧 | 中间件侧 | 合计 | 备注 |
+| 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
-| LITE 服役档 | standalone 554 + gateway 334 MiB | mysql 185 + redis 15 MiB | **≈ 1.04 GiB** | 2026-09-21 idle 实测 |
-| dev 开发档 | 2 JVM ≈ 176 MiB | mysql 168 + redis 13 MiB | **≈ 0.35 GiB** | 改服役口径前测，待复测 |
-| FULL 扩容档 | 5 JVM ≈ 306 MiB | RocketMQ 1.44 + Nacos 1.06 + mysql 0.44 + 其它 0.07 GiB | **≈ 3.3 GiB** | RocketMQ 堆需经 `JAVA_OPT_EXT` 显式给定（镜像自带的 `JAVA_MIN_MEM/JAVA_MAX_MEM` 对其启动脚本无效，不给定会按容器内存 1/4 吃 2 GiB） |
+| **LITE 服役档** | standalone 554 + gateway 334 MiB | mysql 232 + redis 14 MiB | **≈ 1.1 GiB** | `docker stats` |
+| **dev 开发档** | 2 个本机 JVM ≈ 176 MiB | 数据层 246 MiB | **≈ 0.4 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比 |
+| **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.6 GiB | nacos 1.09 GiB + rocketmq 1.5 GiB + 数据层 0.25 GiB + prometheus 55 MiB | **≈ 5.4 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
 
-LITE 从 0.81 GiB 涨到 1.04 GiB（+27%）就是上面那四条可靠性换来的：G1 取代 SerialGC、AOF、
+> 口径说明：跨形态比较一律用 `docker stats`。本机进程的 `ps` RSS 在 macOS 上系统性偏低
+> （实测同一服务在容器里 440-600 MiB、在宿主机 `ps` 只报 44-132 MiB），混用两种口径会得出
+> 错误结论 —— 本文早期版本就因此把 FULL 写成"≈3.3 GiB"。
+
+LITE 从 0.81 GiB 涨到约 1.1 GiB 就是上面那四条可靠性换来的：G1 取代 SerialGC、AOF、
 mem_limit 按"堆 + 元空间 + code cache + 线程栈 + direct"重算留余量。
 
 ### 容量现状（别把 LITE 当洪峰档）
