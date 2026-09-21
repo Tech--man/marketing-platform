@@ -53,9 +53,10 @@ services:
     container_name: mkt-rocketmq-namesrv
     ports:
       - "9876:9876"
+    # mqnamesrv 不认 JAVA_MIN_MEM/JAVA_MAX_MEM（镜像里只透传 JAVA_OPT_EXT），
+    # 不给定则按容器内存的 1/4 取堆（实测 2G）
     environment:
-      JAVA_MIN_MEM: 512M
-      JAVA_MAX_MEM: 512M
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m -Xmn128m"
     command: ["sh", "mqnamesrv"]
     healthcheck:
       test: ["CMD-SHELL", "jps | grep -c NamesrvStartup || exit 1"]
@@ -75,8 +76,8 @@ services:
       - "10911:10911"
     environment:
       NAMESRV_ADDR: rocketmq-namesrv:9876
-      JAVA_MIN_MEM: 512M
-      JAVA_MAX_MEM: 1024M
+      # 同上：broker 也走 JAVA_OPT_EXT，实测不给定时吃 2G 堆
+      JAVA_OPT_EXT: "-Xms512m -Xmx512m -Xmn256m"
     # brokerIP1 指向宿主机回环：业务服务在本机（容器外）以 127.0.0.1:9876 直连
     volumes:
       - ./rocketmq/broker.conf:/home/rocketmq/broker.conf:ro

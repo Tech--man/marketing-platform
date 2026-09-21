@@ -74,6 +74,36 @@ cd docker && docker compose -f docker-compose.prod.yml up -d && cd ..
 # 服务与网关加 --spring.profiles.active=nacos 开启注册发现与 lb:// 路由
 ```
 
+**宿主机端口矩阵**（三套形态在同一台机器上互斥，切换前先停上一套）：
+
+| 端口 | 用途 | dev | preview | prod |
+|---|---|---|---|---|
+| 8090 | 网关对外入口 | 本机进程 | 容器发布 | 本机进程 |
+| 8085 | 聚合服务（调试直连） | 本机进程 | 容器发布 | - |
+| 3307 | MySQL（仅绑回环） | 容器 | 不发布 | 容器 |
+| 6380 | Redis（仅绑回环） | 容器 | 不发布 | 容器 |
+| 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | - | - | 容器发布 |
+
+> **Redis 为什么不用 6379**：宿主机上常驻的 `redis-server`（Homebrew 之类）会占住
+> `127.0.0.1:6379`，精确绑定优先于 Docker 对 `*:6379` 的发布，本机业务进程会静默连到
+> 那个"外人"实例——三套环境当场退化成共用一套中间件，且只在库存/幂等数据对不上时才暴露。
+> `scripts/common.sh` 的 `assert_port_not_shadowed` 会在启动前挡住这类端口遮蔽。
+
+**内存实测**（Apple Silicon 开发机 + OrbStack，各形态跑完一轮冒烟后采样；容器取 `docker stats`，
+本机进程取 `ps` RSS，口径一致可横向比）：
+
+| 形态 | 应用侧 | 中间件侧 | 合计 |
+|---|---|---|---|
+| 开发 dev | 2 JVM ≈ 176 MiB（standalone 110 / gateway 66） | mysql 168 + redis 13 MiB | **≈ 0.35 GiB** |
+| 预览 preview | standalone 416 + gateway 229 MiB | mysql 171 + redis 14 MiB | **≈ 0.81 GiB** |
+| 正式 prod | 5 JVM ≈ 306 MiB | RocketMQ 1.44 GiB + Nacos 1.06 GiB + mysql 0.44 GiB + 其它 0.07 GiB | **≈ 3.3 GiB** |
+
+dev/preview 的内存压缩来自三处：只跑 1 个业务 JVM（聚合形态）、消息通道用 Redis Stream
+（省掉 RocketMQ）、不启 Nacos 与 Prometheus；JVM 侧再按"够用"给定小堆 + SerialGC +
+`TieredStopAtLevel=1`（只跑 C1，换启动速度与常驻集，不追峰值吞吐），并配 `mem_limit` 硬上限。
+正式形态中间件的堆也显式给定（RocketMQ 通过 `JAVA_OPT_EXT`；镜像自带的
+`JAVA_MIN_MEM/JAVA_MAX_MEM` 对其启动脚本无效，不给定会按容器内存 1/4 吃 2 GiB）。
+
 数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；网关演示 Token `demo-token-123`（环境变量 `GATEWAY_TOKEN` 覆盖）。
 
 **构建要求**：Maven 必须跑在 **JDK 17**，`scripts/*.sh` 已通过 `scripts/common.sh` 自动锁定。
