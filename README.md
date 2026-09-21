@@ -168,7 +168,7 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 > （实测同一服务在容器里 440-600 MiB、在宿主机 `ps` 只报 44-132 MiB），混用两种口径会得出
 > 错误结论 —— 本文早期版本就因此把 FULL 写成"≈3.3 GiB"。
 
-LITE 从 0.81 GiB 涨到约 1.1 GiB 就是上面那四条可靠性换来的：G1 取代 SerialGC、AOF、
+LITE 从 0.81 GiB 涨到 1.05-1.1 GiB 就是上面那四条可靠性换来的：G1 取代 SerialGC、AOF、
 mem_limit 按"堆 + 元空间 + code cache + 线程栈 + direct"重算留余量。
 
 ### 容量现状（别把 LITE 当洪峰档）
@@ -316,10 +316,20 @@ mvn test                 # 26 个单测：见下
 **装配层回归**（聚合形态扫描边界 + common 条件装配矩阵，用 ApplicationContextRunner + H2
 不依赖中间件）。后者把"预览栈起不来"这类装配 bug 从一次 2-3 分钟的构建+部署排查压到秒级。
 
-**已知噪音**：网关启动时会固定打一条 `Unable to load io.netty.resolver.dns.macos
+**已知噪音 ①**：网关启动时会固定打一条 `Unable to load io.netty.resolver.dns.macos
 .MacOSDnsServerAddressStreamProvider` 的 ERROR —— macOS 上 netty 原生 DNS 解析器的可选本地库缺失，
 回落到系统解析器，功能无影响。不为它往交付物里加平台特定依赖（`netty-resolver-dns-native-macos`
-只在 macOS 有意义，会污染 Linux 部署）。除这条之外，三套形态跑完冒烟的 ERROR 计数为 0。
+只在 macOS 有意义，会污染 Linux 部署）。
+
+**已知噪音 ②（已防护）**：网关偶发 `reactor.netty.http.client.PrematureCloseException:
+Connection prematurely closed BEFORE response` → 该请求 500。机制：上游 Tomcat 空闲 **61.3s**
+主动关 keep-alive 连接（本机实测），而 reactor-netty 连接池默认 `max-idle-time` 不限、
+`eviction-interval=0` 不清理，池里的连接可能比上游活得久，复用到一条已被对端 FIN 掉的连接就命中。
+现在把客户端改成先退役：`max-idle-time=30s` + `eviction-interval=10s`（`GW_POOL_MAX_IDLE` /
+`GW_POOL_EVICT_INTERVAL` 可调）。诚实边界：这是**预防性**修复——这个竞争窗口在这台机器上没能
+确定性复现（专门攒 20 条连接再空闲 70s 后重打，两轮 40 次未触发），只在长跑中撞到过一次，
+所以只能说"窗口按配置消掉了"，不能说"复现→修复→不再复现"闭环验证过。除此之外，三套形态
+跑完冒烟的 ERROR 计数为 0（除这两条）。
 
 **冒烟（34 条，四链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、预算扣减与 bizKey 幂等、超预算 41003、灰度命中、可参与位切换）；

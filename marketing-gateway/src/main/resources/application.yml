@@ -15,6 +15,14 @@ spring:
         enabled: false
         server-addr: ${NACOS_ADDR:127.0.0.1:8848}
     gateway:
+      httpclient:
+        pool:
+          # 上游 Tomcat 空闲 61.3s 主动关连接（实测，见 README"已知噪音"），而 reactor-netty
+          # 默认既不设 max-idle-time 也不开后台清理（eviction-interval 默认 0）——池里的连接
+          # 可能比上游活得久，复用到一条已被对端 FIN 掉的连接就抛 PrematureCloseException，
+          # 表现为 500。让客户端先退役，这个窗口就不存在。
+          max-idle-time: ${GW_POOL_MAX_IDLE:30s}
+          eviction-interval: ${GW_POOL_EVICT_INTERVAL:10s}
       routes:
         - id: activity-route
           uri: http://${ACTIVITY_HOST:127.0.0.1}:${ACTIVITY_PORT:8081}
