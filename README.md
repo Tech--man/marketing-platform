@@ -190,7 +190,7 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 | 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
 | **LITE 服役档** | standalone 567 + gateway 323 MiB | mysql 172 + redis 8 MiB | **≈ 1.05 GiB** | `docker stats` |
-| **dev 开发档** | 2 个本机 JVM ≈ 244 MiB | 数据层 256 MiB | **≈ 0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比 |
+| **dev 开发档** | 2 个本机 JVM ≈ 180-244 MiB | 数据层 184-256 MiB | **≈ 0.36-0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比；区间是两次实测，差值主要是 MySQL 缓冲池预热程度 |
 | **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.7 GiB（484-689 MiB/个） | nacos 1.11 + rocketmq 1.68 + 数据层 0.26 + prometheus 0.03 GiB | **≈ 5.8 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
 | **FULL 扩容档**（本机进程，5 JVM） | 5 JVM `ps` RSS 合计 253 MiB（**刚启动即采样**；同一进程跑 10 分钟后到 309 MiB，ps RSS 随负载爬升） | rocketmq 1.77 GiB（nacos/prometheus 未起） | **≈ 2.0 GiB** | 混合口径 + 采样时点不一致，只作量级参考，别与上三行比 |
 
