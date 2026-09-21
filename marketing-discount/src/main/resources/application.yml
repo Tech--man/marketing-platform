@@ -38,13 +38,6 @@ mybatis-plus:
       logic-delete-value: 1
       logic-not-delete-value: 0
 
-marketing:
-  discount:
-    calc-timeout-ms: 50
-    max-rules-per-order: 5
-    version-key: discount:rule:version
-    snapshot-check-seconds: 5
-
 management:
   endpoints:
     web:

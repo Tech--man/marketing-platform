@@ -43,11 +43,6 @@ rocketmq:
   producer:
     group: PID_MARKETING_COUPON
 
-marketing:
-  coupon:
-    # 领券结果轮询超时（秒）：超过后前端拿 ACCEPTED 视为处理中
-    result-ttl-seconds: 300
-
 management:
   endpoints:
     web:

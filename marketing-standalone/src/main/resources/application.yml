@@ -45,21 +45,10 @@ mybatis-plus:
 
 # 消息通道：Redis Stream 替代 RocketMQ（common 自动装配按此选型）
 marketing:
+  # 只保留真正存在形态差异 / 无代码默认的配置：
+  # mq.type（LITE 用 Redis Stream）与下方 gray（灰度规则是数据，不是默认值）
   mq:
     type: ${MQ_TYPE:redis-stream}
-  coupon:
-    result-ttl-seconds: 300
-  discount:
-    calc-timeout-ms: 50
-    max-rules-per-order: 5
-    version-key: discount:rule:version
-    snapshot-check-seconds: 5
-  seckill:
-    buckets: 16
-    token-ttl-seconds: 600
-    pay-timeout-seconds: 300
-    bought-mark-ttl-seconds: 86400
-    timeout-scan-interval-ms: 5000
   gray:
     ACT2026001:
       percent: 100
