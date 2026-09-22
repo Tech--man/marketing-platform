@@ -77,7 +77,7 @@ requestId（属 ④/后续）。
 | S2 | 地雷 B + D：唯一键加维度（`(activity_no,biz_key)` / `(topic,biz_key)`）、`deduct` 返回 `DEDUCTED/REPLAYED`（**code 仍 0**，语义放 `data`，保住 `smoke-test.sh:66`）、`rollbackFlow`/`publish`/`confirm` 带维度条件、`recordIfAbsent` 返回行数、bizKey 统一 `BizKey.of` | **是**（消歧义，不新增拒绝） |
 | S3 | 地雷 C：删 5 处 `logic-delete-*` 配置，admin 侧不提供物理删除 | 否 |
 | S4 | 错误码归一：仅"不存在"分支改 `NOT_FOUND(40400)`（`ActivityService.java:66`、`BudgetService.java:97`、`CouponTemplateService.java:38,86`）；`41000/41001/41003` 原样保留（smoke 依赖） | **是**（范围极小） |
-| S5 | admin 模块 + 三张表 + 登录/改密/强制下线/在线列表/审计查询/reheat 入口 + standalone 落位 | 否（新增） |
+| S5 | admin 模块 + 三张表 + 登录/改密/强制下线/在线列表/reheat 入口 + standalone 落位。**实施时的两处偏离**：① reheat 只在 LITE 聚合形态可用（注册表从本 JVM 收集 reheater，FULL 分进程时端点显式 41000 并点名 owning 服务，跨进程转发属⑤）；② 审计查询并入 S7，与写库同批交付，避免"能查一张永远为空的表" | 否（新增） |
 | S6 | 网关 `AdminAuthFilter` + `AuthFilter` 跳过已 VERIFIED + 两套 profile 各加 admin-route + `RL_ADMIN` 限流条目 + 三形态密钥下发 | 否（业务路径不动） |
 | S7 | `AuditService implements AuditSink` 落库 + 审计查询端点（读写同一批交付，避免"能查不能写"的空壳）+ `LoginGuard`（Redis 每 IP 登录限速 + `fail_count/lock_until`） | 否 |
 | S8 | 单测、smoke 链路 4、三形态实测、README 口径 | — |
