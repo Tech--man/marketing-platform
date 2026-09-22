@@ -38,6 +38,11 @@ echo "==> 数据层常驻检查（mysql + redis，与 LITE/FULL 同一份数据�
 docker compose -f "$DATA_COMPOSE" up -d --wait
 
 export MYSQL_PORT="$DEV_MYSQL_PORT" REDIS_PORT="$DEV_REDIS_PORT"
+# 必须在启动任何 JVM 之前导出：standalone 里就装着 admin 模块，AdminSecurityConfig 对空密钥
+# 是"启动即失败"（宁可起不来也不签一枚谁都能伪造的 admin token），而它在下面第一个
+# start_jvm 就会被用到 —— 放在后面等于只给网关配了密钥，聚合进程直接死在健康检查上（实测）。
+# dev 档给固定占位值并让 AdminSecurityConfig 为此打 WARN。
+export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
 
 start_jvm() { # name jar opts
   local name=$1 jar=$2 opts=$3
@@ -56,15 +61,13 @@ start_jvm() { # name jar opts
 }
 
 start_jvm marketing-standalone "$ROOT/marketing-standalone/target/marketing-standalone-1.0.0-SNAPSHOT.jar" "$STANDALONE_OPTS"
-wait_healthy marketing-standalone 8085 90
+wait_healthy marketing-standalone 8085 150  # 实测冷启约 100s（本机 JVM + 首次建连接），90s 会假报失败
 
 # 网关四路指向聚合进程（standalone 不读这些变量）
 export ACTIVITY_HOST=127.0.0.1 COUPON_HOST=127.0.0.1 DISCOUNT_HOST=127.0.0.1 SECKILL_HOST=127.0.0.1
 export ACTIVITY_PORT=8085 COUPON_PORT=8085 DISCOUNT_PORT=8085 SECKILL_PORT=8085
-# 后台与 LITE 同进程：路由指向 standalone 的 8085。密钥两侧必须同值，
-# dev 档用固定占位值（AdminSecurityConfig 会为此打 WARN）
+# 后台与 LITE 同进程：路由指向 standalone 的 8085
 export ADMIN_HOST=127.0.0.1 ADMIN_PORT=8085
-export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
 start_jvm marketing-gateway "$ROOT/marketing-gateway/target/marketing-gateway-1.0.0-SNAPSHOT-exec.jar" "$GATEWAY_OPTS"
 wait_healthy marketing-gateway 8090 60
 

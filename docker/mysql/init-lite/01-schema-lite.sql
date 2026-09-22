@@ -6,6 +6,11 @@
 -- ============================================================
 
 -- ---------- 1. 建库 ----------
+-- 必须显式声明连接字符集：docker-entrypoint-initdb.d 是用容器里的 mysql 客户端执行的，
+-- 而它的默认连接字符集是 latin1 —— 服务端就算配了 utf8mb4，种子中文也会先被按 latin1
+-- 转一遍再存成 utf8mb4，落库即成 "2026 秋季大促" -> "2026 ç§‹å­£å¤§ä¿ƒ"（实测在
+-- 现有 dev 卷的 activity 种子上就是这个结果）。加这一行才是所见即所得。
+SET NAMES utf8mb4;
 CREATE DATABASE IF NOT EXISTS marketing DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 GRANT ALL PRIVILEGES ON marketing.* TO 'marketing'@'%';
 -- Docker Desktop 的宿主机端口映射会被 MySQL 解析为 localhost 来源，补一个同名本地账号

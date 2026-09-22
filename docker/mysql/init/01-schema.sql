@@ -7,6 +7,11 @@
 -- ---------- 1. 建库 ----------
 -- 四个都要显式 CREATE：GRANT 只写授权表、不会建库，漏一个就会在下面第一个 USE 处报错，
 -- 而 docker-entrypoint-initdb.d 里任何一条 SQL 失败都会让 MySQL 容器初始化整体中断。
+-- 必须显式声明连接字符集：docker-entrypoint-initdb.d 是用容器里的 mysql 客户端执行的，
+-- 而它的默认连接字符集是 latin1 —— 服务端就算配了 utf8mb4，种子中文也会先被按 latin1
+-- 转一遍再存成 utf8mb4，落库即成 "2026 秋季大促" -> "2026 ç§‹å­£å¤§ä¿ƒ"（实测在
+-- 现有 dev 卷的 activity 种子上就是这个结果）。加这一行才是所见即所得。
+SET NAMES utf8mb4;
 CREATE DATABASE IF NOT EXISTS marketing_activity DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_coupon  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_discount DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

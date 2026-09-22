@@ -61,6 +61,39 @@ docker compose -f "$APP" up -d $BUILD_FLAG "$@"
 echo "==> 等待网关就绪（服务启动 + 注册进 nacos 需要一点时间）"
 wait_healthy marketing-gateway 8090 180
 
+# 网关自身健康 ≠ 五条路由都能服务：Spring Cloud Gateway 是**首次命中**某条 lb:// 路由时
+# 才去 nacos 订阅该服务，订阅+实例推送到位前请求会被回 503（空响应体）。实测部署后立刻跑
+# 冒烟会吃到 28 条"C 端全红"的假失败——排查方向还长得像异步链路坏了，代价很大。
+# 所以这里按路由各打一发真实业务请求，等到 `"code":0` 才算就绪。
+echo "==> 等待五条路由真正可服务（服务发现订阅是懒加载的）"
+CT="Authorization: Bearer ${GATEWAY_TOKEN:-demo-token-123}"
+wait_route() { # url desc 期望片段
+  local url=$1 desc=$2 want=$3
+  for _ in $(seq 1 60); do
+    if curl -s -m 5 -H "$CT" "http://127.0.0.1:8090$url" | grep -q "$want"; then
+      echo "    $desc 可服务"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "!! $desc 在 120s 内没有返回预期响应（$url）" >&2
+  return 1
+}
+rc=0
+wait_route "/api/activity/ACT2026001" "活动路由" '"code":0' || rc=1
+wait_route "/api/coupon/templates" "券路由" '"code":0' || rc=1
+wait_route "/api/discount/rules" "优惠路由" '"code":0' || rc=1
+wait_route "/api/seckill/activities" "秒杀路由" '"code":0' || rc=1
+# 后台路由用登录探：它同时验到 lb://marketing-admin → DB → BCrypt 这条完整链
+if curl -s -m 10 -X POST http://127.0.0.1:8090/api/admin/auth/login -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"rootdev123"}' | grep -q '"code":0'; then
+  echo "    后台路由可服务"
+else
+  echo "!! 后台路由在预期时间内没有返回登录成功（检查 ADMIN_JWT_SECRET 两侧是否同值）" >&2
+  rc=1
+fi
+[ $rc -ne 0 ] && exit 1
+
 echo "==> FULL 应用栈就绪"
 docker compose -f "$MW" ps --format '{{.Name}}\t{{.Status}}' 2>/dev/null | head -6 || true
 docker compose -f "$APP" ps --format 'table {{.Service}}\t{{.Name}}\t{{.Status}}'
