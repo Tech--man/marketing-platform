@@ -59,7 +59,7 @@ public class CouponConsumeService {
         UserCouponEntity coupon = userCouponMapper.selectOne(Wrappers.<UserCouponEntity>lambdaQuery()
                 .eq(UserCouponEntity::getCouponCode, request.couponCode()));
         if (coupon == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "券不存在: " + request.couponCode());
+            throw new BizException(ErrorCode.NOT_FOUND, "券不存在: " + request.couponCode());
         }
         if (!coupon.getUserId().equals(request.userId())) {
             throw new BizException(ErrorCode.BIZ_ERROR, "券不属于该用户");

@@ -2,6 +2,7 @@ package com.example.marketing.activity.service;
 
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.infrastructure.mapper.ActivityMapper;
+import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -116,7 +117,8 @@ class BudgetServiceTest {
                         new Class<?>[]{ActivityMapper.class},
                         (p, m, a) -> null));
 
-        assertThrows(BizException.class, () -> noActivity.computeRemainCents("ACT0000000"));
+        BizException e = assertThrows(BizException.class, () -> noActivity.computeRemainCents("ACT0000000"));
+        assertEquals(ErrorCode.NOT_FOUND.getCode(), e.getCode(), "查不到资源不该是 41000");
     }
 
     @Test

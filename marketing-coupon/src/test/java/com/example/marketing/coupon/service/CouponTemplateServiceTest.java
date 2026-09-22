@@ -1,5 +1,6 @@
 package com.example.marketing.coupon.service;
 
+import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.coupon.infrastructure.entity.CouponTemplateEntity;
 import org.junit.jupiter.api.DisplayName;
@@ -44,12 +45,16 @@ class CouponTemplateServiceTest {
     }
 
     @Test
-    @DisplayName("模板不存在就报错，不静默按 0 预热")
+    @DisplayName("模板不存在报 40400，不静默按 0 预热")
     void unknownTemplateFails() {
         CouponTemplateService service = new CouponTemplateService(
                 templateMapperReturning(null), userCouponMapperReturning(0L), null);
 
-        assertThrows(BizException.class, () -> service.reheat("CT0000000", true));
+        BizException e = assertThrows(BizException.class, () -> service.reheat("CT0000000", true));
+        assertEquals(ErrorCode.NOT_FOUND.getCode(), e.getCode());
+        // 可领校验与详情查询走的是同一个码，后台才能区分"没了"与"状态不允许"
+        assertEquals(ErrorCode.NOT_FOUND.getCode(),
+                assertThrows(BizException.class, () -> service.getRequiringGrantable("CT0000000")).getCode());
     }
 
     @Test

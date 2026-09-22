@@ -176,7 +176,7 @@ public class BudgetService implements CacheReheater {
         ActivityEntity activity = activityMapper.selectOne(
                 Wrappers.<ActivityEntity>lambdaQuery().eq(ActivityEntity::getActivityNo, activityNo));
         if (activity == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "活动不存在: " + activityNo);
+            throw new BizException(ErrorCode.NOT_FOUND, "活动不存在: " + activityNo);
         }
         return activity;
     }

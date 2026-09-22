@@ -36,7 +36,7 @@ public class CouponTemplateService implements CacheReheater {
         CouponTemplateEntity template = templateMapper.selectOne(Wrappers.<CouponTemplateEntity>lambdaQuery()
                 .eq(CouponTemplateEntity::getTemplateNo, templateNo));
         if (template == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "券模板不存在: " + templateNo);
+            throw new BizException(ErrorCode.NOT_FOUND, "券模板不存在: " + templateNo);
         }
         LocalDateTime now = LocalDateTime.now();
         boolean grantable = STATUS_ACTIVE.equals(template.getStatus())
@@ -126,7 +126,7 @@ public class CouponTemplateService implements CacheReheater {
         CouponTemplateEntity template = templateMapper.selectOne(Wrappers.<CouponTemplateEntity>lambdaQuery()
                 .eq(CouponTemplateEntity::getTemplateNo, templateNo));
         if (template == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "券模板不存在: " + templateNo);
+            throw new BizException(ErrorCode.NOT_FOUND, "券模板不存在: " + templateNo);
         }
         return template;
     }

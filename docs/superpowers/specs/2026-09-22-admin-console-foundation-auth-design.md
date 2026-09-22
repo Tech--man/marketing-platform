@@ -232,4 +232,4 @@ admin `Dockerfile` ｜ `docker-compose.full-app.yml`（不发布端口） ｜ `d
 业务 CRUD/编辑接口（③）、运维只读大盘（④）、运维写动作 HTTP 面（⑤，本文只留 `CacheReheater` 原语）、
 任何前端与 node 工具链（⑥）、RBAC 角色表/权限点表/菜单表、refresh token / OAuth2 / LDAP / SSO、
 登录验证码与 IP 白名单、审计保留期治理与查询 UI、`DEAD/FAILED` 注释统一、`IdempotentExecutor`
-PROCESSING 超时回收、分库迁移工具、动态配置下发（口径定为"DB 真值 + Redis 广播"，实现留 ⑤）。
+PROCESSING 超时回收、分库迁移工具、动态配置下发（另：`GET /api/seckill/stock/{no}` 对不存在活动仍返回 code=0 + 空数组，属同类 404 归一的漏网，留给 ③）（口径定为"DB 真值 + Redis 广播"，实现留 ⑤）。

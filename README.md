@@ -343,15 +343,28 @@ POST /api/seckill/grab
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 26 个单测：见下
-./scripts/smoke-test.sh  # 端到端 34 条断言（三套形态通用，需服务已启动）
+mvn test                 # 79 个单测 / 20 个类：见下
+./scripts/smoke-test.sh  # 端到端 39 条断言（三套形态通用，需服务已启动）
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000）
 ```
 
-**单测（26）**：三层幂等语义、非法状态流转拒绝、比例分摊尾差归末项、末行占满顺延、
-互斥组最优（priority desc → discount desc）、叠加超限精确枚举、1 万规则基准耗时、
-**装配层回归**（聚合形态扫描边界 + common 条件装配矩阵，用 ApplicationContextRunner + H2
-不依赖中间件）。后者把"预览栈起不来"这类装配 bug 从一次 2-3 分钟的构建+部署排查压到秒级。
+**单测（79 用例 / 20 类）**分四族：
+
+- **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
+  比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
+  叠加超限精确枚举、1 万规则基准耗时；
+- **资金与消息正确性（管理后台地基 S1/S2 补的）**：预算重算按流水对账（H2 上跑真 SQL，
+  不再按满额回涨）、扣款与退款流水同向、跨活动同 bizKey 各自真扣、回滚只删本活动行、
+  本地消息表同键跨 topic 互不干扰、退避只动自己那行；
+- **公共契约**：分页元信息与越界夹取、BizKey 长度有界且确定、JWT 验签/过期/时钟偏移/篡改、
+  重预热注册表分发与重复注册；
+- **装配层回归**：聚合形态扫描边界 + common 条件装配矩阵（含重预热注册表），
+  用 ApplicationContextRunner + H2 + `127.0.0.1:1` 永不连接的 Lettuce 满足类型条件，
+  不依赖中间件。这族把"预览栈起不来"这类装配 bug 从 2-3 分钟的构建+部署排查压到秒级。
+
+写这些用例时用的是 `MODE=MySQL` 的 H2 跑**真 SQL**（`INSERT IGNORE`、唯一索引作用域都能验），
+并且对关键断言做过变异检查：把生产码改回旧值，断言必须红
+（例：`expected: <40400> but was: <41000>`）—— 不然只是自证通过。
 
 **已知噪音 ①**：网关启动时会固定打一条 `Unable to load io.netty.resolver.dns.macos
 .MacOSDnsServerAddressStreamProvider` 的 ERROR —— macOS 上 netty 原生 DNS 解析器的可选本地库缺失，

@@ -39,12 +39,10 @@ spring:
           enabled: false
 
 mybatis-plus:
+  # 这里刻意不配逻辑删除：所有表都没有 deleted 列，配了它只会让 deleteById 静默变成物理删除；
+  # 下线语义一律走各自的 status（活动 OFFLINE/FINISHED、券模板 OFFLINE、规则 DISABLED）。
   global-config:
     banner: false
-    db-config:
-      logic-delete-field: deleted
-      logic-delete-value: 1
-      logic-not-delete-value: 0
 
 # 消息通道：Redis Stream 替代 RocketMQ（common 自动装配按此选型）
 marketing:
