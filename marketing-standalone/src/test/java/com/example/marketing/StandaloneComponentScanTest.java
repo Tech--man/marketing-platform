@@ -25,12 +25,13 @@ class StandaloneComponentScanTest {
             "com.example.marketing.common",
             "com.example.marketing.openapi");
 
-    /** 必须被扫描到的四个业务模块 + standalone 自身 */
+    /** 必须被扫描到的四个业务模块 + 管理后台 + standalone 自身 */
     private static final List<String> REQUIRED_PACKAGES = List.of(
             "com.example.marketing.activity",
             "com.example.marketing.coupon",
             "com.example.marketing.discount",
             "com.example.marketing.seckill",
+            "com.example.marketing.admin",
             "com.example.marketing.standalone");
 
     private static String[] scannedPackages() {
@@ -54,7 +55,7 @@ class StandaloneComponentScanTest {
     }
 
     @Test
-    @DisplayName("四个业务模块与 standalone 自身都在扫描范围内")
+    @DisplayName("四个业务模块、管理后台与 standalone 自身都在扫描范围内")
     void scanCoversAllBusinessModules() {
         List<String> scanned = List.of(scannedPackages());
         for (String required : REQUIRED_PACKAGES) {

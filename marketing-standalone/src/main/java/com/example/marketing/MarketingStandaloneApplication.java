@@ -8,11 +8,11 @@ import org.springframework.context.annotation.FilterType;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * 开发/预览环境聚合启动入口：单 JVM 装配活动/券/优惠/秒杀四个业务模块。
+ * 开发/预览环境聚合启动入口：单 JVM 装配活动/券/优惠/秒杀四个业务模块 + 管理后台。
  *
  * <p>与正式环境形态（四个独立进程 + RocketMQ）的关系：</p>
  * <ul>
- *   <li>业务代码零改动，仅装配层聚合（扫描四个业务模块包，
+ *   <li>业务代码零改动，仅装配层聚合（扫描四个业务模块与 admin 包，
  *       controller/service/mapper 一次装齐）；</li>
  *   <li>MQ 换成 Redis Stream：排除 RocketMQAutoConfiguration（无消费容器/生产者），
  *       common 自动装配按 marketing.mq.type=redis-stream 选择 Stream 实现；</li>
@@ -36,7 +36,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.example.marketing.activity",
         "com.example.marketing.coupon",
         "com.example.marketing.discount",
-        "com.example.marketing.seckill"
+        "com.example.marketing.seckill",
+        "com.example.marketing.admin"
         },
         excludeFilters = {
                 // 各模块独立启动类（避免二次 @ComponentScan 与多 @SpringBootConfiguration）

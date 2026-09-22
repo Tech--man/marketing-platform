@@ -42,6 +42,10 @@ x-app-defaults: &app-defaults
     ROCKETMQ_ADDR: mkt-rocketmq-namesrv:9876
     NACOS_ADDR: mkt-nacos:8848
     SPRING_PROFILES_ACTIVE: nacos
+    # 后台 token 密钥：gateway 与 marketing-admin 都从这一个锚点继承，天然同值。
+    # 用 :? 强制显式导出 —— 留空会让 AdminSecurityConfig 启动即失败，
+    # 而"起不来"比"签出一个谁都能伪造的 admin token"好得多。
+    ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?部署前导出 ADMIN_JWT_SECRET（gateway 与 admin 必须同值）}
     JAVA_OPTS: "-Xmx512m -Xss512k -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
 
 services:
@@ -64,6 +68,16 @@ services:
     <<: *app-defaults
     build: { context: ../marketing-seckill }
     image: marketing-seckill:full
+
+  marketing-admin:
+    <<: *app-defaults
+    build: { context: ../marketing-admin }
+    image: marketing-admin:full
+    # 不发布端口：后台只经 gateway 的 /api/admin/** 暴露。直连 8086 是一个已知边界 ——
+    # 与四个业务服务同构（它们同样不校验 token，鉴权在网关），见 README 的"端口暴露"一节
+    environment:
+      <<: *app-env
+      JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
 
   marketing-gateway:
     <<: *app-defaults

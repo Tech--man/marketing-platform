@@ -18,6 +18,7 @@ scrape_configs:
           - host.docker.internal:8082
           - host.docker.internal:8083
           - host.docker.internal:8084
+          - host.docker.internal:8086
         labels:
           env: local
 
@@ -36,6 +37,7 @@ scrape_configs:
           - marketing-coupon:8082
           - marketing-discount:8083
           - marketing-seckill:8084
+          - marketing-admin:8086
         labels:
           env: full-container
 

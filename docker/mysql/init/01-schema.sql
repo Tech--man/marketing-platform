@@ -1,6 +1,6 @@
 -- ============================================================
 -- 营销平台初始化脚本（docker/mysql/init 首次启动自动执行）
--- 四个业务库 + 公共幂等/本地消息表 + 演示种子数据
+-- 四个业务库 + 管理后台库 + 公共幂等/本地消息表 + 演示种子数据
 -- 账号：marketing / marketing123（compose 已建，这里补齐其余库授权）
 -- ============================================================
 
@@ -11,16 +11,19 @@ CREATE DATABASE IF NOT EXISTS marketing_activity DEFAULT CHARACTER SET utf8mb4 C
 CREATE DATABASE IF NOT EXISTS marketing_coupon  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_discount DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_seckill  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS marketing_admin    DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 GRANT ALL PRIVILEGES ON marketing_activity.* TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_coupon.*  TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_discount.* TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_seckill.*  TO 'marketing'@'%';
+GRANT ALL PRIVILEGES ON marketing_admin.*    TO 'marketing'@'%';
 -- Docker Desktop 的宿主机端口映射会被 MySQL 解析为 localhost 来源，补一个同名本地账号
 CREATE USER IF NOT EXISTS 'marketing'@'localhost' IDENTIFIED WITH mysql_native_password BY 'marketing123';
 GRANT ALL PRIVILEGES ON marketing_activity.* TO 'marketing'@'localhost';
 GRANT ALL PRIVILEGES ON marketing_coupon.*  TO 'marketing'@'localhost';
 GRANT ALL PRIVILEGES ON marketing_discount.* TO 'marketing'@'localhost';
 GRANT ALL PRIVILEGES ON marketing_seckill.*  TO 'marketing'@'localhost';
+GRANT ALL PRIVILEGES ON marketing_admin.*    TO 'marketing'@'localhost';
 FLUSH PRIVILEGES;
 
 -- ---------- 2. 公共表模板说明 ----------
@@ -333,3 +336,79 @@ INSERT INTO seckill_activity (activity_no, item_id, item_name, seckill_price, to
 SELECT 'SK2026001', 10001, '旗舰手机 秒杀特惠', 1999.00, 5000, 0, 16, 'ONLINE',
        NOW() - INTERVAL 1 DAY, NOW() + INTERVAL 30 DAY
 WHERE NOT EXISTS (SELECT 1 FROM seckill_activity WHERE activity_no = 'SK2026001');
+
+-- ============================================================
+-- 库五：marketing_admin（管理后台：账号 / 会话 / 审计）
+-- ============================================================
+
+USE marketing_admin;
+
+CREATE TABLE IF NOT EXISTS admin_user (
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    username        VARCHAR(64)  NOT NULL,
+    password_hash   VARCHAR(100) NOT NULL COMMENT 'BCrypt，绝不存明文',
+    display_name    VARCHAR(64)  NOT NULL DEFAULT '',
+    role            VARCHAR(32)  NOT NULL DEFAULT 'read-only' COMMENT 'admin / operator / read-only',
+    status          VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE / DISABLED',
+    pwd_version     INT          NOT NULL DEFAULT 1 COMMENT '改密/停用时 +1：token 里的 ver 与之不符即整号失效',
+    fail_count      INT          NOT NULL DEFAULT 0,
+    lock_until      DATETIME     NULL COMMENT '到点自动放行，不需要人工解锁任务',
+    last_login_time DATETIME     NULL,
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_username (username)
+) ENGINE = InnoDB COMMENT '管理后台账号';
+
+-- 会话以这张表为准，Redis 的 admin:session:{jti} 只是在线列表快路径、admin:revoked:{jti} 只是吊销位；
+-- Redis 被清空时最坏是在线列表短暂无数据，不会把已吊销的 token 放回登录态。
+CREATE TABLE IF NOT EXISTS admin_session (
+    id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    jti           VARCHAR(64)  NOT NULL COMMENT 'token 唯一标识',
+    user_id       BIGINT UNSIGNED NOT NULL,
+    username      VARCHAR(64)  NOT NULL,
+    login_ip      VARCHAR(64)  NOT NULL DEFAULT '',
+    user_agent    VARCHAR(255) NOT NULL DEFAULT '',
+    expire_at     DATETIME     NOT NULL,
+    revoke_reason VARCHAR(32)  NULL COMMENT 'PASSWORD_CHANGED / DISABLED / FORCE_LOGOUT / LOGOUT',
+    revoked_at    DATETIME     NULL,
+    create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_jti (jti),
+    KEY idx_user_active (user_id, revoked_at, expire_at)
+) ENGINE = InnoDB COMMENT '管理后台会话';
+
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    actor_id        BIGINT UNSIGNED NULL COMMENT '登录失败时可为空',
+    actor_name      VARCHAR(64)  NOT NULL DEFAULT '',
+    role            VARCHAR(32)  NOT NULL DEFAULT '',
+    action          VARCHAR(64)  NOT NULL COMMENT '如 login / user.disable / cache.reheat',
+    resource_type   VARCHAR(64)  NOT NULL DEFAULT '',
+    resource_id     VARCHAR(128) NOT NULL DEFAULT '',
+    method          VARCHAR(16)  NOT NULL DEFAULT '',
+    path            VARCHAR(255) NOT NULL DEFAULT '',
+    request_summary VARCHAR(512) NOT NULL DEFAULT '' COMMENT '只存脱敏摘要，不存原始 body',
+    result_code     INT          NOT NULL DEFAULT 0,
+    error_msg       VARCHAR(512) NOT NULL DEFAULT '',
+    ip              VARCHAR(64)  NOT NULL DEFAULT '',
+    cost_ms         BIGINT       NOT NULL DEFAULT 0,
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_actor_time (actor_id, create_time),
+    KEY idx_resource (resource_type, resource_id)
+) ENGINE = InnoDB COMMENT '管理后台审计日志';
+
+-- 种子账号（BCrypt strength=10）。口令是演示用弱口令，README 已公示并提示改密；
+-- 生产部署第一件事就是把这两行的口令换掉，或直接 UPDATE 后再启用后台路由。
+INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
+SELECT 'admin', '$2a$10$yUj2rKW4h20DTn/0kkAHHeXLX/cKitjpFFwzhne3if9gm9jZDiDUy', '系统管理员', 'admin', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'admin');
+
+INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
+SELECT 'operator', '$2a$10$o1dcGQ41rEUu7qCLu68A/uftVufxdN6jObAgQtcyea5eU8NqykrYC', '运营值班', 'operator', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'operator');
+
+INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
+SELECT 'viewer', '$2a$10$o1dcGQ41rEUu7qCLu68A/uftVufxdN6jObAgQtcyea5eU8NqykrYC', '只读访客', 'read-only', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'viewer');

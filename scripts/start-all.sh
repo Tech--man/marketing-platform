@@ -34,14 +34,20 @@ export MYSQL_PORT="${MYSQL_PORT:-3307}" REDIS_PORT="${REDIS_PORT:-6380}"
 # 默认与 LITE 共用同一个库 → 两档原地双向切换不需要搬数据
 # （7 张业务表表名全局唯一、idempotent_record/local_message 列定义一致，共用一库零冲突）
 export MYSQL_DB="${MYSQL_DB:-marketing}"
-# MYSQL_DB_PER_SERVICE=1 → 每服务一库（marketing_activity / _coupon / _discount / _seckill），
-# 配合 docker/mysql/init 的四库 DDL。这是另一种生产姿态：数据不再与 LITE 共用，
+# MYSQL_DB_PER_SERVICE=1 → 每服务一库（marketing_activity / _coupon / _discount / _seckill / _admin），
+# 配合 docker/mysql/init 的多库 DDL。这是另一种生产姿态：数据不再与 LITE 共用，
 # 也就不能"原地"来回切；隔离的收益是跨模块 join 由 DB 拦住。
 MYSQL_DB_PER_SERVICE="${MYSQL_DB_PER_SERVICE:-0}"
 
-ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill)
+ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill marketing-admin)
 SERVICES=("$@")
 [ ${#SERVICES[@]} -eq 0 ] && SERVICES=("${ALL_SERVICES[@]}")
+
+# 后台 token 的 HS256 密钥：gateway 与 admin（进程形态）必须同值，否则签得出验不过。
+# 这里是 dev 档占位值，AdminSecurityConfig 见到它会打一条 WARN；预览/正式由 compose 显式下发。
+export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
+[ "${ADMIN_JWT_SECRET}" = "dev-only-secret-change-me" ] \
+  && echo "!! ADMIN_JWT_SECRET 未设置，使用 dev 占位密钥（仅限本机开发）" >&2
 
 assert_port_not_shadowed "$MYSQL_PORT"
 assert_port_not_shadowed "$REDIS_PORT"
@@ -91,6 +97,7 @@ port_of() {
     marketing-coupon) echo 8082 ;;
     marketing-discount) echo 8083 ;;
     marketing-seckill) echo 8084 ;;
+    marketing-admin) echo 8086 ;;
   esac
 }
 

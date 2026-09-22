@@ -1,6 +1,7 @@
 target/
 logs/
 run/
+.admin-jwt-secret
 *.log
 .idea/
 *.iml

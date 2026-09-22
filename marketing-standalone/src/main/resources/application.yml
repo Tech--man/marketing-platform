@@ -54,6 +54,11 @@ marketing:
     ACT2026001:
       percent: 100
       whitelist: [ ]
+  # 后台聚进本进程，所以 ADMIN_JWT_SECRET 必须在 standalone 与 gateway 两处同值下发；
+  # 留空会让 AdminSecurityConfig 启动即失败（而不是默默签出一个谁都能伪造的 token）
+  admin:
+    jwt-secret: ${ADMIN_JWT_SECRET:}
+    access-ttl-seconds: ${ADMIN_TOKEN_TTL:900}
 
 management:
   endpoints:

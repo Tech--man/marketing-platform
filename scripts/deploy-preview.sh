@@ -20,6 +20,19 @@ if [ "${1:-}" != "--no-build" ]; then
   mvn -q -DskipTests package -pl marketing-standalone,marketing-gateway -am
 fi
 
+# 后台 token 密钥：standalone（签发与校验）和 gateway（校验）必须同值。
+# 未显式导出时随机生成一次并落盘复用 —— 每次随机会让重启后所有已发 token 失效，
+# 而"复用同一个文件"和"写死在仓库里"的区别是：前者泄露的是本机，后者泄露的是所有人。
+if [ -z "${ADMIN_JWT_SECRET:-}" ]; then
+  SECRET_FILE="$PWD/.admin-jwt-secret"
+  if [ ! -f "$SECRET_FILE" ]; then
+    (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=' > "$SECRET_FILE")
+    echo "==> 已生成后台 JWT 密钥 → $SECRET_FILE（0600，已在 .gitignore 内）"
+  fi
+  ADMIN_JWT_SECRET="$(cat "$SECRET_FILE")"
+  export ADMIN_JWT_SECRET
+fi
+
 echo "==> 数据层常驻检查（mysql + redis，与 FULL/dev 同一份数据）"
 docker compose -f "$DATA_COMPOSE" up -d --wait
 

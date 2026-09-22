@@ -1,0 +1,71 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: marketing-admin
+  datasource:
+    # ${MYSQL_DB:marketing_admin} —— 四库隔离档下是第 5 个库；
+    # LITE/dev 单库档由 MYSQL_DB=marketing 覆盖，表并进业务库里（见 init-lite DDL）
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3307}/${MYSQL_DB:marketing_admin}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:marketing}
+    password: ${MYSQL_PASSWORD:marketing123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 后台 QPS 极低（人点出来的请求），5 条连接足够；和 C 端同进程时不给它抢池子的空间
+      maximum-pool-size: 5
+      minimum-idle: 1
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      config:
+        enabled: false
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        import-check:
+          enabled: false
+
+mybatis-plus:
+  # 与业务模块一致：不配逻辑删除，所有表都没有 deleted 列。
+  # 后台的"删除"语义是停用（status=DISABLED）与会话吊销，不是抹行 —— 审计要留痕
+  global-config:
+    banner: false
+
+marketing:
+  admin:
+    jwt-secret: ${ADMIN_JWT_SECRET:}
+    access-ttl-seconds: ${ADMIN_TOKEN_TTL:900}
+    clock-skew-seconds: 30
+    max-fail-count: ${ADMIN_MAX_FAIL:5}
+    lock-minutes: ${ADMIN_LOCK_MINUTES:15}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    com.example.marketing: INFO
+
+---
+spring:
+  config:
+    import: optional:nacos:marketing-admin.yaml
+    activate:
+      on-profile: nacos
+  cloud:
+    nacos:
+      discovery:
+        enabled: true
+      config:
+        enabled: true

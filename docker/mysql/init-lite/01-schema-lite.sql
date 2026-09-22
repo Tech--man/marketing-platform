@@ -323,3 +323,80 @@ INSERT INTO seckill_activity (activity_no, item_id, item_name, seckill_price, to
 SELECT 'SK2026001', 10001, '旗舰手机 秒杀特惠', 1999.00, 5000, 0, 16, 'ONLINE',
        NOW() - INTERVAL 1 DAY, NOW() + INTERVAL 30 DAY
 WHERE NOT EXISTS (SELECT 1 FROM seckill_activity WHERE activity_no = 'SK2026001');
+
+-- ============================================================
+-- 库五并入：marketing_admin 的三张表落在单库 marketing 内
+-- （四库档见 init/01-schema.sql 的 USE marketing_admin 段，建表语句完全一致）
+-- ============================================================
+
+USE marketing;
+
+CREATE TABLE IF NOT EXISTS admin_user (
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    username        VARCHAR(64)  NOT NULL,
+    password_hash   VARCHAR(100) NOT NULL COMMENT 'BCrypt，绝不存明文',
+    display_name    VARCHAR(64)  NOT NULL DEFAULT '',
+    role            VARCHAR(32)  NOT NULL DEFAULT 'read-only' COMMENT 'admin / operator / read-only',
+    status          VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE / DISABLED',
+    pwd_version     INT          NOT NULL DEFAULT 1 COMMENT '改密/停用时 +1：token 里的 ver 与之不符即整号失效',
+    fail_count      INT          NOT NULL DEFAULT 0,
+    lock_until      DATETIME     NULL COMMENT '到点自动放行，不需要人工解锁任务',
+    last_login_time DATETIME     NULL,
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_username (username)
+) ENGINE = InnoDB COMMENT '管理后台账号';
+
+-- 会话以这张表为准，Redis 的 admin:session:{jti} 只是在线列表快路径、admin:revoked:{jti} 只是吊销位；
+-- Redis 被清空时最坏是在线列表短暂无数据，不会把已吊销的 token 放回登录态。
+CREATE TABLE IF NOT EXISTS admin_session (
+    id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    jti           VARCHAR(64)  NOT NULL COMMENT 'token 唯一标识',
+    user_id       BIGINT UNSIGNED NOT NULL,
+    username      VARCHAR(64)  NOT NULL,
+    login_ip      VARCHAR(64)  NOT NULL DEFAULT '',
+    user_agent    VARCHAR(255) NOT NULL DEFAULT '',
+    expire_at     DATETIME     NOT NULL,
+    revoke_reason VARCHAR(32)  NULL COMMENT 'PASSWORD_CHANGED / DISABLED / FORCE_LOGOUT / LOGOUT',
+    revoked_at    DATETIME     NULL,
+    create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_jti (jti),
+    KEY idx_user_active (user_id, revoked_at, expire_at)
+) ENGINE = InnoDB COMMENT '管理后台会话';
+
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    actor_id        BIGINT UNSIGNED NULL COMMENT '登录失败时可为空',
+    actor_name      VARCHAR(64)  NOT NULL DEFAULT '',
+    role            VARCHAR(32)  NOT NULL DEFAULT '',
+    action          VARCHAR(64)  NOT NULL COMMENT '如 login / user.disable / cache.reheat',
+    resource_type   VARCHAR(64)  NOT NULL DEFAULT '',
+    resource_id     VARCHAR(128) NOT NULL DEFAULT '',
+    method          VARCHAR(16)  NOT NULL DEFAULT '',
+    path            VARCHAR(255) NOT NULL DEFAULT '',
+    request_summary VARCHAR(512) NOT NULL DEFAULT '' COMMENT '只存脱敏摘要，不存原始 body',
+    result_code     INT          NOT NULL DEFAULT 0,
+    error_msg       VARCHAR(512) NOT NULL DEFAULT '',
+    ip              VARCHAR(64)  NOT NULL DEFAULT '',
+    cost_ms         BIGINT       NOT NULL DEFAULT 0,
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_actor_time (actor_id, create_time),
+    KEY idx_resource (resource_type, resource_id)
+) ENGINE = InnoDB COMMENT '管理后台审计日志';
+
+-- 种子账号（BCrypt strength=10）。口令是演示用弱口令，README 已公示并提示改密；
+-- 生产部署第一件事就是把这两行的口令换掉，或直接 UPDATE 后再启用后台路由。
+INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
+SELECT 'admin', '$2a$10$yUj2rKW4h20DTn/0kkAHHeXLX/cKitjpFFwzhne3if9gm9jZDiDUy', '系统管理员', 'admin', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'admin');
+
+INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
+SELECT 'operator', '$2a$10$o1dcGQ41rEUu7qCLu68A/uftVufxdN6jObAgQtcyea5eU8NqykrYC', '运营值班', 'operator', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'operator');
+
+INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
+SELECT 'viewer', '$2a$10$o1dcGQ41rEUu7qCLu68A/uftVufxdN6jObAgQtcyea5eU8NqykrYC', '只读访客', 'read-only', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'viewer');

@@ -79,7 +79,7 @@ requestId（属 ④/后续）。
 | S4 | 错误码归一：仅"不存在"分支改 `NOT_FOUND(40400)`（`ActivityService.java:66`、`BudgetService.java:97`、`CouponTemplateService.java:38,86`）；`41000/41001/41003` 原样保留（smoke 依赖） | **是**（范围极小） |
 | S5 | admin 模块 + 三张表 + 登录/改密/强制下线/在线列表/审计查询/reheat 入口 + standalone 落位 | 否（新增） |
 | S6 | 网关 `AdminAuthFilter` + `AuthFilter` 跳过已 VERIFIED + 两套 profile 各加 admin-route + `RL_ADMIN` 限流条目 + 三形态密钥下发 | 否（业务路径不动） |
-| S7 | `AuditService implements AuditSink` 落库 + `LoginGuard`（Redis 每 IP 登录限速 + `fail_count/lock_until`） | 否 |
+| S7 | `AuditService implements AuditSink` 落库 + 审计查询端点（读写同一批交付，避免"能查不能写"的空壳）+ `LoginGuard`（Redis 每 IP 登录限速 + `fail_count/lock_until`） | 否 |
 | S8 | 单测、smoke 链路 4、三形态实测、README 口径 | — |
 
 依赖：S0 → S1/S2/S4 → S5 → S6/S7 → S8；S1 必须先于 S5（reheat 端点依赖 `CacheReheater`）。
@@ -163,12 +163,17 @@ Access TTL 900s。三级失效：
 | 键 | 作用 |
 |---|---|
 | `admin:revoked:{jti}` | 登出/强制下线单会话；TTL = token 剩余寿命 |
-| `admin:session:{jti}` (HASH) | 在线列表快路径；**DB 为权威源**，不一致以 DB 为准 |
 | `admin:user:bump:{userId}` | 值为 epoch 秒，`iat` 早于它即整号失效 → 改密/停用一次杀光所有会话 |
 
-`ver` claim 与 `pwd_version` 比对，作为 bump 键丢失（Redis 被清）时的第二道防线。过期会话由
-`@Scheduled` + `RedisLeaseLock` 归档。种子账号 `admin/rootdev123`、`operator/demo123`（BCrypt，
-dev 口令写进 README，与 `demo-token-123` 同等待遇）。
+设计稿原本还有第三个键 `admin:session:{jti}`（在线列表快路径），实施时删掉了：在线列表是后台
+翻页的低 QPS 读，走 `admin_session` 的索引才是对的口径，Redis 里再存一份只是多一个会和 DB
+不同步的真相源，而"这个会话还有效吗"由上面两把键已经完整回答。
+
+`ver` claim 目前只随 token 携带、没有任何一处和 `pwd_version` 比对（网关无 DataSource，为它
+每请求查一次库不值得），整号作废完全由 bump 键承担。因此 Redis 被清空时的后果是"已吊销/已
+改密的 token 在剩余寿命（≤900s）内仍可用" —— 这是选 Redis 做吊销位的已知代价，写在这里而不是
+藏在校验代码里。过期会话归档留给④。种子账号 `admin/rootdev123`、`operator/demo123`、
+`viewer/demo123`（BCrypt，dev 口令写进 README，与 `demo-token-123` 同等待遇）。
 
 ### 5.4 网关两个 filter 的关系
 
