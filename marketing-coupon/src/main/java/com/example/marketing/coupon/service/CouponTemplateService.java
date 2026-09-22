@@ -2,6 +2,7 @@ package com.example.marketing.coupon.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.coupon.infrastructure.entity.CouponTemplateEntity;
 import com.example.marketing.coupon.infrastructure.entity.UserCouponEntity;
@@ -20,7 +21,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CouponTemplateService {
+public class CouponTemplateService implements CacheReheater {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
 
@@ -54,10 +55,52 @@ public class CouponTemplateService {
         if (stockService.isWarmed(template.getId())) {
             return;
         }
-        long issued = userCouponMapper.selectCount(Wrappers.<UserCouponEntity>lambdaQuery()
-                .eq(UserCouponEntity::getTemplateId, template.getId()));
-        long remain = Math.max(0, template.getTotalStock() - issued);
-        stockService.warmIfAbsent(template, remain);
+        stockService.warmIfAbsent(template, remainOf(template, issuedCount(template.getId())));
+    }
+
+    /** 重算口径：已发超时归零，绝不把负数写进 Redis */
+    static long remainOf(CouponTemplateEntity template, long issued) {
+        return Math.max(0L, template.getTotalStock() - issued);
+    }
+
+    private long issuedCount(Long templateId) {
+        Long issued = userCouponMapper.selectCount(Wrappers.<UserCouponEntity>lambdaQuery()
+                .eq(UserCouponEntity::getTemplateId, templateId));
+        return issued == null ? 0L : issued;
+    }
+
+    /** 权威重算：只读 DB（Redis 此刻的值正是不可信的那个） */
+    public long computeRemainByNo(String templateNo) {
+        CouponTemplateEntity template = getRequiringExists(templateNo);
+        return remainOf(template, issuedCount(template.getId()));
+    }
+
+    @Override
+    public String type() {
+        return "coupon-stock";
+    }
+
+    /**
+     * 重预热券库存。
+     *
+     * @param force false = 只补缺（SETNX）；true = DEL 后按 DB 重建 ——
+     *              运营改完 total_stock 必须走这条，否则键还在、改动作无用（地雷 A）。
+     */
+    @Override
+    public CacheReheater.Result reheat(String templateNo, boolean force) {
+        CouponTemplateEntity template = getRequiringExists(templateNo);
+        Long current = stockService.remainStock(template.getId());
+        long before = current == null ? -1L : current;
+        long target = remainOf(template, issuedCount(template.getId()));
+        if (force) {
+            stockService.overwrite(template, target);
+        } else {
+            stockService.warmIfAbsent(template, target);
+        }
+        Long after = stockService.remainStock(template.getId());
+        return new CacheReheater.Result(type(), templateNo, before,
+                after == null ? (force ? target : before) : after,
+                "total_stock - COUNT(user_coupon WHERE template_id)");
     }
 
     /** 启动/巡检时对所有 ACTIVE 模板补预热 */

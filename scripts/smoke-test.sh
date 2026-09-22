@@ -69,6 +69,15 @@ expect "重复扣减未二次扣款（仍 7000 分）" '"data":7000' "$R"
 R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
   -d "{\"amountCents\":8000,\"bizKey\":\"$ACT_NO-B2\"}")
 expect "超余额扣减被拒（41003 预算不足）" '"code":41003' "$R"
+# 下面两条是算术守卫：被拒的那笔必须"什么都没留下"（既不留流水行也不动余额），
+# 两笔成功的扣减必须让余额精确递减 3000+2000 —— 多扣（一笔扣两遍）与少扣（扣了没记账）都会破它。
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain")
+expect "被拒扣减不留痕（余额仍 7000 分）" '"data":7000' "$R"
+R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
+  -d "{\"amountCents\":2000,\"bizKey\":\"$ACT_NO-B3\"}")
+expect "第二笔 bizKey 扣减 20 元成功" '"code":0' "$R"
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain")
+expect "两笔扣减后余额精确递减到 5000 分" '"data":5000' "$R"
 R=$(curl -s -X POST "$GW/api/activity" -H "$AUTH" -H "$JSON" \
   -d "{\"activityNo\":\"$ACT_NO\",\"name\":\"重复\",\"startTime\":\"$TS_START\",\"endTime\":\"$TS_END\",\"budgetAmount\":1.00}")
 expect "重复活动编号被拒" '"code":41000' "$R"
@@ -97,14 +106,22 @@ R=$(curl -s -X POST "$GW/api/coupon/grant" -H "$AUTH" -H "$JSON" \
 expect "同 requestId 重复领券幂等回放原受理凭证（不重复扣库存）" 'ACCEPTED' "$R"
 
 head2 "链路 2：优惠计算（满200减30 与 8.5 折叠加 + 行级分摊）"
-# 预热一次：首算可能因 JIT/连接冷启动超时降级，不作为断言
-curl -s -o /dev/null -X POST "$GW/api/discount/calculate" -H "$AUTH" -H "$JSON" -d '{"userId":1,"activityNo":null,"userTags":[],"items":[{"lineId":"L1","skuId":1,"itemId":1,"tags":[],"unitPrice":1.00,"quantity":1}]}'
-R=$(curl -s -X POST "$GW/api/discount/calculate" -H "$AUTH" -H "$JSON" -d '{
+# 预热必须用**同一个请求体**：首算会因 JIT / 连接冷启动踩到 calcTimeoutMs 返回
+# degraded:true（实测 OrbStack 崩溃重启后的第一轮冒烟就挂在这里）。用一个无规则的
+# 探针预热是无效的——它不触发本请求要走的规则匹配路径。
+# 只重试预热调用，断言仍打最后一次真实响应；重试耗尽仍降级则由 expect 如实判失败。
+CALC_BODY='{
   "userId": 88001, "activityNo": null, "userTags": [],
   "items": [
     {"lineId":"L1","skuId":9001,"itemId":7001,"tags":["DIGITAL"],"unitPrice":199.90,"quantity":1},
     {"lineId":"L2","skuId":9002,"itemId":7002,"tags":["CLOTHES"],"unitPrice":100.00,"quantity":1}
-  ]}')
+  ]}'
+R=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  R=$(curl -s -X POST "$GW/api/discount/calculate" -H "$AUTH" -H "$JSON" -d "$CALC_BODY")
+  printf '%s' "$R" | grep -q '"degraded":false' && break
+  sleep 1
+done
 expect "总价 299.90 > 满减门槛 200，命中优惠" '"degraded":false' "$R"
 expect "返回行级分摊" '"shares"' "$R"
 

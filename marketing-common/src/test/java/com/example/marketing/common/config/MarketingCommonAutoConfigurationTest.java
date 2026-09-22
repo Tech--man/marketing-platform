@@ -1,5 +1,7 @@
 package com.example.marketing.common.config;
 
+import com.example.marketing.common.cache.CacheReheatRegistry;
+import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.idempotent.IdempotentExecutor;
 import com.example.marketing.common.message.LocalMessageService;
 import com.example.marketing.common.message.LocalMessageRetryer;
@@ -19,6 +21,7 @@ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 
 import javax.sql.DataSource;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -89,6 +92,35 @@ class MarketingCommonAutoConfigurationTest {
                 // 幂等执行器属于顶层无条件分支，仍应存在
                 assertTrue(ctx.getBeanNamesForType(IdempotentExecutor.class).length == 1);
             });
+        } finally {
+            db.shutdown();
+            factory.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("重预热注册表收集各模块的 CacheReheater 并按 type 分发")
+    void registryCollectsReheatersFromContext() {
+        EmbeddedDatabase db = memoryDatabase();
+        LettuceConnectionFactory factory = neverConnectingFactory();
+        try {
+            runner(db, factory)
+                    .withBean(CacheReheater.class, () -> new CacheReheater() {
+                        @Override
+                        public String type() {
+                            return "budget";
+                        }
+
+                        @Override
+                        public Result reheat(String key, boolean force) {
+                            return new Result(type(), key, -1L, 7000L, "fake");
+                        }
+                    })
+                    .run(ctx -> {
+                        CacheReheatRegistry registry = ctx.getBean(CacheReheatRegistry.class);
+                        assertTrue(registry.types().contains("budget"), "模块里的 reheater 应被收集");
+                        assertEquals(7000L, registry.reheat("budget", "ACT2026001", true).after());
+                    });
         } finally {
             db.shutdown();
             factory.destroy();

@@ -79,6 +79,19 @@ public class CouponStockService {
         }
     }
 
+    /**
+     * 覆盖式重建库存：先 DEL 再 SET。
+     *
+     * <p>只在运营显式改了 total_stock 之后用（{@code reheat(force=true)}）。代价是这一瞬间
+     * 在途的预扣会被回退成"多出来的库存"，方向偏松，因此它必须是个需要显式确认的运维动作。</p>
+     */
+    public void overwrite(CouponTemplateEntity template, long remainStock) {
+        String key = stockKey(template.getId());
+        redisTemplate.delete(key);
+        redisTemplate.opsForValue().set(key, String.valueOf(remainStock));
+        log.info("[stock] 覆盖重建模板 {} 库存 {}", template.getTemplateNo(), remainStock);
+    }
+
     public boolean isWarmed(Long templateId) {
         return Boolean.TRUE.equals(redisTemplate.hasKey(stockKey(templateId)));
     }

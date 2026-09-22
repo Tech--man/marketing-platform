@@ -120,12 +120,16 @@ public interface CacheReheater {
 ```
 
 - 预算：`remain = budget_amount - SUM(DEDUCT) + SUM(REFUND)`，**从 `budget_flow` 直读**（与
-  `BudgetService.java:24` 自述的对账口径一致）。`warmIfAbsent` 保留（创建时全额是对的），`warmFromDb`
-  与 `reheat` 走新公式 —— 把"缺键兜底"从回涨改成对账。
-- 券库存：`remain = total_stock - COUNT(user_coupon where template_id=?)`；`deduct` 拿到
-  `NOT_WARMED` 时先 `reheat(force=false)` 再重试一次，让发券自愈而不是等人工。
+  `BudgetService.java:24` 自述的对账口径一致）。缺键分支不再"全额 SETNX + 再 DECRBY"，而是
+  **算出对账值后直接落值**：本笔已作为流水存在，再 DECRBY 一次就是把同一笔算两遍。
+  实施中因此多修了一处：原代码在缺键分支先 `rollbackFlow` 回删自己的流水行再重试，
+  留下"Redis 扣了、流水没记"的缺口（实测余额恒比权威值少一笔）—— 现在只有真失败才回删。
+- 券库存：`remain = total_stock - COUNT(user_coupon where template_id=?)`。缺键自愈**本来就有**
+  （`CouponGrantService.java:82-85` 拿到 NOT_WARMED 会 warm 后重试一次），本次只是把口径收进
+  `CacheReheater` 并补上 `force=true` 的覆盖能力 —— 地雷 A 的"改了 DB 不生效"才是这里缺的东西。
 - 秒杀：逐桶 `reheat`，`remain = total - sold`，按 `allocateBuckets` 重投，**保留 86400 TTL**
-  （自然回收是有意设计）。
+  （自然回收是有意设计）。预热口径从 `SeckillWarmUpRunner` 抽到 `SeckillWarmUpService`，
+  启动与运维共用一份；并加守卫：**非 ONLINE 或已过结束时间的活动拒绝重预热**（force 等于重新开闸）。
 - `force=false` 走 SETNX（只补缺、不覆盖既有值），`force=true` 才 DEL 后重建 —— 运营改完 DB 走
   `force=true`，误触与显式覆盖在接口上就是两个参数，不靠调用方自觉。
 - `CacheReheatRegistry` 注入所有实现按 type 分发，未知 type → `40000`。④⑤ 直接复用这套原语。

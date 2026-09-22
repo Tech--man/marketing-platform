@@ -1,5 +1,7 @@
 package com.example.marketing.common.config;
 
+import com.example.marketing.common.cache.CacheReheatRegistry;
+import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.GlobalExceptionHandler;
 import com.example.marketing.common.idempotent.IdempotentExecutor;
 import com.example.marketing.common.message.LocalMessageRetryer;
@@ -12,6 +14,7 @@ import com.example.marketing.common.mq.StreamMessageHandler;
 import com.example.marketing.common.schedule.RedisLeaseLock;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -51,6 +54,19 @@ public class MarketingCommonAutoConfiguration {
     @ConditionalOnMissingBean
     public IdempotentExecutor idempotentExecutor(JdbcTemplate jdbcTemplate) {
         return new IdempotentExecutor(jdbcTemplate);
+    }
+
+    /**
+     * 缓存重预热注册表：收集各业务模块自己的 {@link CacheReheater}，按 type 分发。
+     *
+     * <p>公式留在领域里（预算在 activity、券在 coupon、桶在 seckill），这里只做装配与分发，
+     * 管理后台的运维入口（后续段）直接注入它即可，不必了解任何一处的算法。
+     * 两个模块声明同一个 type 会在启动期直接失败，而不是运行时互相覆盖。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public CacheReheatRegistry cacheReheatRegistry(ObjectProvider<CacheReheater> reheaters) {
+        return new CacheReheatRegistry(reheaters.orderedStream().toList());
     }
 
     /**

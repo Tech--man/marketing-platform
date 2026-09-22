@@ -77,6 +77,23 @@ public class SeckillStockService {
     }
 
     /**
+     * 覆盖式重建分桶：逐桶 DEL 后按新配额 SET（保留 TTL）。
+     *
+     * <p>只在运营显式改了 total_stock 之后由 {@code reheat(force=true)} 触发 —— 它等于重新开闸，
+     * 所以调用方必须先确认活动仍在 ONLINE 窗口内（见 SeckillWarmUpService 的守卫）。</p>
+     */
+    public int resetBuckets(String activityNo, List<Integer> bucketStocks) {
+        Duration ttl = Duration.ofSeconds(properties.getBoughtMarkTtlSeconds());
+        for (int i = 0; i < bucketStocks.size(); i++) {
+            String key = stockKey(activityNo, i + 1);
+            redisTemplate.delete(key);
+            redisTemplate.opsForValue().set(key, String.valueOf(bucketStocks.get(i)), ttl);
+        }
+        log.info("[seckill] 活动 {} 覆盖重建 {} 个桶", activityNo, bucketStocks.size());
+        return bucketStocks.size();
+    }
+
+    /**
      * 原子抢购：先 SETNX 防重购标记，再 Lua 扣减（定位桶 + 借桶）。
      *
      * @return 命中的桶号（1-based，超时回补需要）
