@@ -3,6 +3,8 @@
 # 复位演示容量：只调秒杀活动库存，**不删任何业务数据**
 #   冒烟与压测会持续吃掉 seckill 库存（sold_stock 涨到 total_stock 后开始返回"已售罄"），
 #   本脚本把 total_stock 抬到指定值并清掉 Redis 分桶键，让应用重启后按
+#   （换库布局时必须跑一次：单库 ↔ 每服务一库之间分桶键是共用的、sold_stock 各算各的，
+#    不重置的话恒等式 "余量+已售==总库存" 会因为上一布局的消费记录对不上而红。）
 #   warm-up 的 `remain = total - sold` 口径重建，账实保持一致。
 # 用法：./scripts/reset-demo-data.sh [新总库存]   默认 5000
 # 支持三套形态：自动探测在跑的 mkt-preview-* / mkt-dev-* / mkt-* 容器

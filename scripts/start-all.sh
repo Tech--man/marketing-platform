@@ -106,7 +106,9 @@ for s in "${SERVICES[@]}"; do start_one "$s"; done
 echo "==> 等待健康检查 ..."
 PIDS=()
 for s in "${SERVICES[@]}"; do
-  wait_healthy "$s" "$(port_of "$s")" &
+  # 150s 而不是默认 60s：这里可能同时冷启 6 个 JVM（外加抢 MQ/Nacos），
+  # 而 admin 的 Hikari 池是首个请求才建的 —— 实测 60s 会假报"未就绪"，进程其实活着。
+  wait_healthy "$s" "$(port_of "$s")" 150 &
   PIDS+=("$!")
 done
 rc=0
