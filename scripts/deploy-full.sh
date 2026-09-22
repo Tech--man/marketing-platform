@@ -16,6 +16,13 @@ MW="$PWD/docker/docker-compose.prod.yml"
 # 容器形态的 broker 广播地址覆盖层（详见该文件头注释）
 MW_C="$PWD/docker/docker-compose.prod.container.yml"
 APP="$PWD/docker/docker-compose.full-app.yml"
+# 后台 token 密钥必须显式导出：不放在 compose 的 :? 里，是因为那连 down/ps 都要求值，
+# 漏配时"把栈停掉"都会失败。在入口拦，报错更早也更准。
+if [ -z "${ADMIN_JWT_SECRET:-}" ]; then
+  echo "!! 请先导出 ADMIN_JWT_SECRET（gateway 与 marketing-admin 必须同值）" >&2
+  echo "   例：export ADMIN_JWT_SECRET=\$(openssl rand -base64 32)" >&2
+  exit 1
+fi
 
 if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
   echo "!! LITE 形态正在占用 8090/8085，先执行 ./scripts/stop-preview.sh" >&2

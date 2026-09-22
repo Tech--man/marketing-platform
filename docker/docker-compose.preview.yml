@@ -29,7 +29,8 @@ services:
       REDIS_HOST: mkt-redis
       # 后台 token：standalone 内嵌 admin 模块负责签发，gateway 负责校验，两侧必须同值。
       # 由 deploy-preview.sh 生成并持久化在 .admin-jwt-secret（详见该脚本注释）
-      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?由 deploy-preview.sh 生成或显式导出}
+      # 由 deploy-preview.sh 生成并持久化在 .admin-jwt-secret；空值的后果见 full-app.yml 同款注释
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
       # 预览形态消息通道：Redis Stream 替代 RocketMQ
       MQ_TYPE: redis-stream
       # 消费并行度：与 Full 形态 @RocketMQMessageListener(consumeThreadNumber=8) 对齐。
@@ -64,7 +65,7 @@ services:
     environment:
       REDIS_HOST: mkt-redis
       # 后台路由与 standalone 同进程同端口：LITE 不新增常驻进程
-      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?由 deploy-preview.sh 生成或显式导出}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
       ADMIN_HOST: standalone
       ADMIN_PORT: "8085"
       # 四条路由统一指向 standalone（复用 prod 形态网关，仅改端口变量）

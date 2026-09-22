@@ -45,7 +45,10 @@ x-app-defaults: &app-defaults
     # 后台 token 密钥：gateway 与 marketing-admin 都从这一个锚点继承，天然同值。
     # 用 :? 强制显式导出 —— 留空会让 AdminSecurityConfig 启动即失败，
     # 而"起不来"比"签出一个谁都能伪造的 admin token"好得多。
-    ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?部署前导出 ADMIN_JWT_SECRET（gateway 与 admin 必须同值）}
+    # 空值不在这里拦：compose 的 :? 连 down/ps 都要求值，漏配时连"把栈停掉"都会失败。
+    # 强制检查在 deploy-full.sh 的入口；真漏了就退化成"后台 40300 + admin 容器起不来"
+    # （AdminSecurityConfig 空密钥直接抛），C 端流量不受牵连。
+    ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
     JAVA_OPTS: "-Xmx512m -Xss512k -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
 
 services:

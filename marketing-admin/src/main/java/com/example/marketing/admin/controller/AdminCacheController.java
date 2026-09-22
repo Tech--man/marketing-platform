@@ -58,6 +58,13 @@ public class AdminCacheController {
             @RequestParam String key,
             @RequestParam(defaultValue = "true") boolean force) {
         if (registry.types().isEmpty()) {
+            // 被拒的运维动作同样要留痕："有人试过刷这个键"本身就是审计要记的事，
+            // 只记成功会让拒绝在日志里彻底隐形。
+            AdminPrincipal denied = identityService.require(request, AdminRoles.OPERATIONAL);
+            auditService.record(new AuditRecord(denied.uid(), denied.username(), denied.role(),
+                    "cache.reheat", type, key, "POST", "/api/admin/cache/reheat",
+                    "type=" + type + ", key=" + key + ", force=" + force,
+                    ErrorCode.BIZ_ERROR.getCode(), "本进程无 reheater", ClientIp.of(request), 0));
             throw BizException.of(ErrorCode.BIZ_ERROR,
                     "当前进程没有任何缓存重预热实现（FULL 分进程形态下 reheater 在业务服务里），"
                             + "请在 owning 服务上执行或等 ⑤ 的跨进程转发");

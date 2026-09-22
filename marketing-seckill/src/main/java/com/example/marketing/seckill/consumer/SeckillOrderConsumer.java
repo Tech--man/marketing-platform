@@ -2,6 +2,8 @@ package com.example.marketing.seckill.consumer;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.message.LocalMessageService;
 import com.example.marketing.common.mq.MqTopics;
 import com.example.marketing.common.idempotent.BizKey;
@@ -80,10 +82,15 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
             persistOrder(event);
             localMessageService.confirm(MqTopics.TOPIC_SECKILL_ORDER, BizKey.of("seckill", event.getToken()));
         } catch (Exception e) {
-            // 下单失败：写 FAIL 结果（用户轮询可见），抛异常交给重试（事务随之回滚，
-            // 本条结果以重投后的写入为准）；
-            // 重试仍失败后由本地消息表补偿重发，库存由超时回补 Job 兜底归还
-            stockService.saveResult(event.getToken(), "FAIL:" + brief(e));
+            // 撞在并发重复投递上的"在途重复"不能写 FAIL：那一单其实正在被另一个线程成功落下，
+            // 写 FAIL 会把已经发生的成功覆盖成失败（用户看到失败、库存却已扣）。
+            // 只抛回去交给重投，重投时对方已提交，走幂等回放拿到同一个 orderNo。
+            if (!isInFlightDuplicate(e)) {
+                // 下单失败：写 FAIL 结果（用户轮询可见），抛异常交给重试（事务随之回滚，
+                // 本条结果以重投后的写入为准）；
+                // 重试仍失败后由本地消息表补偿重发，库存由超时回补 Job 兜底归还
+                stockService.saveResult(event.getToken(), "FAIL:" + brief(e));
+            }
             throw e;
         }
     }
@@ -92,6 +99,11 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
     @Override
     public void onMessage(String payload) {
         handle(payload);
+    }
+
+    /** 只有 persistOrder 里那处显式抛的 DUPLICATE_REQUEST 算"在途重复" */
+    private static boolean isInFlightDuplicate(Exception e) {
+        return e instanceof BizException b && b.getCode() == ErrorCode.DUPLICATE_REQUEST.getCode();
     }
 
     private void persistOrder(SeckillOrderEvent event) {
@@ -119,6 +131,14 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
                     new LambdaQueryWrapper<SeckillOrderEntity>()
                             .eq(SeckillOrderEntity::getActivityNo, event.getActivityNo())
                             .eq(SeckillOrderEntity::getUserId, event.getUserId()));
+            if (existing == null) {
+                // 唯一索引撞上了、本事务的快照里却查不到 = 撞上一个尚未提交的并发插入
+                // （同一消息被重复投递时会出现）。此刻既不能当成功也不能当失败，抛回去重投。
+                Counter.builder("seckill.order.inflight_duplicate").register(meterRegistry).increment();
+                log.warn("[seckill-consumer] 撞上在途重复下单，交给重投 activityNo={}, userId={}, token={}",
+                        event.getActivityNo(), event.getUserId(), event.getToken());
+                throw BizException.of(ErrorCode.DUPLICATE_REQUEST);
+            }
             stockService.saveResult(event.getToken(), "SUCCESS:" + existing.getOrderNo());
             log.info("[seckill-consumer] 重复下单幂等忽略 token={}, orderNo={}", event.getToken(), existing.getOrderNo());
             return;

@@ -64,9 +64,25 @@ elif sk=$(docker ps --format '{{.Names}}' | grep -m1 -E '(^|-)marketing-seckill-
     [ "${n:-0}" -gt 0 ] && { echo "    分桶已重建（键数 $n）"; break; }
     sleep 1
   done
+elif [ -f "$PWD/run/marketing-seckill.pid" ] && kill -0 "$(cat "$PWD/run/marketing-seckill.pid")" 2>/dev/null; then
+  # FULL 进程形态：应用是宿主机 JVM，没有容器可 restart。复用 start-all.sh 的单服务启动，
+  # 只重启持有分桶预热的那个服务（SKIP_BUILD=1 沿用刚构建好的 jar）。
+  echo "    重启宿主机 marketing-seckill 进程（FULL 进程形态）"
+  kill "$(cat "$PWD/run/marketing-seckill.pid")" 2>/dev/null || true
+  sleep 3
+  SKIP_BUILD=1 ./scripts/start-all.sh marketing-seckill >/dev/null
+  for _ in $(seq 1 60); do
+    n=$(docker exec "$REDIS" sh -c "redis-cli --scan --pattern 'seckill:stock:${ACT}:*' | wc -l" | tr -d '\r')
+    [ "${n:-0}" -gt 0 ] && { echo "    分桶已重建（键数 $n）"; break; }
+    sleep 1
+  done
 else
-  echo "    dev 形态：./scripts/stop-dev.sh && ./scripts/start-dev.sh --no-build" >&2
-  echo "    FULL 形态：./scripts/stop-all.sh && ./scripts/start-all.sh marketing-seckill" >&2
+  # 走到这里说明既没有可重启的容器、也没有本仓库启动的进程。此时分桶键已被删掉，
+  # 栈是"冷"的——必须非零退出：上一版这里只打两行提示就 0 退出，实测把 FULL 进程形态
+  # 留成了 41007「秒杀库存未预热」+ 冒烟整片红，而退出码看起来一切正常。
+  echo "!! 找不到可重启的应用侧（容器与 run/marketing-seckill.pid 都不存在）" >&2
+  echo "   分桶键已删除但未重建，请手工启动应用侧后再跑冒烟" >&2
+  exit 1
 fi
 
 echo "==> 复位后状态："

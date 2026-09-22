@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# 三条核心链路冒烟测试（全部经网关 8090，演示级 Bearer Token）
+# 四条核心链路冒烟测试（全部经网关 8090；链路 0-3 用 C 端演示 token，链路 4 用后台账号）
 # 前置：./scripts/start-all.sh 已就绪；种子数据已由 docker init.sql 写入
 # 用法：GATEWAY_TOKEN=xxx ./scripts/smoke-test.sh
 # ============================================================
@@ -16,6 +16,12 @@ stock_raw() { curl -s -H "$AUTH" "$GW/api/seckill/stock/SK2026001" | sed -n 's/.
 ok()   { echo "  ✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ❌ $1"; echo "     响应: $2"; FAIL=$((FAIL+1)); }
 head2() { echo; echo "== $1"; }
+# 审计表当前最大 id：本轮前后的差值才是"这一轮真的写了行"的证据。
+# 只按 action 查会把上一轮/别的形态留下的行算成本轮成果（踩过一次，别再来一次）。
+audit_max_id() {
+  curl -s -m 10 -H "$ADM $ADMIN_TOKEN" "$GW/api/admin/audits?page=1&size=1" \
+    | sed -n 's/.*"records":\[{"id":\([0-9]*\).*/\1/p'
+}
 
 # 断言响应包含指定片段
 expect() { # desc needle body
@@ -225,6 +231,81 @@ if [ "$SOLD1" != "?" ] && [ "$REMAIN" != "?" ] && [ "$TOTAL" != "?" ]; then
 else
   bad "读取库存基线或结算数失败" "sold=$SOLD1 remain=$REMAIN total=$TOTAL"
 fi
+
+head2 "链路 4：管理后台（两套凭证不互通 → 角色 → 分页 → 重预热生效 → 留痕）"
+ADM="Authorization: Bearer"
+# 后台口令来自种子账号（README 公示的 dev 口令）。登录口有每 IP 限速（默认 10 次/分钟，
+# 含成功尝试），本链路一共 4 次；连跑两次冒烟之间隔 60s 以上，否则这里会先撞 42900。
+ADMIN_TOKEN=$(curl -s -m 25 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
+  -d '{"username":"admin","password":"rootdev123"}' \
+  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+[ -n "$ADMIN_TOKEN" ] && ok "后台登录成功并拿到 token" || bad "后台登录失败" ""
+AAUTH="$ADM $ADMIN_TOKEN"
+
+# 账号不存在与口令错必须同码同文，否则登录口就是用户名枚举接口
+R_GHOST=$(curl -s -m 15 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
+  -d '{"username":"no-such-admin","password":"whatever123"}')
+expect "不存在的账号与口令错同码" '"code":40100' "$R_GHOST"
+
+# 无凭证 / C 端共享 token 都进不了后台：两套凭证不互通是这次后台的地基
+expect "无凭证访问后台被拒" '"code":40100' "$(curl -s -m 10 "$GW/api/admin/users")"
+expect "C 端 token 打后台被拒" '"code":40100' "$(curl -s -m 10 -H "$AUTH" "$GW/api/admin/users")"
+
+# 只读角色的写动作在网关就被挡（40300），读仍然放行
+VIEWER_TOKEN=$(curl -s -m 25 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
+  -d '{"username":"viewer","password":"demo123"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+expect "只读角色调写接口 40300" '"code":40300' \
+  "$(curl -s -m 10 -X POST -H "$ADM $VIEWER_TOKEN" "$GW/api/admin/cache/reheat?type=budget&key=$ACT_NO")"
+expect "只读角色调读接口放行" '"code":0' \
+  "$(curl -s -m 10 -H "$ADM $VIEWER_TOKEN" "$GW/api/admin/users?page=1&size=1")"
+
+# 分页契约：total 与当页条数一起回，且 size 被夹住（不断言 total 的具体值：
+# 种子账号数会变，写死 3 会在下次加账号时无辜变红）
+R=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/users?page=1&size=2")
+expect "分页响应带 total" '"total":' "$R"
+[ "$(echo "$R" | grep -o '"id":' | wc -l | tr -d ' ')" -le 2 ] \
+  && ok "当页条数未超请求的 size" || bad "分页未生效（返回超过 size 条）" "$R"
+
+# 地雷 A 的回归锚：改 DB 不重预热就必须看不见，重预热后才生效。
+# 生效路径分形态（这是本轮明确划出的边界，不是漏测）：
+#   LITE  —— reheater 与后台同进程，能真的刷；
+#   FULL  —— admin 进程里没有 reheater，必须"显式报错"而不是静默返回成功。
+# 判据用 /cache/types（本 JVM 注册了哪些 reheater），不猜环境变量。
+REMAIN0=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
+AUDIT_BEFORE=$(audit_max_id)
+HAS_BUDGET_REHEATER=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/cache/types" \
+  | grep -c '"budget"' || true)
+if docker exec mkt-mysql mysql -umarketing -pmarketing123 -e \
+     "UPDATE ${MYSQL_DB:-marketing}.activity SET budget_amount = budget_amount + 1 WHERE activity_no='$ACT_NO'" >/dev/null 2>&1; then
+  RAISED=$((REMAIN0 + 100))   # +1 元 == +100 分
+  SAME=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
+  [ "$SAME" = "$REMAIN0" ] \
+    && ok "只改 DB 时预扣缓存不动（地雷 A 的现状被钉住）" || bad "缓存自己变了，断言失效" "$SAME"
+  R=$(curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/cache/reheat?type=budget&key=$ACT_NO&force=true")
+  if [ "$HAS_BUDGET_REHEATER" -ge 1 ]; then
+    expect "重预热按公式抬到新口径" "\"after\":$RAISED" "$R"
+    NOW=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
+    [ "$NOW" = "$RAISED" ] && ok "重预热后 C 端余额等于新口径（$RAISED 分）" || bad "重预热未生效" "$NOW"
+  else
+    expect "FULL 分进程下重预热显式报错（不静默返回成功）" '"code":41000' "$R"
+    expect "报错里点名 owning 服务与待办形态" '⑤' "$R"
+  fi
+else
+  bad "无法直连 mkt-mysql 抬预算（重预热断言没跑）" "docker exec 失败"
+fi
+
+# 留痕：只认"本轮新增的那一行"（审计表跨形态共用一份，按 action 查会把上一轮的行也算进来）
+R=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/audits?action=cache.reheat&page=1&size=1")
+AUDIT_AFTER=$(audit_max_id)
+if [ "${AUDIT_AFTER:-0}" -gt "${AUDIT_BEFORE:-0}" ]; then
+  expect "本轮动作写入审计" '"action":"cache.reheat"' "$R"
+else
+  bad "审计未新增（重预热被拒时也应有拒绝痕迹？当前设计只在成功后落）" "before=$AUDIT_BEFORE after=$AUDIT_AFTER"
+fi
+
+# 登出后同一枚 token 立即失效（会话吊销走 Redis，不等自然过期）
+curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/auth/logout" >/dev/null
+expect "登出后会话立即失效" '"code":40102' "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/users")"
 
 echo
 echo "================ 冒烟结果：通过 $PASS / 失败 $FAIL ================"
