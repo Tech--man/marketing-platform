@@ -12,6 +12,11 @@ public enum ErrorCode {
     BAD_REQUEST(40000, "请求参数错误"),
     NOT_FOUND(40400, "资源不存在"),
     UNAUTHORIZED(40100, "鉴权失败"),
+    /** token 过期：与 40100 分开，客户端凭此决定"静默重登"还是"提示无权限" */
+    TOKEN_EXPIRED(40101, "登录已过期，请重新登录"),
+    /** 会话被服务端主动作废（登出、强制下线、改密），不该再自动重登 */
+    SESSION_REVOKED(40102, "会话已失效，请重新登录"),
+    FORBIDDEN(40300, "无权执行该操作"),
     TOO_MANY_REQUESTS(42900, "请求过于频繁，请稍后再试"),
 
     BIZ_ERROR(41000, "业务处理失败"),

@@ -81,14 +81,21 @@ requestId（属 ④/后续）。
 ### 5.1 分页契约
 
 ```java
-public record PageResult<T>(long total, int page, int size, List<T> records) {
-    public static <T> PageResult<T> of(IPage<T> p);
-    public <R> PageResult<R> map(Function<T, R> f);
-}
-public class PageQuery { @Min(1) int page = 1; @Min(1) @Max(200) int size = 20; <T> Page<T> toPage(); }
+public class PageResult<T> { long total; int page; int size; List<T> records;
+    static <T> PageResult<T> of(long total, int page, int size, List<T> records);
+    <R> PageResult<R> map(Function<T, R>);  boolean isEmpty(); }
+public class PageQuery { int page; int size;                      // 页码 1 起，size 夹到 [1, MAX_SIZE]
+    static PageQuery of(Integer page, Integer size);  long offset(); }
 ```
 
-这是全仓第一处真正使用 `Page` 的地方（`PaginationInnerInterceptor` 已在 5 个
+**实现时纠了本设计的一处错误**：原写 `PageResult.of(IPage)` 与 `PageQuery.toPage()`，但
+`marketing-common/pom.xml` 里**没有 MyBatis-Plus**（只有 starter/json + optional 的
+web/jdbc/redis/mq）—— 把 `IPage` 引进来会让无库场景（网关）也被拖上 ORM。改成 ORM 无关契约，
+各模块自己 `PageResult.of(p.getTotal(), (int) p.getCurrent(), (int) p.getSize(), p.getRecords())`。
+`offset()` 用 `long`，免得大页码乘法溢出成负数。越界参数一律夹到合法区间**并如实回显**
+（`PageResult.size` 即生效值），既不静默少给也不因"你要 5000 条"直接报错。
+
+这是全仓第一处真正使用分页的地方（`PaginationInnerInterceptor` 已在 5 个
 `MybatisPlusConfig.java:20` 注册但无人用）。**不改现有两个 C 端列表接口**——`smoke-test.sh:15,132`
 依赖裸 List 形状，分页留给 ③ 的新端点。
 
