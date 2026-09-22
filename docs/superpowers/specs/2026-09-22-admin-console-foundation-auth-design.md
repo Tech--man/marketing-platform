@@ -56,6 +56,14 @@ Redis Stream，实测常驻 1.05 GiB，常态真跑流量）、FULL 扩容档（
 裁定：C 用**删配置**解决而不是补列——`ActivityStatus` 已有 OFFLINE/FINISHED、`coupon_template.status`
 有 OFFLINE、`promo_rule.status` 有 DISABLED，再引入 `deleted` 是第二套真相且要 4 处 ALTER。
 
+实施时的两处裁定补充：
+- `idempotent_record.uk_biz_key` **保持全局**：它的键本身带场景前缀（`BizKey.of` 统一生成），
+  且"同一个 requestId 跨服务各执行一次"本来就该被拒 —— 这里的全局唯一是正确语义，不是缺陷。
+  只有 `budget_flow`（键由外部用户提供）与 `local_message`（键形跨 topic 会互相吞）需要改索引。
+- 券侧幂等表与消息表**共用同一个键**（`grant:<requestId>`）：消费端 confirm 能从事件里的
+  requestId 原样还原，不需要多带字段；也因此历史行（裸 requestId）与新行形状不同但不互扰
+  —— 已确认行不再被读，迁移脚本里的可选 UPDATE 默认不执行（不为形状改历史数据）。
+
 记录但本文不修：`local_message` DDL 注释状态写 `DEAD`、代码用 `FAILED`（`01-schema.sql:82` vs
 `LocalMessageService.java:27`）；`IdempotentExecutor` 的 PROCESSING 无超时回收，进程崩溃即永久毒化该
 requestId（属 ④/后续）。

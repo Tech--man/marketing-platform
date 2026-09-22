@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.example.marketing.common.message.LocalMessageService;
 import com.example.marketing.common.mq.MqTopics;
+import com.example.marketing.common.idempotent.BizKey;
 import com.example.marketing.common.mq.SeckillOrderEvent;
 import com.example.marketing.common.mq.StreamMessageHandler;
 import com.example.marketing.common.util.JsonUtils;
@@ -77,7 +78,7 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
         SeckillOrderEvent event = JsonUtils.parse(payload, SeckillOrderEvent.class);
         try {
             persistOrder(event);
-            localMessageService.confirm("seckill:" + event.getToken());
+            localMessageService.confirm(MqTopics.TOPIC_SECKILL_ORDER, BizKey.of("seckill", event.getToken()));
         } catch (Exception e) {
             // 下单失败：写 FAIL 结果（用户轮询可见），抛异常交给重试（事务随之回滚，
             // 本条结果以重投后的写入为准）；

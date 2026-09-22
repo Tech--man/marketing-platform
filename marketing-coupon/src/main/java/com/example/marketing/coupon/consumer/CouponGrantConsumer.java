@@ -3,6 +3,7 @@ package com.example.marketing.coupon.consumer;
 import com.example.marketing.common.message.LocalMessageService;
 import com.example.marketing.common.mq.CouponGrantEvent;
 import com.example.marketing.common.mq.MqTopics;
+import com.example.marketing.common.idempotent.BizKey;
 import com.example.marketing.common.mq.StreamMessageHandler;
 import com.example.marketing.common.util.JsonUtils;
 import com.example.marketing.coupon.domain.UserCouponStatus;
@@ -76,8 +77,8 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
             // InnoDB 的唯一键冲突只回滚该语句、不中止事务，因此后续 confirm 仍可提交
             log.info("[grant-consumer] 重复消息幂等忽略 requestId={}", event.getRequestId());
         }
-        // 无论首次还是重复，确认消息使补偿链路闭环
-        localMessageService.confirm(event.getRequestId());
+        // 无论首次还是重复，确认消息使补偿链路闭环；带 topic 定位，键拼法与登记侧一致
+        localMessageService.confirm(MqTopics.TOPIC_COUPON_GRANT, BizKey.of("grant", event.getRequestId()));
     }
 
     @Transactional

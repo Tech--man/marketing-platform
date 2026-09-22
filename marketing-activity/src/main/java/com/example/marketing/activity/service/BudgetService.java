@@ -21,7 +21,7 @@ import java.util.List;
  * 预算控制：Redis Lua 原子预扣（高并发实时口径）+ budget_flow 流水幂等 + activity.used_amount DB 兜底。
  *
  * <p>一致性策略：预算属"资金"语义，采用预扣 + 流水先占位再扣 Redis；
- * 任一环节失败均可安全重放（biz_key 唯一索引）。对账口径：
+ * 任一环节失败均可安全重放（唯一索引是 <b>(activity_no, biz_key)</b>，见地雷 B）。对账口径：
  * Redis 剩余额 == 总预算 - SUM(流水 DEDUCT) + SUM(流水 REFUND)。</p>
  */
 @Slf4j
@@ -95,12 +95,17 @@ public class BudgetService implements CacheReheater {
         return value == null ? null : Long.parseLong(value);
     }
 
-    /** 扣减预算（幂等：同 bizKey 重复调用直接视为成功）。
+    /**
+     * 扣减预算（幂等）。
+     *
+     * <p>幂等键的作用域是<b>(活动, bizKey)</b>，不是 bizKey 单独：这个 bizKey 由调用方提供
+     * （{@code POST /api/activity/{no}/budget/deduct}），两个活动复用同一个编号是正常用法，
+     * 早先的全局唯一索引会让第二次<b>既不扣款也返回成功</b>（地雷 B）。</p>
      *
      * @param amountCents 扣减金额（分）
-     * @param bizKey      业务唯一键（如券发放请求 ID）
+     * @param bizKey      调用方业务唯一键（活动内唯一即可）
      */
-    public void deduct(String activityNo, long amountCents, String bizKey) {
+    public DeductOutcome deduct(String activityNo, long amountCents, String bizKey) {
         if (amountCents <= 0) {
             throw new BizException(ErrorCode.BAD_REQUEST, "扣减金额必须为正");
         }
@@ -109,8 +114,9 @@ public class BudgetService implements CacheReheater {
                 "INSERT IGNORE INTO budget_flow (activity_no, biz_key, amount_cents, type) VALUES (?, ?, ?, 'DEDUCT')",
                 activityNo, bizKey, -amountCents);
         if (inserted == 0) {
-            log.info("[budget] 重复扣减请求直接幂等返回 bizKey={}", bizKey);
-            return;
+            // 同活动同键重复进入：钱已经扣过，回放而不是再扣一次
+            log.info("[budget] 重复扣减请求幂等回放 activityNo={}, bizKey={}", activityNo, bizKey);
+            return DeductOutcome.REPLAYED;
         }
         // 2. Redis 原子扣减
         Long result = evalDeduct(activityNo, amountCents);
@@ -120,7 +126,7 @@ public class BudgetService implements CacheReheater {
             // 也不能先回删流水再重试（会留下"扣了没记"的缺口，对账时当成可用余额放出去）。
             long reconciled = computeRemainCents(activityNo);
             if (reconciled < 0) {
-                rollbackFlow(bizKey);
+                rollbackFlow(activityNo, bizKey);
                 throw BizException.of(ErrorCode.BUDGET_NOT_ENOUGH);
             }
             redisTemplate.opsForValue().set(budgetKey(activityNo), String.valueOf(reconciled));
@@ -128,12 +134,21 @@ public class BudgetService implements CacheReheater {
         }
         if (result == null || result == 0L) {
             // 只有真失败才回删占位
-            rollbackFlow(bizKey);
+            rollbackFlow(activityNo, bizKey);
             throw BizException.of(ErrorCode.BUDGET_NOT_ENOUGH);
         }
         // 3. DB 兜底口径累加（生产高并发场景可改批量异步汇总，此处保持同步便于对账演示）
         jdbcTemplate.update("UPDATE activity SET used_amount = used_amount + ? WHERE activity_no = ?",
                 BigDecimal.valueOf(amountCents).movePointLeft(2), activityNo);
+        return DeductOutcome.DEDUCTED;
+    }
+
+    /**
+     * 扣减结果。原来 void + code=0 让"幂等回放"与"真的扣了钱"在响应上无法区分，
+     * 运营/调用方看到成功就以为扣成了 —— 现在语义进 data。
+     */
+    public enum DeductOutcome {
+        DEDUCTED, REPLAYED;
     }
 
     /** 剩余预算（分），供监控与查询 */
@@ -147,8 +162,14 @@ public class BudgetService implements CacheReheater {
                 List.of(budgetKey(activityNo)), String.valueOf(amountCents));
     }
 
-    private void rollbackFlow(String bizKey) {
-        jdbcTemplate.update("DELETE FROM budget_flow WHERE biz_key = ? AND type = 'DEDUCT'", bizKey);
+    /**
+     * 回删本活动的占位。必须带 activity_no —— 原来只按 biz_key 删，
+     * 而 bizKey 由调用方提供，一次失败的回滚能把<b>另一个活动</b>已成功的扣款记录抹掉，
+     * 对账口径就会把那笔钱当成没扣过（地雷 B 的另一半）。
+     */
+    void rollbackFlow(String activityNo, String bizKey) {
+        jdbcTemplate.update("DELETE FROM budget_flow WHERE activity_no = ? AND biz_key = ? AND type = 'DEDUCT'",
+                activityNo, bizKey);
     }
 
     private ActivityEntity requireActivity(String activityNo) {

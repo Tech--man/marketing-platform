@@ -5,6 +5,7 @@ import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.message.LocalMessageService;
 import com.example.marketing.common.mq.MqTopics;
+import com.example.marketing.common.idempotent.BizKey;
 import com.example.marketing.common.mq.SeckillOrderEvent;
 import com.example.marketing.common.util.JsonUtils;
 import com.example.marketing.openapi.risk.RiskCheckService;
@@ -54,14 +55,14 @@ public class SeckillGrabService {
 
         String token = UUID.randomUUID().toString().replace("-", "");
         SeckillOrderEvent event = new SeckillOrderEvent(token, activityNo, userId, activity.getItemId(), bucket);
-        String bizKey = "seckill:" + token;
+        String bizKey = BizKey.of("seckill", token);
         // 顺序很关键：受理占位必须在投递之前，否则消费端可能先写出终态、再被这里的
         // ACCEPTED 覆盖（markAccepted 自身也只允许"无值时写"，双保险）
         stockService.markAccepted(token);
         // 本地消息表 + MQ：即使进程崩溃，补偿定时器会把消息补发出去
         localMessageService.recordIfAbsent(MqTopics.TOPIC_SECKILL_ORDER, MqTopics.TAG_ORDER,
                 bizKey, JsonUtils.toJson(event));
-        localMessageService.publish(bizKey);
+        localMessageService.publish(MqTopics.TOPIC_SECKILL_ORDER, bizKey);
 
         Counter.builder("seckill.grab.accepted").register(meterRegistry).increment();
         log.info("[seckill] 抢购受理 activityNo={}, userId={}, bucket={}, token={}",

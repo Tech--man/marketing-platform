@@ -65,11 +65,11 @@ public class ActivityController {
         return Result.ok(grayService.hit(activityNo, userId));
     }
 
-    /** 扣减预算（幂等：bizKey） */
+    /** 扣减预算（幂等键作用域 = 活动 + bizKey；data 区分真扣 DEDUCTED 与重复回放 REPLAYED） */
     @PostMapping("/{activityNo}/budget/deduct")
-    public Result<Void> deductBudget(@PathVariable String activityNo, @Valid @RequestBody DeductRequest request) {
-        budgetService.deduct(activityNo, request.amountCents(), request.bizKey());
-        return Result.ok();
+    public Result<BudgetService.DeductOutcome> deductBudget(@PathVariable String activityNo,
+                                                            @Valid @RequestBody DeductRequest request) {
+        return Result.ok(budgetService.deduct(activityNo, request.amountCents(), request.bizKey()));
     }
 
     /** 查询剩余预算（分） */

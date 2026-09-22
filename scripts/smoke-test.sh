@@ -64,6 +64,14 @@ expect "剩余预算 7000 分" '"data":7000' "$R"
 R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
   -d "{\"amountCents\":3000,\"bizKey\":\"$ACT_NO-B1\"}")
 expect "同 bizKey 重复扣减幂等返回" '"code":0' "$R"
+# 幂等不再是"给你一个成功"就算了：data 必须说清这次到底扣没扣钱（原来是 void + code=0，
+# 调用方分不清真扣与回放）
+expect "重复扣减在 data 里标成 REPLAYED" '"data":"REPLAYED"' "$R"
+# 唯一索引作用域是 (活动, bizKey)：同一个 bizKey 用在另一个活动上必须真扣，
+# 早先全局唯一会把第二次静默吞掉（既不扣款也返回成功）。
+R=$(curl -s -X POST "$GW/api/activity/ACT2026001/budget/deduct" -H "$AUTH" -H "$JSON" \
+  -d "{\"amountCents\":100,\"bizKey\":\"$ACT_NO-B1\"}")
+expect "同 bizKey 换活动仍真扣（DEDUCTED）" '"data":"DEDUCTED"' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain")
 expect "重复扣减未二次扣款（仍 7000 分）" '"data":7000' "$R"
 R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \

@@ -40,37 +40,43 @@ public class LocalMessageService {
     }
 
     /**
-     * 登记消息（业务事务内调用）。biz_key 唯一索引，重复登记直接忽略。
+     * 登记消息（业务事务内调用）。
+     *
+     * <p>唯一键是 {@code (topic, biz_key)}：bizKey 由调用方决定，跨 topic 撞同名是可能的
+     * （{@code /api/coupon/grant} 的 requestId 外部可控，传 {@code seckill:x} 就会撞秒杀的键形）。
+     * 返回 false 表示这条已登记过，调用方据此区分"新建"与"重复"，不能静默。</p>
      */
-    public void recordIfAbsent(String topic, String tag, String bizKey, String payload) {
-        jdbcTemplate.update(
+    public boolean recordIfAbsent(String topic, String tag, String bizKey, String payload) {
+        return jdbcTemplate.update(
                 "INSERT IGNORE INTO " + TABLE + " (topic, tag, biz_key, payload, status, retry_count, next_retry_time)"
                         + " VALUES (?, ?, ?, ?, ?, 0, ?)",
-                topic, tag, bizKey, payload, STATUS_PENDING, Timestamp.valueOf(LocalDateTime.now()));
+                topic, tag, bizKey, payload, STATUS_PENDING, Timestamp.valueOf(LocalDateTime.now())) > 0;
     }
 
     /**
      * 发送并流转状态。发送异常不抛出（由定时器补偿），返回是否已发出。
+     *
+     * <p>必须带 topic 定位：只有 biz_key 时会命中别的 topic 的同名行，
+     * 结果是"这条没发出去、那条被顺手改成了 SENT"。</p>
      */
-    public boolean publish(String bizKey) {
-        Map<String, Object> row = load(bizKey);
+    public boolean publish(String topic, String bizKey) {
+        Map<String, Object> row = load(topic, bizKey);
         if (row == null || !List.of(STATUS_PENDING, STATUS_SENT).contains((String) row.get("status"))) {
             return false;
         }
-        String topic = (String) row.get("topic");
         String tag = (String) row.get("tag");
         String payload = (String) row.get("payload");
         try {
             if (eventPublisher.publish(topic, tag, bizKey, payload)) {
                 jdbcTemplate.update("UPDATE " + TABLE
-                                + " SET status = ?, next_retry_time = ? WHERE biz_key = ? AND status IN (?, ?)",
-                        STATUS_SENT, plusSeconds(120), bizKey, STATUS_PENDING, STATUS_SENT);
+                                + " SET status = ?, next_retry_time = ? WHERE topic = ? AND biz_key = ? AND status IN (?, ?)",
+                        STATUS_SENT, plusSeconds(120), topic, bizKey, STATUS_PENDING, STATUS_SENT);
                 return true;
             }
-            scheduleRetry(bizKey, toInt(row.get("retry_count")));
+            scheduleRetry(topic, bizKey, toInt(row.get("retry_count")));
         } catch (Exception e) {
-            log.warn("[local-message] 发送失败 bizKey={}, 等待补偿: {}", bizKey, e.getMessage());
-            scheduleRetry(bizKey, toInt(row.get("retry_count")));
+            log.warn("[local-message] 发送失败 topic={}, bizKey={}, 等待补偿: {}", topic, bizKey, e.getMessage());
+            scheduleRetry(topic, bizKey, toInt(row.get("retry_count")));
         }
         return false;
     }
@@ -78,11 +84,12 @@ public class LocalMessageService {
     /**
      * 消费端业务落库成功后确认。未命中说明重复消费或乱序，忽略即可。
      */
-    public void confirm(String bizKey) {
-        int updated = jdbcTemplate.update("UPDATE " + TABLE + " SET status = ? WHERE biz_key = ? AND status IN (?, ?)",
-                STATUS_CONFIRMED, bizKey, STATUS_PENDING, STATUS_SENT);
+    public void confirm(String topic, String bizKey) {
+        int updated = jdbcTemplate.update(
+                "UPDATE " + TABLE + " SET status = ? WHERE topic = ? AND biz_key = ? AND status IN (?, ?)",
+                STATUS_CONFIRMED, topic, bizKey, STATUS_PENDING, STATUS_SENT);
         if (updated == 0) {
-            log.debug("[local-message] confirm 未命中（重复消费）, bizKey={}", bizKey);
+            log.debug("[local-message] confirm 未命中（重复消费）, topic={}, bizKey={}", topic, bizKey);
         }
     }
 
@@ -91,12 +98,12 @@ public class LocalMessageService {
      */
     public int retryPending(int limit) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT biz_key FROM " + TABLE
+                "SELECT topic, biz_key FROM " + TABLE
                         + " WHERE status IN (?, ?) AND next_retry_time <= ? AND retry_count < ? ORDER BY id LIMIT ?",
                 STATUS_PENDING, STATUS_SENT, Timestamp.valueOf(LocalDateTime.now()), MAX_RETRY, limit);
         int count = 0;
         for (Map<String, Object> row : rows) {
-            publish((String) row.get("biz_key"));
+            publish((String) row.get("topic"), (String) row.get("biz_key"));
             count++;
         }
         if (count > 0) {
@@ -105,21 +112,23 @@ public class LocalMessageService {
         return count;
     }
 
-    private void scheduleRetry(String bizKey, int currentRetry) {
+    private void scheduleRetry(String topic, String bizKey, int currentRetry) {
         int retry = currentRetry + 1;
         long backoff = Math.min(BACKOFF_BASE_SECONDS * (1L << Math.min(retry, 6)), 300);
         String status = retry >= MAX_RETRY ? STATUS_FAILED : STATUS_PENDING;
-        jdbcTemplate.update("UPDATE " + TABLE + " SET status = ?, retry_count = ?, next_retry_time = ? WHERE biz_key = ?",
-                status, retry, plusSeconds(backoff), bizKey);
+        jdbcTemplate.update("UPDATE " + TABLE
+                        + " SET status = ?, retry_count = ?, next_retry_time = ? WHERE topic = ? AND biz_key = ?",
+                status, retry, plusSeconds(backoff), topic, bizKey);
         if (STATUS_FAILED.equals(status)) {
             // 进入死信人工处理通道：生产环境应告警 + 转死信队列
-            log.error("[local-message] 消息超过最大重试次数转 FAILED, bizKey={}", bizKey);
+            log.error("[local-message] 消息超过最大重试次数转 FAILED, topic={}, bizKey={}", topic, bizKey);
         }
     }
 
-    private Map<String, Object> load(String bizKey) {
+    private Map<String, Object> load(String topic, String bizKey) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT topic, tag, payload, status, retry_count FROM " + TABLE + " WHERE biz_key = ?", bizKey);
+                "SELECT topic, tag, payload, status, retry_count FROM " + TABLE
+                        + " WHERE topic = ? AND biz_key = ?", topic, bizKey);
         return rows.isEmpty() ? null : rows.get(0);
     }
 

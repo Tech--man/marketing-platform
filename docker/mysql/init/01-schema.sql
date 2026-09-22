@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS budget_flow (
     type         VARCHAR(16)   NOT NULL COMMENT 'DEDUCT/REFUND',
     create_time  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_biz_key (biz_key),
+    UNIQUE KEY uk_activity_biz (activity_no, biz_key),
     KEY idx_activity_no (activity_no)
 ) ENGINE = InnoDB COMMENT '预算扣减流水（幂等 + 对账）';
 
@@ -79,13 +79,13 @@ CREATE TABLE IF NOT EXISTS local_message (
     tag             VARCHAR(64)  NOT NULL DEFAULT '',
     biz_key         VARCHAR(128) NOT NULL COMMENT '消息业务键（唯一）',
     payload         TEXT         NOT NULL COMMENT '消息体 JSON',
-    status          VARCHAR(16)  NOT NULL COMMENT 'PENDING/SENT/CONFIRMED/DEAD',
+    status          VARCHAR(16)  NOT NULL COMMENT 'PENDING/SENT/CONFIRMED/FAILED',
     retry_count     INT          NOT NULL DEFAULT 0,
     next_retry_time DATETIME     NOT NULL COMMENT '下次补偿扫描时间',
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_biz_key (biz_key),
+    UNIQUE KEY uk_topic_biz_key (topic, biz_key),
     KEY idx_status_retry (status, next_retry_time)
 ) ENGINE = InnoDB COMMENT '本地消息表（事务消息最终一致）';
 
@@ -165,13 +165,13 @@ CREATE TABLE IF NOT EXISTS local_message (
     tag             VARCHAR(64)  NOT NULL DEFAULT '',
     biz_key         VARCHAR(128) NOT NULL,
     payload         TEXT         NOT NULL,
-    status          VARCHAR(16)  NOT NULL COMMENT 'PENDING/SENT/CONFIRMED/DEAD',
+    status          VARCHAR(16)  NOT NULL COMMENT 'PENDING/SENT/CONFIRMED/FAILED',
     retry_count     INT          NOT NULL DEFAULT 0,
     next_retry_time DATETIME     NOT NULL,
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_biz_key (biz_key),
+    UNIQUE KEY uk_topic_biz_key (topic, biz_key),
     KEY idx_status_retry (status, next_retry_time)
 ) ENGINE = InnoDB COMMENT '本地消息表';
 
@@ -235,7 +235,7 @@ CREATE TABLE IF NOT EXISTS local_message (
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_biz_key (biz_key),
+    UNIQUE KEY uk_topic_biz_key (topic, biz_key),
     KEY idx_status_retry (status, next_retry_time)
 ) ENGINE = InnoDB COMMENT '本地消息表';
 
@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS local_message (
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_biz_key (biz_key),
+    UNIQUE KEY uk_topic_biz_key (topic, biz_key),
     KEY idx_status_retry (status, next_retry_time)
 ) ENGINE = InnoDB COMMENT '本地消息表';
 

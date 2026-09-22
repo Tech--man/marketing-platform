@@ -95,6 +95,11 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 同一份数据 —— 这是"原地双向切换"的结构前提（若每套形态各起一个 MySQL 去挂同一个卷，
 并发拉起就是卷级损坏）。三个启动脚本都会幂等地把它 `up -d --wait` 起来。
 
+> `docker/mysql/init*/` 里的 DDL **只在新建数据卷时执行**。已存在的卷不会自动跟上索引变更，
+> 需要手工跑 `docker/mysql/migrate/` 下的脚本（按时间命名，逐个执行）。
+> 例：`docker exec -i mkt-mysql mysql -umarketing -pmarketing123 marketing < docker/mysql/migrate/2026-09-22-bizkey-scope.sql`
+> 迁移脚本头部写了执行前置（比如改消息表索引前要先确认无在途消息）。
+
 | 端口 | 用途 | 归属 |
 |---|---|---|
 | 3307 | MySQL（仅绑回环，单库 `marketing`） | 数据层 `mkt-mysql` |
@@ -328,7 +333,7 @@ POST /api/seckill/grab
 | POST | /api/activity | 创建活动（DRAFT） |
 | PUT | /api/activity/{no}/transition?event= | 状态机流转（SUBMIT/APPROVE/REJECT/PROMOTE/OFFLINE/RE_ONLINE/FINISH） |
 | GET | /api/activity/{no}/participatable · /gray-hit?userId= | 可参与校验 · 灰度命中判断 |
-| POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减（bizKey 幂等）/ 实时余额<br>⚠ `biz_key` 是**全局唯一**索引（非活动内唯一），跨活动复用同一 bizKey 会被判重复而静默跳过扣减，调用方必须自带命名空间 |
+| POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减 / 实时余额。幂等键作用域是 **(活动, bizKey)**，同一 bizKey 用在两个活动上是两次真扣；`data` 返回 `DEDUCTED`（本次扣了钱）或 `REPLAYED`（重复请求回放，没再扣） |
 | POST | /api/coupon/grant · /consume | 领券受理 · 核销 |
 | GET | /api/coupon/grant/result/{requestId} · /usable?userId= · /stock/{templateNo} | 轮询 / 可用券 / 模板余量 |
 | POST | /api/discount/calculate · /rules | 优惠计算 · 规则 upsert（触发快照刷新） |
@@ -363,19 +368,21 @@ Connection prematurely closed BEFORE response` → 该请求 500。机制：上�
 所以只能说"窗口按配置消掉了"，不能说"复现→修复→不再复现"闭环验证过。除此之外，三套形态
 跑完冒烟的 ERROR 计数为 0（除这两条）。
 
-**冒烟（34 条，四链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
-重复活动号 41000、预算扣减与 bizKey 幂等、超预算 41003、灰度命中、可参与位切换）；
+**冒烟（39 条，四链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+重复活动号 41000、超预算 41003、灰度命中、可参与位切换）+ **预算算术守卫**：
+被拒扣减不留痕、重复扣减在 `data` 里标 `REPLAYED`、同 bizKey 换活动仍真扣 `DEDUCTED`；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖。
 
 并发段的库存基线**从接口读、不写死**，并断言恒等式 `分桶余量 + DB 已售 == 总库存`
-（对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测
-连跑 3 轮均 34/34。
+（对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测连跑 3 轮全绿。
 
-**三套形态的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）：
+**三套形态的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
+断言集在长（S2 加了 5 条预算/消息守卫），所以标了跑时的断言数 —— **34 那几格是当时版本全绿，
+不代表已在 39 条断言下复跑过**；复跑齐了要在这里更新，别拿旧格子当新结论。
 
 | 形态 | 最近一次 | 通道证据 |
 |---|---|---|
-| LITE 服役档（容器） | 34/34 | Redis Stream 键 + XDEL 生效 |
+| LITE 服役档（容器） | **39/39** | Redis Stream 键 + XDEL 生效（跑完 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致 |
 | dev 开发档（本机 2 JVM） | 34/34 | 同上 |
 | FULL · 本机进程形态 | 34/34 | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0 |
 | FULL · 本机进程 · 四库隔离档 | 34/34 | 数据按服务落在 4 个库、两张补偿表零残留 |

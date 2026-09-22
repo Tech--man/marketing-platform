@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.idempotent.IdempotentExecutor;
+import com.example.marketing.common.idempotent.BizKey;
 import com.example.marketing.common.message.LocalMessageService;
 import com.example.marketing.common.mq.CouponGrantEvent;
 import com.example.marketing.common.mq.MqTopics;
@@ -94,9 +95,11 @@ public class CouponGrantService {
                 // 4. 本地消息表 + MQ（发送失败由补偿定时器重发；消费端幂等落库）
                 CouponGrantEvent event = new CouponGrantEvent(request.requestId(), request.userId(),
                         template.getId(), template.getActivityNo(), 1);
+                // 与幂等表同一个键（BizKey 统一拼法），消费端 confirm 能从事件里原样还原
+                String msgKey = BizKey.of("grant", request.requestId());
                 localMessageService.recordIfAbsent(MqTopics.TOPIC_COUPON_GRANT, MqTopics.TAG_GRANT,
-                        request.requestId(), JsonUtils.toJson(event));
-                localMessageService.publish(request.requestId());
+                        msgKey, JsonUtils.toJson(event));
+                localMessageService.publish(MqTopics.TOPIC_COUPON_GRANT, msgKey);
                 Counter.builder("coupon.grant.accepted").register(meterRegistry).increment();
                 return GrantTicket.accepted(request.requestId());
             }

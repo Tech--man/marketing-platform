@@ -41,10 +41,17 @@ docker exec "$REDIS" sh -c "
 
 echo "==> 预热只在应用启动时按 (total - sold) 重建分桶，需要重启应用侧："
 if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
+  # 必须先记下旧启动时刻：docker restart 返回时旧 JVM 可能还在响应 /actuator/health，
+  # 只看健康检查会"提前放行"，冒烟就撞上新 JVM 的启动窗口（实测 500 connection refused）。
+  before=$(docker inspect -f '{{.State.StartedAt}}' mkt-preview-standalone)
   docker restart mkt-preview-standalone >/dev/null
   echo "    已重启 mkt-preview-standalone（LITE 服役档）"
-  for _ in $(seq 1 60); do
-    curl -fs --max-time 3 http://127.0.0.1:8085/actuator/health 2>/dev/null | grep -q '"UP"' && break
+  for _ in $(seq 1 90); do
+    now=$(docker inspect -f '{{.State.StartedAt}}' mkt-preview-standalone)
+    if [ "$now" != "$before" ] \
+       && curl -fs --max-time 3 http://127.0.0.1:8085/actuator/health 2>/dev/null | grep -q '"UP"'; then
+      break
+    fi
     sleep 1
   done
 elif sk=$(docker ps --format '{{.Names}}' | grep -m1 -E '(^|-)marketing-seckill-[0-9]+$'); then

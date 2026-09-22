@@ -19,6 +19,13 @@ class BizKeyTest {
     }
 
     @Test
+    void twoPartFormIsForScenesWithoutIsolationDimension() {
+        // 券与秒杀的幂等键只有"场景 + 业务编号"两段，且这个字面值要能跨三张表复用
+        // （idempotent_record / local_message / budget_flow），消费端凭事件里的 requestId 就能还原
+        assertThat(BizKey.of("grant", "REQ-1")).isEqualTo("grant:REQ-1");
+    }
+
+    @Test
     void rejectsBlankPartsBecauseTheyWouldCollideWithOthers() {
         assertThatThrownBy(() -> BizKey.of("", "scope", "raw"))
                 .isInstanceOf(BizException.class);
