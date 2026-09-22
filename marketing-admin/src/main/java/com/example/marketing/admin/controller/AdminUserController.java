@@ -50,7 +50,7 @@ public class AdminUserController {
             HttpServletRequest request,
             @PathVariable long id,
             @RequestParam String status) {
-        identityService.require(request, AdminRoles.ADMIN);
-        return Result.ok(userService.setStatus(id, status));
+        AdminPrincipal actor = identityService.require(request, AdminRoles.ADMIN);
+        return Result.ok(userService.setStatus(actor, id, status));
     }
 }

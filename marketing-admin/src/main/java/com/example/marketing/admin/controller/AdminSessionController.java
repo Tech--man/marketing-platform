@@ -1,5 +1,7 @@
 package com.example.marketing.admin.controller;
 
+import com.example.marketing.admin.audit.AuditRecord;
+import com.example.marketing.admin.audit.AuditService;
 import com.example.marketing.admin.infrastructure.entity.AdminSessionEntity;
 import com.example.marketing.admin.security.AdminPrincipal;
 import com.example.marketing.admin.security.AdminRoles;
@@ -30,6 +32,7 @@ public class AdminSessionController {
 
     private final AdminSessionService sessionService;
     private final AdminIdentityService identityService;
+    private final AuditService auditService;
 
     @GetMapping
     public Result<PageResult<AdminSessionEntity>> list(
@@ -50,6 +53,8 @@ public class AdminSessionController {
     public Result<Void> forceLogout(HttpServletRequest request, @PathVariable String jti) {
         AdminPrincipal actor = identityService.require(request, AdminRoles.ADMIN);
         sessionService.revoke(jti, "FORCE_LOGOUT:" + actor.username());
+        auditService.record(AuditRecord.ofAction(actor.uid(), actor.username(), actor.role(),
+                "session.force_logout", "session", jti, ClientIp.of(request)));
         return Result.ok();
     }
 }

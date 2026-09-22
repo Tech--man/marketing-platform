@@ -26,4 +26,8 @@ public class AdminProperties {
 
     /** 锁定时长（分钟），到点自动放行 */
     private int lockMinutes = 15;
+
+    /** 每个 IP 在窗口内允许多少次登录尝试，<=0 关闭该限速 */
+    private int loginIpLimit = 10;
+    private int loginIpWindowSeconds = 60;
 }

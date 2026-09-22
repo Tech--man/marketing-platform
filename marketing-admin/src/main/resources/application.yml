@@ -43,6 +43,9 @@ marketing:
     clock-skew-seconds: 30
     max-fail-count: ${ADMIN_MAX_FAIL:5}
     lock-minutes: ${ADMIN_LOCK_MINUTES:15}
+    # 登录口单独限速（网关的 RL_ADMIN 管的是整个后台，不是撞库）
+    login-ip-limit: ${ADMIN_LOGIN_IP_LIMIT:10}
+    login-ip-window-seconds: ${ADMIN_LOGIN_IP_WINDOW:60}
 
 management:
   endpoints:

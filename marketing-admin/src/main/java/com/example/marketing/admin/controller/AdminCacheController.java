@@ -7,6 +7,8 @@ import com.example.marketing.common.api.Result;
 import com.example.marketing.common.cache.CacheReheatRegistry;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
+import com.example.marketing.admin.audit.AuditRecord;
+import com.example.marketing.admin.audit.AuditService;
 import com.example.marketing.admin.security.AdminPrincipal;
 import lombok.RequiredArgsConstructor;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,6 +41,7 @@ public class AdminCacheController {
 
     private final CacheReheatRegistry registry;
     private final AdminIdentityService identityService;
+    private final AuditService auditService;
 
     @GetMapping("/types")
     public Result<List<String>> types(
@@ -61,6 +64,10 @@ public class AdminCacheController {
         }
         AdminPrincipal actor = identityService.require(request, AdminRoles.OPERATIONAL);
         CacheReheater.Result result = registry.reheat(type, key, force);
+        auditService.record(new AuditRecord(actor.uid(), actor.username(), actor.role(),
+                "cache.reheat", result.type(), result.key(), "POST", "/api/admin/cache/reheat",
+                "type=" + type + ", key=" + key + ", force=" + force, 0, "",
+                ClientIp.of(request), 0));
         log.info("[admin] 重预热 type={}, key={}, before={}, after={}, force={}, actor={}",
                 result.type(), result.key(), result.before(), result.after(), force, actor.username());
         return Result.ok(result);

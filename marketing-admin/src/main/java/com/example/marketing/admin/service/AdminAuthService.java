@@ -2,11 +2,14 @@ package com.example.marketing.admin.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.marketing.admin.config.AdminProperties;
+import com.example.marketing.admin.audit.AuditRecord;
 import com.example.marketing.admin.dto.LoginView;
 import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.admin.security.LoginGuard;
 import com.example.marketing.admin.infrastructure.entity.AdminSessionEntity;
 import com.example.marketing.admin.infrastructure.entity.AdminUserEntity;
 import com.example.marketing.admin.infrastructure.mapper.AdminUserMapper;
+import com.example.marketing.admin.audit.AuditService;
 import com.example.marketing.admin.security.LoginPolicy;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
@@ -44,8 +47,13 @@ public class AdminAuthService {
     private final AdminTokenCodec codec;
     private final PasswordEncoder passwordEncoder;
     private final AdminProperties properties;
+    private final LoginGuard loginGuard;
+    private final AuditService auditService;
 
     public LoginView login(String username, String rawPassword, String ip, String userAgent) {
+        long startedAt = System.nanoTime();
+        // 限速在 BCrypt 之前：这一层的目的是别让撞库把 CPU 吃满，验完再限就白花了那 50-100ms
+        loginGuard.check(ip);
         LocalDateTime now = LocalDateTime.now();
         AdminUserEntity user = findByName(username);
         boolean matches = passwordEncoder.matches(rawPassword,
@@ -53,7 +61,7 @@ public class AdminAuthService {
 
         LoginPolicy.Verdict verdict = LoginPolicy.evaluate(user, matches, now);
         if (verdict != LoginPolicy.Verdict.PASS) {
-            reject(user, verdict, now);
+            reject(user, username, verdict, now, ip, startedAt);
         }
 
         AdminUserEntity target = user;
@@ -67,6 +75,9 @@ public class AdminAuthService {
                 now.plusSeconds(properties.getAccessTtlSeconds()), ip, userAgent));
         clearFailures(target.getId());
         log.info("[admin] 登录成功 username={}, jti={}, ip={}", target.getUsername(), jti, ip);
+        auditService.record(new AuditRecord(target.getId(), target.getUsername(), target.getRole(),
+                "login.success", "session", jti, "POST", "/api/admin/auth/login",
+                "username=" + target.getUsername(), 0, "", ip, costMs(startedAt)));
         return new LoginView(token, "Bearer", properties.getAccessTtlSeconds(), target.getId(),
                 target.getUsername(), target.getDisplayName(), target.getRole());
     }
@@ -74,6 +85,8 @@ public class AdminAuthService {
     /** 主动登出：只作废当前这一个会话，同账号其他设备不动 */
     public void logout(AdminPrincipal actor, String reason) {
         sessionService.revoke(actor.jti(), reason);
+        auditService.record(AuditRecord.ofAction(actor.uid(), actor.username(), actor.role(),
+                "logout", "session", actor.jti(), ""));
         log.info("[admin] 登出 username={}, jti={}, reason={}", actor.username(), actor.jti(), reason);
     }
 
@@ -94,13 +107,22 @@ public class AdminAuthService {
                 .set(AdminUserEntity::getPwdVersion, user.getPwdVersion() + 1));
         // 改密必须把全部会话踢掉：只踢当前会话的话，被盗的旧 token 在新口令生效后还能用 15 分钟
         sessionService.revokeAll(user.getId(), "PASSWORD_CHANGED");
+        auditService.record(AuditRecord.ofAction(user.getId(), user.getUsername(), user.getRole(),
+                "password.change", "user", String.valueOf(user.getId()), ""));
         log.info("[admin] 改密成功并已作废全部会话 username={}", user.getUsername());
     }
 
-    private void reject(AdminUserEntity user, LoginPolicy.Verdict verdict, LocalDateTime now) {
+    private void reject(AdminUserEntity user, String username, LoginPolicy.Verdict verdict,
+                        LocalDateTime now, String ip, long startedAt) {
         switch (verdict) {
-            case DISABLED -> throw BizException.of(ErrorCode.UNAUTHORIZED, "账号已停用，请联系管理员");
-            case LOCKED -> throw BizException.of(ErrorCode.UNAUTHORIZED, "失败次数过多，账号已临时锁定");
+            case DISABLED -> {
+                audit(user, username, "login.disabled", ip, startedAt);
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "账号已停用，请联系管理员");
+            }
+            case LOCKED -> {
+                audit(user, username, "login.locked", ip, startedAt);
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "失败次数过多，账号已临时锁定");
+            }
             default -> {
                 if (user != null) {
                     LoginPolicy.FailureState state = LoginPolicy.onBadCredentials(user,
@@ -114,6 +136,7 @@ public class AdminAuthService {
                                 user.getUsername(), state.lockUntil());
                     }
                 }
+                audit(user, username, "login.bad_credentials", ip, startedAt);
                 throw BizException.of(ErrorCode.UNAUTHORIZED, "用户名或口令错误");
             }
         }
@@ -125,6 +148,19 @@ public class AdminAuthService {
                 .set(AdminUserEntity::getFailCount, 0)
                 .set(AdminUserEntity::getLockUntil, null)
                 .set(AdminUserEntity::getLastLoginTime, LocalDateTime.now()));
+    }
+
+    /** 失败也要留痕：撞库的签名就是同一个 IP 上的一串 login.bad_credentials */
+    private void audit(AdminUserEntity user, String username, String action, String ip, long startedAt) {
+        auditService.record(new AuditRecord(user == null ? null : user.getId(),
+                username == null ? "" : username, user == null ? "" : user.getRole(),
+                action, "user", user == null ? "" : String.valueOf(user.getId()),
+                "POST", "/api/admin/auth/login", "username=" + username,
+                ErrorCode.UNAUTHORIZED.getCode(), "", ip, costMs(startedAt)));
+    }
+
+    private static long costMs(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000;
     }
 
     private AdminUserEntity findByName(String username) {

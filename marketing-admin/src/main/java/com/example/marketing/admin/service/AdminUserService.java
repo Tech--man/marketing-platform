@@ -3,6 +3,7 @@ package com.example.marketing.admin.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.marketing.admin.dto.AdminUserView;
+import com.example.marketing.admin.security.AdminPrincipal;
 import com.example.marketing.admin.infrastructure.entity.AdminUserEntity;
 import com.example.marketing.admin.infrastructure.mapper.AdminUserMapper;
 import com.example.marketing.admin.security.LoginPolicy;
@@ -27,6 +28,7 @@ public class AdminUserService {
 
     private final AdminUserMapper userMapper;
     private final AdminSessionService sessionService;
+    private final com.example.marketing.admin.audit.AuditService auditService;
 
     public PageResult<AdminUserView> page(PageQuery query, String keyword) {
         LocalDateTime now = LocalDateTime.now();
@@ -50,7 +52,7 @@ public class AdminUserService {
      * 启停账号。停用必须同时抬 pwd_version 并作废全部会话：
      * 只改 status 列的话，已签发的 token 在剩余寿命内照样能过网关 —— 停用形同没停用。
      */
-    public AdminUserView setStatus(long id, String status) {
+    public AdminUserView setStatus(AdminPrincipal actor, long id, String status) {
         AdminUserEntity user = require(id);
         boolean disable = LoginPolicy.STATUS_DISABLED.equals(status);
         if (!disable && !LoginPolicy.STATUS_ACTIVE.equals(status)) {
@@ -69,7 +71,11 @@ public class AdminUserService {
         if (disable) {
             sessionService.revokeAll(user.getId(), "DISABLED");
         }
-        log.info("[admin] 账号状态变更 username={}, status={}", user.getUsername(), status);
+        auditService.record(com.example.marketing.admin.audit.AuditRecord.ofAction(
+                actor.uid(), actor.username(), actor.role(),
+                disable ? "user.disable" : "user.enable", "user", String.valueOf(user.getId()), ""));
+        log.info("[admin] 账号状态变更 actor={}, username={}, status={}",
+                actor.username(), user.getUsername(), status);
         return get(id);
     }
 
