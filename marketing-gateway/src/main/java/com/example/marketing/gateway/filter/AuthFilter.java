@@ -42,6 +42,12 @@ public class AuthFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // 后台凭证已在 AdminAuthFilter 判过（放行与拒绝都算判过）。这里用标记而不是把
+        // /api/admin/** 加进白名单：白名单是"谁都不许拦"，一旦 ADMIN_JWT_SECRET 漏配，
+        // 整个后台就变成免鉴权；标记只表示"这条已经有人判过了"。
+        if (Boolean.TRUE.equals(exchange.getAttributes().get(AdminAuthFilter.VERIFIED))) {
+            return chain.filter(exchange);
+        }
         GatewayProperties.Auth auth = properties.getAuth();
         if (!auth.isEnabled() || isWhitelisted(exchange)) {
             return chain.filter(exchange);

@@ -7,12 +7,12 @@ import com.example.marketing.common.api.Result;
 import com.example.marketing.common.cache.CacheReheatRegistry;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
-import com.example.marketing.common.security.AdminClaims;
+import com.example.marketing.admin.security.AdminPrincipal;
 import lombok.RequiredArgsConstructor;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,15 +42,15 @@ public class AdminCacheController {
 
     @GetMapping("/types")
     public Result<List<String>> types(
-            @RequestHeader(value = "Authorization", required = false) String authorization) {
-        identityService.require(authorization);
+            HttpServletRequest request) {
+        identityService.require(request);
         return Result.ok(registry.types());
     }
 
     /** force=false 只补缺失键，force=true 删了重建（运营改完配置走这条） */
     @PostMapping("/reheat")
     public Result<CacheReheater.Result> reheat(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
+            HttpServletRequest request,
             @RequestParam String type,
             @RequestParam String key,
             @RequestParam(defaultValue = "true") boolean force) {
@@ -59,10 +59,10 @@ public class AdminCacheController {
                     "当前进程没有任何缓存重预热实现（FULL 分进程形态下 reheater 在业务服务里），"
                             + "请在 owning 服务上执行或等 ⑤ 的跨进程转发");
         }
-        AdminClaims actor = identityService.require(authorization, AdminRoles.OPERATIONAL);
+        AdminPrincipal actor = identityService.require(request, AdminRoles.OPERATIONAL);
         CacheReheater.Result result = registry.reheat(type, key, force);
         log.info("[admin] 重预热 type={}, key={}, before={}, after={}, force={}, actor={}",
-                result.type(), result.key(), result.before(), result.after(), force, actor.sub());
+                result.type(), result.key(), result.before(), result.after(), force, actor.username());
         return Result.ok(result);
     }
 }

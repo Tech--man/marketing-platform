@@ -40,6 +40,12 @@ spring:
           uri: http://${SECKILL_HOST:127.0.0.1}:${SECKILL_PORT:8084}
           predicates:
             - Path=/api/seckill/**
+        # 管理后台：LITE 下 ADMIN_HOST=standalone、ADMIN_PORT=8085（同一进程），
+        # 默认值是 FULL 进程形态的独立 admin:8086
+        - id: admin-route
+          uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
+          predicates:
+            - Path=/api/admin/**
 
 marketing:
   gateway:
@@ -65,6 +71,17 @@ marketing:
       seckill-route:
         limit: ${RL_SECKILL:200}
         window-seconds: 1
+      # 后台单独一桶：50/s 的上限来自 BCrypt —— 单次口令校验 50-100ms 且在网关之后，
+      # 没有这一条，脚本化撞库只需要几十 QPS 就能把 admin 进程的 CPU 吃满，
+      # 而它和 C 端同进程时会连带影响服役档业务。route id 不在 map 里=完全不限流。
+      admin-route:
+        limit: ${RL_ADMIN:50}
+        window-seconds: 1
+
+    admin:
+      # 与 admin 服务同值；留空=后台整片 40300，C 端不受影响（见 AdminAuthFilter）
+      jwt-secret: ${ADMIN_JWT_SECRET:}
+      clock-skew-seconds: 30
 
 management:
   endpoints:
@@ -103,3 +120,8 @@ spring:
         - id: seckill-route
           uri: lb://marketing-seckill
           predicates: [ Path=/api/seckill/** ]
+        # 必须和上面 local 那段一起改：漏这条的表现是 FULL 形态后台整片 404，
+        # 而 LITE 一切正常——只在升档后才暴露。
+        - id: admin-route
+          uri: lb://marketing-admin
+          predicates: [ Path=/api/admin/** ]

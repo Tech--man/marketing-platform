@@ -61,6 +61,10 @@ wait_healthy marketing-standalone 8085 90
 # 网关四路指向聚合进程（standalone 不读这些变量）
 export ACTIVITY_HOST=127.0.0.1 COUPON_HOST=127.0.0.1 DISCOUNT_HOST=127.0.0.1 SECKILL_HOST=127.0.0.1
 export ACTIVITY_PORT=8085 COUPON_PORT=8085 DISCOUNT_PORT=8085 SECKILL_PORT=8085
+# 后台与 LITE 同进程：路由指向 standalone 的 8085。密钥两侧必须同值，
+# dev 档用固定占位值（AdminSecurityConfig 会为此打 WARN）
+export ADMIN_HOST=127.0.0.1 ADMIN_PORT=8085
+export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
 start_jvm marketing-gateway "$ROOT/marketing-gateway/target/marketing-gateway-1.0.0-SNAPSHOT-exec.jar" "$GATEWAY_OPTS"
 wait_healthy marketing-gateway 8090 60
 

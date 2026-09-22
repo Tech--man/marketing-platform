@@ -52,6 +52,15 @@ public class AdminSessionService {
         sessionMapper.insert(session);
     }
 
+    /**
+     * 按 accessTtl 上界吊销。经网关时后端拿不到 token 的 exp（网关只转发身份，
+     * 不转发它验过的字段），所以宁可多留一会儿：这把键的语义是"这个 jti 别再信了"，
+     * 留久一点只有好处。
+     */
+    public void revoke(String jti, String reason) {
+        revoke(jti, reason, Duration.ofSeconds(properties.getAccessTtlSeconds()));
+    }
+
     /** 吊销单个会话；ttl 由调用方按 token 剩余寿命给出 */
     public void revoke(String jti, String reason, Duration ttl) {
         markRevoked(jti, reason);

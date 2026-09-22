@@ -14,6 +14,15 @@
     <description>API 网关：路由、Token 鉴权、Redis+Lua 滑动窗口限流（秒杀独立限流分组）</description>
 
     <dependencies>
+        <!-- 只为复用 AdminTokenCodec：网关与后台必须共用同一套签名实现，
+             两份实现漂移的后果是"后台签的 token 网关认不出来"或反过来。
+             common 的 web/jdbc/redis 全是 optional，不会被拖进这个 WebFlux 进程
+             （starter-web 一旦进网关，Spring Cloud Gateway 直接启动失败）；
+             common 的自动装配整体 @ConditionalOnBean(DataSource)，网关无库 → 不生效。 -->
+        <dependency>
+            <groupId>com.example.marketing</groupId>
+            <artifactId>marketing-common</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway</artifactId>

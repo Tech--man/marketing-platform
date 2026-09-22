@@ -3,10 +3,10 @@ package com.example.marketing.admin.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.marketing.admin.config.AdminProperties;
 import com.example.marketing.admin.dto.LoginView;
+import com.example.marketing.admin.security.AdminPrincipal;
 import com.example.marketing.admin.infrastructure.entity.AdminSessionEntity;
 import com.example.marketing.admin.infrastructure.entity.AdminUserEntity;
 import com.example.marketing.admin.infrastructure.mapper.AdminUserMapper;
-import com.example.marketing.admin.security.AdminRoles;
 import com.example.marketing.admin.security.LoginPolicy;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
@@ -41,7 +41,6 @@ public class AdminAuthService {
 
     private final AdminUserMapper userMapper;
     private final AdminSessionService sessionService;
-    private final AdminIdentityService identityService;
     private final AdminTokenCodec codec;
     private final PasswordEncoder passwordEncoder;
     private final AdminProperties properties;
@@ -73,16 +72,13 @@ public class AdminAuthService {
     }
 
     /** 主动登出：只作废当前这一个会话，同账号其他设备不动 */
-    public void logout(String authorization, String reason) {
-        AdminClaims claims = identityService.resolve(authorization);
-        sessionService.revoke(claims.jti(), reason,
-                Duration.ofSeconds(Math.max(0, claims.exp() - Instant.now().getEpochSecond())));
-        log.info("[admin] 登出 username={}, jti={}, reason={}", claims.sub(), claims.jti(), reason);
+    public void logout(AdminPrincipal actor, String reason) {
+        sessionService.revoke(actor.jti(), reason);
+        log.info("[admin] 登出 username={}, jti={}, reason={}", actor.username(), actor.jti(), reason);
     }
 
-    public void changePassword(String authorization, String oldPassword, String newPassword) {
-        AdminClaims claims = identityService.resolve(authorization);
-        AdminUserEntity user = userMapper.selectById(claims.uid());
+    public void changePassword(AdminPrincipal actor, String oldPassword, String newPassword) {
+        AdminUserEntity user = userMapper.selectById(actor.uid());
         if (user == null) {
             throw BizException.of(ErrorCode.SESSION_REVOKED, "账号已不存在");
         }
@@ -99,12 +95,6 @@ public class AdminAuthService {
         // 改密必须把全部会话踢掉：只踢当前会话的话，被盗的旧 token 在新口令生效后还能用 15 分钟
         sessionService.revokeAll(user.getId(), "PASSWORD_CHANGED");
         log.info("[admin] 改密成功并已作废全部会话 username={}", user.getUsername());
-    }
-
-    /** 管理员强制下线某个会话 */
-    public void forceLogout(String authorization, String jti) {
-        identityService.require(authorization, AdminRoles.ADMIN);
-        sessionService.revoke(jti, "FORCE_LOGOUT", Duration.ofSeconds(properties.getAccessTtlSeconds()));
     }
 
     private void reject(AdminUserEntity user, LoginPolicy.Verdict verdict, LocalDateTime now) {

@@ -87,6 +87,8 @@ services:
       - "8090:8090"     # 对外唯一入口
     environment:
       <<: *app-env
+      # 容器形态走 nacos profile，后台路由是 lb://marketing-admin（按服务名发现），
+      # 不需要 ADMIN_HOST/ADMIN_PORT —— 那两个只在 local profile 下生效（LITE 用）
       # 网关自己也要注册进 nacos，才能按服务名 lb:// 发现四个业务服务的副本
       JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
 
