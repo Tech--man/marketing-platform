@@ -4,6 +4,7 @@ import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.api.Result;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -32,6 +33,20 @@ public class GlobalExceptionHandler {
                 .map(f -> f.getField() + ": " + defaultMessage(f))
                 .findFirst().orElse("参数校验失败");
         return Result.fail(ErrorCode.BAD_REQUEST, detail);
+    }
+
+    /**
+     * 请求体解析不了是客户端错误，不是系统错误。
+     *
+     * <p>没有这个 handler 时它落进 {@link #handleUnknown} 的 50000"系统繁忙"：调用方拿到
+     * "稍后再试"就去重试，而重试一万次也不会成功——少了一个引号被说成服务器忙，
+     * 是最容易把人引向错误排查方向的一类误报（⑤ 的冒烟实测撞到过）。</p>
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<Void> handleUnreadableBody(HttpMessageNotReadableException e) {
+        log.warn("[biz] 请求体解析失败: {}", e.getMessage());
+        return Result.fail(ErrorCode.BAD_REQUEST, "请求体不是可解析的 JSON，检查引号与字段名");
     }
 
     @ExceptionHandler(Exception.class)
