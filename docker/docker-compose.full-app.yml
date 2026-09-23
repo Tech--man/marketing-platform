@@ -42,6 +42,9 @@ x-app-defaults: &app-defaults
     ROCKETMQ_ADDR: mkt-rocketmq-namesrv:9876
     NACOS_ADDR: mkt-nacos:8848
     SPRING_PROFILES_ACTIVE: nacos
+    # 一容器一服务，全部继承同一个 form=FULL：扩容档的阈值只从 DB 的 GLOBAL/FULL 行取。
+    # 锚点只写一次——五个服务 + 网关共用，避免复制出几份会互相漂移的形态标识
+    DEPLOY_FORM: FULL
     # 后台 token 密钥：gateway 与 marketing-admin 都从这一个锚点继承，天然同值。
     # 用 :? 强制显式导出 —— 留空会让 AdminSecurityConfig 启动即失败，
     # 而"起不来"比"签出一个谁都能伪造的 admin token"好得多。

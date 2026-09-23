@@ -49,6 +49,10 @@ export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
 [ "${ADMIN_JWT_SECRET}" = "dev-only-secret-change-me" ] \
   && echo "!! ADMIN_JWT_SECRET 未设置，使用 dev 占位密钥（仅限本机开发）" >&2
 
+# 形态标识：在线配置按它分档。进程形态与容器形态同档，所以这里也是 FULL；
+# 与密钥一样必须在启动任何 JVM 之前导出（六个服务都在同一个 shell 里起）。
+export DEPLOY_FORM="${DEPLOY_FORM:-FULL}"
+
 assert_port_not_shadowed "$MYSQL_PORT"
 assert_port_not_shadowed "$REDIS_PORT"
 

@@ -43,6 +43,9 @@ export MYSQL_PORT="$DEV_MYSQL_PORT" REDIS_PORT="$DEV_REDIS_PORT"
 # start_jvm 就会被用到 —— 放在后面等于只给网关配了密钥，聚合进程直接死在健康检查上（实测）。
 # dev 档给固定占位值并让 AdminSecurityConfig 为此打 WARN。
 export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
+# 与密钥一样必须在启动任何 JVM 之前导出：standalone 与 gateway 要在同一个 form 下解析，
+# 否则会出现"业务进程按 LITE 收口、网关按 FULL 放行"这种两半都对但合起来漏水的组合
+export DEPLOY_FORM="${DEPLOY_FORM:-DEV}"
 
 start_jvm() { # name jar opts
   local name=$1 jar=$2 opts=$3

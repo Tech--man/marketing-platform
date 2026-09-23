@@ -33,6 +33,9 @@ services:
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
       # 预览形态消息通道：Redis Stream 替代 RocketMQ
       MQ_TYPE: redis-stream
+      # 形态标识：在线配置按它取 form=LITE 的覆盖（没配则只认 GLOBAL 的行）。
+      # 与下面 gateway 的 RL_* 是同一件事的两条路：env 是出厂值，DB 是在线覆盖。
+      DEPLOY_FORM: LITE
       # 消费并行度：与 Full 形态 @RocketMQMessageListener(consumeThreadNumber=8) 对齐。
       # 默认 1 worker 时实测消费净速率只有 ~24 msg/s（单线程 × 每条 2-3 次提交等 fsync），
       # 这既是吞吐墙也是两形态行为不等价，故显式可调：宿主机 MQ_STREAM_CONCURRENCY 覆盖
@@ -84,6 +87,9 @@ services:
       RL_SECKILL: "120"
       RL_ACTIVITY: "200"
       RL_DISCOUNT: "500"
+      # 网关与业务进程必须同一形态标识：不一致时两档的阈值会互相看不见，
+      # 而"两档共用同一份 MySQL + 同一个 Redis"正是本形态的前提
+      DEPLOY_FORM: LITE
     ports:
       - "8090:8090"   # 对外唯一入口（服务器可映射 80:8090）
     healthcheck:
