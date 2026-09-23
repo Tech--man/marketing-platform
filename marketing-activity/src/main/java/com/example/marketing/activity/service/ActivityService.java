@@ -14,6 +14,7 @@ import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.api.PageQuery;
 import com.example.marketing.common.api.PageResult;
 import com.example.marketing.common.exception.BizException;
+import com.example.marketing.common.exception.VersionGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -121,16 +122,12 @@ public class ActivityService {
      * 41000 继续只表示业务失败（⑤ T9 立的码表纪律）。
      */
     private void requireVersion(ActivityEntity entity, Integer expectedVersion) {
-        if (expectedVersion == null || !expectedVersion.equals(entity.getVersion())) {
-            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT,
-                    "活动已被他人修改（你看到的 version=" + expectedVersion
-                            + "，当前 " + entity.getVersion() + "），请刷新后重试");
-        }
+        VersionGuard.requireEqual(expectedVersion, entity.getVersion(), "活动");
     }
 
     private void flushWithVersion(ActivityEntity entity) {
         if (activityMapper.updateById(entity) == 0) {
-            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "数据已被他人修改，请刷新后重试");
+            throw VersionGuard.conflict("活动");
         }
     }
 

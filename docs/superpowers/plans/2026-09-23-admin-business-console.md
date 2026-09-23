@@ -1447,7 +1447,7 @@ git add marketing-discount scripts/ && git commit -m "feat(discount): ③ 规则
 **所以新建模板必须显式 warm，改库存必须 `reheat(force=true)`**，与预算那条同族。
 券模板今天只能靠 `docker/mysql/init*/01-schema.sql` 种子写入，本任务是净新增能力。
 
-- [ ] **Step 1: 写失败测试（四条）**
+- [x] **Step 1: 写失败测试（四条）**
 
 先确认这三处事实再动笔：`CouponTemplateService.reheat` 的公式（`:90-101`）、
 `warmStock` 的键名与 SETNX（`:54-60`）、`CouponTemplateEntity.version`（`Integer`，`:42` 带 `@Version`）。
@@ -1503,7 +1503,7 @@ git add marketing-discount scripts/ && git commit -m "feat(discount): ③ 规则
 第四条是码表纪律：`41008` 只表示"有人比你先改"，唯一键冲突是 `41000` —— 混用的话
 ④ 与后台前端会给出错误的动作建议（一个让你刷新，一个让你改编号）。
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 ```java
     @Transactional(rollbackFor = Exception.class)
@@ -1545,7 +1545,7 @@ git add marketing-discount scripts/ && git commit -m "feat(discount): ③ 规则
 > 把它的公式抽成一个包内可见的 `computeRemain(...)` 复用，**不要复制第二份**——
 > 地雷 E 的起因就是两处各写一遍同一公式。
 
-- [ ] **Step 3: controller + 审计 + 跑测试 + 提交**
+- [x] **Step 3: controller + 审计 + 跑测试 + 提交**
 
 照 Task 3 Step 4-8 做（列表 `GET /api/admin/coupon/templates` 走 `PageResult<TemplateView>`；
 `POST` 新建；`PUT /{no}/stock`；`PUT /{no}/status` 上下线）。审计 `resourceType="coupon-template"`。
@@ -1874,6 +1874,17 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 17. **在 python 里生成 shell 片段时不要用 shell 层的 `'"'"'` 转义**：那是给 heredoc 用的，
     在 python 字符串里会原样落进脚本，产出 `'"'"'"code":0'"'"'` 这种坏参数。
     `bash -n` 抓得住（这次就是它抓的），所以脚本改完必跑 `bash -n`。
+
+18. **探针的目标值必须落在合法区间内才有分辨力**：第一次探券的库存端点把
+    `totalStock` 设成 1100，而该模板已发 7151 张 —— 被新写的守卫判成 40000 拒了，
+    看起来却像"改了没生效"。读一眼真实数字（total 100000 / issued 7151 / remain 92841）
+    再改成 100100，才看到 remain 跳到 92949。与修正 #13 是同一条教训的第二次命中。
+19. **`updateTotalStock` 改成调 `reheat(no, true)`，不自己 DEL+算一遍**：
+    原写法复用了 `remainOf` 公式但复制了"重建"这条路径 —— 公式一份、路径两份，
+    仍然是地雷 E 的形态。走 reheat 之后 before/after 由它给出，日志与 ④ 拿到的
+    就是键里真正的值。测试不用改（`verify(stockService).overwrite(...)` 断言的是外部效果）。
+20. 顺带把三处 `requireVersion` 收进 `common/exception/VersionGuard`
+    （activity、discount、coupon 各有一份同码同文案的判断，第三份出现时就该收口）。
 
 ## 编写进度
 

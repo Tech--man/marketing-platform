@@ -7,6 +7,7 @@ import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.api.PageQuery;
 import com.example.marketing.common.api.PageResult;
 import com.example.marketing.common.exception.BizException;
+import com.example.marketing.common.exception.VersionGuard;
 import com.example.marketing.common.util.JsonUtils;
 import com.example.marketing.discount.domain.PromoRuleDsl;
 import com.example.marketing.discount.dto.RuleSaveRequest;
@@ -61,7 +62,7 @@ public class RuleAdminService {
         String before = existing.getName();
         fill(existing, request, ruleJson);
         if (promoRuleMapper.updateById(existing) == 0) {
-            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "规则已被他人修改，请刷新后重试");
+            throw VersionGuard.conflict("规则");
         }
         ruleCacheManager.bumpVersion();
         log.info("[discount] 规则更新 {}（原 name={}）", existing.getRuleNo(), before);
@@ -91,11 +92,7 @@ public class RuleAdminService {
     }
 
     private void requireVersion(PromoRuleEntity entity, Integer expectedVersion) {
-        if (expectedVersion == null || !expectedVersion.equals(entity.getVersion())) {
-            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT,
-                    "规则已被他人修改（你看到的 version=" + expectedVersion
-                            + "，当前 " + entity.getVersion() + "），请刷新后重试");
-        }
+        VersionGuard.requireEqual(expectedVersion, entity.getVersion(), "规则");
     }
 
     /** 以下两个方法从 DiscountController 原样搬来，不改逻辑：那是既有的 DSL 组装口径 */

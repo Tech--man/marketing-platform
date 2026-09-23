@@ -1,9 +1,17 @@
 package com.example.marketing.coupon.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.api.PageQuery;
+import com.example.marketing.common.api.PageResult;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
+import com.example.marketing.common.exception.VersionGuard;
+import com.example.marketing.coupon.dto.StockUpdateRequest;
+import com.example.marketing.coupon.dto.StatusUpdateRequest;
+import com.example.marketing.coupon.dto.TemplateCreateRequest;
+import com.example.marketing.coupon.dto.TemplateView;
 import com.example.marketing.coupon.infrastructure.entity.CouponTemplateEntity;
 import com.example.marketing.coupon.infrastructure.entity.UserCouponEntity;
 import com.example.marketing.coupon.infrastructure.mapper.CouponTemplateMapper;
@@ -11,6 +19,7 @@ import com.example.marketing.coupon.infrastructure.mapper.UserCouponMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -24,6 +33,7 @@ import java.util.List;
 public class CouponTemplateService implements CacheReheater {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
+    public static final String STATUS_INACTIVE = "INACTIVE";
 
     private final CouponTemplateMapper templateMapper;
     private final UserCouponMapper userCouponMapper;
@@ -46,6 +56,101 @@ public class CouponTemplateService implements CacheReheater {
             throw new BizException(ErrorCode.ACTIVITY_NOT_ONLINE, "券模板不在可领取状态/时间窗内");
         }
         return template;
+    }
+
+    /**
+     * 新建券模板（③ 净新增能力：今天模板只能靠 init.sql 种子写进库）。
+     *
+     * <p>必须显式 warm：领券走 Redis 预扣，未预热时 {@code deduct} 返回 NOT_WARMED，
+     * 由 {@code CouponGrantService} 补热再重试一次 —— 不预热不会失败，但第一笔领券白跑一趟。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CouponTemplateEntity create(TemplateCreateRequest request) {
+        if (templateMapper.selectOne(Wrappers.<CouponTemplateEntity>lambdaQuery()
+                .eq(CouponTemplateEntity::getTemplateNo, request.templateNo())) != null) {
+            // 唯一键冲突是业务冲突（41000），不是并发覆盖（41008）：
+            // 混用的话后台会提示"刷新后重试"，而刷新根本不解决问题——该改编号
+            throw new BizException(ErrorCode.BIZ_ERROR, "券模板编号已存在: " + request.templateNo());
+        }
+        CouponTemplateEntity entity = new CouponTemplateEntity();
+        entity.setTemplateNo(request.templateNo());
+        entity.setActivityNo(request.activityNo());
+        entity.setName(request.name());
+        entity.setCouponType(request.couponType());
+        entity.setFaceValue(request.faceValue());
+        entity.setThresholdAmount(request.thresholdAmount());
+        entity.setTotalStock(request.totalStock());
+        entity.setPerUserLimit(request.perUserLimit());
+        entity.setValidDays(request.validDays());
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setStartTime(request.startTime());
+        entity.setEndTime(request.endTime());
+        entity.setVersion(0);
+        templateMapper.insert(entity);
+        warmStock(entity);
+        log.info("[coupon] 新建券模板 {} totalStock={}", entity.getTemplateNo(), entity.getTotalStock());
+        return entity;
+    }
+
+    /**
+     * 后台改总库存。<b>必须走 force 重建</b>：键里存的是剩余量，且 {@code warmStock} 是 SETNX，
+     * 不 DEL 就永远生效不了（地雷 A）。余量算的是 {@link #remainOf} 那一份公式，不另算。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CouponTemplateEntity updateTotalStock(String templateNo, StockUpdateRequest body) {
+        CouponTemplateEntity template = getRequiringExists(templateNo);
+        VersionGuard.requireEqual(body.version(), template.getVersion(), "券模板");
+        long issued = issuedCount(template.getId());
+        if (body.totalStock() < issued) {
+            // 允许改小，但不能改到已发数以下：remainOf 会把它钳成 0，
+            // 于是"改了库存"看起来像"券卖光了"——一个会把人引向错误处置的显示
+            throw BizException.of(ErrorCode.BAD_REQUEST,
+                    "总库存不能小于已发出数（已发 " + issued + "，试图设为 " + body.totalStock() + "）");
+        }
+        int before = template.getTotalStock();
+        template.setTotalStock(body.totalStock());
+        if (templateMapper.updateById(template) == 0) {
+            throw VersionGuard.conflict("券模板");
+        }
+        // 走 reheat 而不是自己 DEL+算一遍：公式与路径都只有一份，
+        // 且它返回的 before/after 就是"键里到底变成了多少"，日志与 ④ 都能用
+        CacheReheater.Result rebuilt = reheat(templateNo, true);
+        log.info("[coupon] 库存变更 {} totalStock {} -> {}，{}",
+                templateNo, before, template.getTotalStock(), rebuilt.formula());
+        return template;
+    }
+
+    /**
+     * 上下线。<b>只补热不重建</b>：停用时不动键（在途的领券该让它跑完），
+     * 重新上线时键可能从没建过 —— 那是 SETNX 的场景，不是 DEL 的场景。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CouponTemplateEntity updateStatus(String templateNo, StatusUpdateRequest body) {
+        if (!STATUS_ACTIVE.equals(body.status()) && !STATUS_INACTIVE.equals(body.status())) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "status 只能是 ACTIVE 或 INACTIVE，当前 " + body.status());
+        }
+        CouponTemplateEntity template = getRequiringExists(templateNo);
+        VersionGuard.requireEqual(body.version(), template.getVersion(), "券模板");
+        template.setStatus(body.status());
+        if (templateMapper.updateById(template) == 0) {
+            throw VersionGuard.conflict("券模板");
+        }
+        if (STATUS_ACTIVE.equals(body.status())) {
+            stockService.warmIfAbsent(template, remainOf(template, issuedCount(template.getId())));
+        }
+        log.info("[coupon] 模板 {} 状态 -> {}", templateNo, body.status());
+        return template;
+    }
+
+    /** 后台列表：状态可选过滤 */
+    public PageResult<TemplateView> list(PageQuery query, String status) {
+        Page<CouponTemplateEntity> page = templateMapper.selectPage(
+                new Page<>(query.getPage(), query.getSize()),
+                Wrappers.<CouponTemplateEntity>lambdaQuery()
+                        .eq(status != null && !status.isBlank(), CouponTemplateEntity::getStatus, status)
+                        .orderByAsc(CouponTemplateEntity::getTemplateNo));
+        return PageResult.of(page.getTotal(), query.getPage(), query.getSize(),
+                page.getRecords().stream().map(TemplateView::from).toList());
     }
 
     /**
