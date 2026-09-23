@@ -217,3 +217,15 @@ nacos 配置中心、refresh token / OAuth2 / SSO / LDAP、RBAC 角色表与权�
 ## 12. 下一步
 
 按 ⑤ → ③ → ④ → ⑥ 逐段展开：每段进入实施前先按本文件出一份段内 spec（`docs/superpowers/specs/`）+ 实施计划，批次划分与验证清单在那一层给。
+
+## 13. 实施偏离（⑤ 落地时确认，已回写）
+
+⑤ 的段内 spec 是 `2026-09-23-online-config-delivery-design.md`（含完整理由与实测证据），这里只留摘要：
+
+1. §5.1 的 version 取自 `MAX(version)+1` → 实际取 `INCR mkt:cfg:seq`：并发写撞出同一个版本号会让读方永久停在陈旧快照上（正是本文件风险 #2 要防的静默不一致）。
+2. §5.3 的发布目标按"表里出现过的 form" → 实际按固定四形态遍历，合并为空时**删**键：否则把某形态的行删干净之后，"恢复出厂"不生效。
+3. §5.4/§5.5 的灰度"Redis 只当变更通知 + activity 声明一条 ConfigDefinition" → 实际改为 activity 每 5s 回源 DB，灰度既不进 `admin_config` 也不声明：通知键需要有人 bump，而 bump 者（业务侧后台写端点）的审计归属在 ③ 才解决（段内 spec §4 记了这个结）。回源 DB 顺带把"Redis 被清 → 曾设 5% 的活动意外全量"这一整类风险消掉。
+4. §5.5 "各服务把自述写进 `mkt:cfg:schema:{service}`" 的 `{service}` 取 `spring.application.name`（进程名），而 `ConfigDefinitionProvider.service()` 是模块名——LITE 下业务模块的自述挂在 `marketing-standalone` 上，因此载荷里每条声明额外带一个 `owner` 字段供后台显示归属。
+5. 事实 #8 的准确表述：网关缺的是 DataSource 与**阻塞客户端的用法**，不是 classpath 上没有 `StringRedisTemplate`（reactive starter 会把 spring-data-redis 核心带进来）。因此新增 `ConfigSyncer` 标记接口让阻塞轮询器在网关让位，否则两套节拍同时喂同一份生效值。
+6. 附带修掉一个真缺陷：请求体解析失败原先落进 catch-all 返回 50000"系统繁忙，请稍后再试"——客户端错误被说成服务器忙，会把人引向错误的排查方向。现在 `HttpMessageNotReadableException → 40000`。
+7. §5.2 的读侧稳态补了一条约束：**没写过在线配置时（版本键不存在）轮询必须静默**。计划的短路条件 `version == applied && version != 0` 在"键不存在=0"这件事上把首次与稳态混为一谈，实测六个进程各刷 12 条/分钟 INFO。加 `primed` 标志区分"从没取过"与"取过且为空"后，④ 拿到的 `degraded`/日志才是可用信号。

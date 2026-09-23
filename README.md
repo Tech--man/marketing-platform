@@ -117,6 +117,9 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | 变量 | 作用 | 缺配的后果 |
 |---|---|---|
 | `ADMIN_JWT_SECRET` | 后台 token 的 HS256 密钥 | 空值时 admin 侧启动即失败（宁可不签，也不签一枚谁都能伪造的 admin token）。LITE 由 `deploy-preview.sh` 随机生成并落在 `.admin-jwt-secret`（0600、已 gitignore）复用；FULL 由 `deploy-full.sh` 在入口显式拦。dev/start-all 用 `dev-only-secret-change-me` 占位并打 WARN |
+| `DEPLOY_FORM` | 空（=只认 `GLOBAL` 覆盖） | 形态标识 `LITE`/`FULL`/`DEV`：在线配置按它选生效值（`form 行 > GLOBAL 行 > 出厂值`）。**不部署它就等于没有这套机制**；取值拼错也退回 GLOBAL 并告警——把 FULL 的阈值套到形态名拼错的进程上是本仓库最贵的一类错 |
+| `CONFIG_POLL_SECONDS` | `5` | 各进程比对配置版本的节拍，即"改完阈值到全档生效"的延迟上限 |
+| `GRAY_REFRESH_SECONDS` | `5` | 灰度规则回源 DB 的节拍（灰度真值在 `activity.gray_percent`，不依赖 Redis） |
 | `RL_ADMIN` | 后台路由的限流阈值（默认 50/s） | 路由 id 不在限流 map 里＝完全不限流；后台登录口的 BCrypt 单次 50-100ms，几十 QPS 就能把与 C 端同进程的后台打满 |
 
 **注册中心模式已实测**（`PROFILES=nacos ./scripts/start-all.sh`）：5 个服务全部注册进 Nacos；
@@ -219,7 +222,7 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 
 | 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
-| **LITE 服役档** | standalone 529-599 + gateway 323-361 MiB | mysql 172-266 + redis 8-13 MiB | **≈ 1.09-1.24 GiB** | `docker stats`；standalone 内含管理后台模块。区间是同日多次采样的跨度 —— JVM 常驻集随负载与运行时长爬升，单点数字会骗人。**加后台没触到调 `mem_limit` 的阈值（640 MiB）**，最高一次 599 MiB |
+| **LITE 服役档** | standalone 517-599 + gateway 323-361 MiB | mysql 172-266 + redis 8-13 MiB | **≈ 1.09-1.24 GiB** | `docker stats`；standalone 内含管理后台模块。区间是同日多次采样的跨度 —— JVM 常驻集随负载与运行时长爬升，单点数字会骗人。**加后台没触到调 `mem_limit` 的阈值（640 MiB）**，最高一次 599 MiB；⑤ 复跑当天两次采样 517 / 526 MiB（区间下沿因此放宽） |
 | **dev 开发档** | 2 个本机 JVM ≈ 180-244 MiB | 数据层 184-256 MiB | **≈ 0.36-0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比；区间是两次实测，差值主要是 MySQL 缓冲池预热程度 |
 | **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.7 GiB（484-689 MiB/个） | nacos 1.11 + rocketmq 1.68 + 数据层 0.26 + prometheus 0.03 GiB | **≈ 5.8 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
 | **FULL 扩容档**（本机进程，5 JVM） | 5 JVM `ps` RSS 合计 253 MiB（**刚启动即采样**；同一进程跑 10 分钟后到 309 MiB，ps RSS 随负载爬升） | rocketmq 1.77 GiB（nacos/prometheus 未起） | **≈ 2.0 GiB** | 混合口径 + 采样时点不一致，只作量级参考，别与上三行比 |
@@ -309,7 +312,7 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏
 `cannot find symbol: log / setXxx`。
 
-## 四、四条核心链路
+## 四、五条核心链路
 
 ### 1. 领券（削峰 + 最终一致）
 
@@ -368,9 +371,43 @@ POST /api/admin/auth/login（账号口令，dev 种子见下）
   `operator/demo123`（operator）、`viewer/demo123`（read-only）
 - **`POST /api/admin/cache/reheat` 只在 LITE 聚合形态可用**：重预热公式由各业务模块实现并注册成
   Bean（预算在 activity、券在 coupon、桶在 seckill），FULL 分进程时 admin 进程里一个都没有，
-  端点显式回 41000 并点名 owning 服务，不静默返回"刷新成功"。跨进程转发是第⑤段的内容
+  端点显式回 `41010 本形态不适用` 并点名 owning 服务，不静默返回"刷新成功"。
+  （`41010` 与业务失败 `41000` 分开：前者该换个地方执行，后者该找业务方。跨进程**回执**属于第③段）
 - 已知边界：绕过网关直连服务端口时，后台靠"身份头缺失则本地验签"回退兜住；而四个 C 端服务
   本来就不校验 token（鉴权在网关），所以**任何形态下都不该把业务服务端口暴露到不可信网络**
+
+### 5. 在线配置下发（改阈值与灰度不重启）
+
+**真值在哪**：`admin_config(cfg_key, form, cfg_value, version, updated_by, remark)`，唯一键
+`(cfg_key, form)`；灰度是例外，真值在 `activity.gray_percent` / `gray_whitelist` 两列。
+**删行 = 恢复出厂**（不写回原值，否则 yml 改了会被一行陈旧 DB 值永远压住）。
+
+**生效路径**：admin 写库后按四种形态各生成一份**全量合并快照**写进
+`mkt:cfg:snapshot:{form}`，各进程每 5s 比对 `mkt:cfg:version:{form}`、变了才取快照。
+单键全量而不是每参数一键：网关没有库，载荷必须自包含，而多键存在"改了 A 又改 B、读方拿到
+一新一旧"的半应用窗口。版本号取自 `INCR mkt:cfg:seq`（不是 DB 的 MAX+1——并发撞号会让读方
+停在陈旧快照上而不再取第二份）。
+
+| 键 | 声明方 | 消费点 | 缺值时 |
+|---|---|---|---|
+| `gateway.ratelimit.{activity,coupon,discount,seckill,admin}-route.limit` | 网关 | `RateLimitFilter` 经 `RateRuleResolver` | 退回本进程 yml 的 `RL_*`；`window-seconds` 恒取 yml |
+| `discount.calc-timeout-ms` / `discount.max-rules-per-order` | discount | `DiscountCalcService` / `PromoEngine` | 退回 `DiscountProperties` 默认 50 / 5 |
+| `seckill.token-ttl-seconds` / `pay-timeout-seconds` / `bought-mark-ttl-seconds` | seckill | `SeckillRuntimeConfig`（6 处调用点的唯一取值口） | 退回 600 / 300 / 86400 |
+| 灰度 `activity.gray_percent` | activity | `GrayRuleCache` 每 5s 回源 DB | 列为 NULL = 未配灰度 = 全量放行 |
+
+**形态隔离**：`DEPLOY_FORM` 决定读哪一份（`form 行 > GLOBAL 行 > 出厂值`）。**不部署这个
+env 就等于没有这套机制**——只认 `GLOBAL` 的覆盖，行为与本段之前逐字节一致；取值拼错同样
+退回 GLOBAL 并告警，因为"把 FULL 的 1000/s 套到单机 LITE 上"是这里最贵的一种错。
+灰度不走 Redis 通知而直接回源 DB：`Redis 被清空 → 曾设 5% 的活动意外全量`这个后果不该存在。
+
+**稳态必须安静**：没人写过在线配置时（版本键不存在），轮询器不能每 5s 重取一次空快照再刷条
+INFO——区分"从没取过"与"取过且为空"，否则六个进程各 12 条/分钟，真降级信号会被埋掉。
+
+**失败语义**：未声明的键与越界值在**写侧**就被 `40000` 拒（写了也没人消费 = 后台上一个假按钮）；
+读侧对快照里每个条目按本地声明逐条校验，不合格的忽略并退回出厂值（记
+`marketing.config.entry.ignored`），所以限流配置写错的后果最多是"放行偏宽或偏紧"，绝不会让
+网关拒绝服务或起不来；快照 JSON 坏了则整份按空应用（退回出厂，而不是抱着陈旧值不放）；
+落库成功但广播失败返回 `41009 配置已落库但未广播`，配一个幂等的"重新广播"动作修复。
 
 ## 五、API 速查（经网关 8090；C 端需 `Authorization: Bearer demo-token-123`，后台需登录换来的 admin token）
 
@@ -389,17 +426,20 @@ POST /api/admin/auth/login（账号口令，dev 种子见下）
 | GET | /api/admin/users · /sessions · /audits | 账号 / 在线会话 / 审计，统一 `PageResult`（含 total）；`?mine=true` 只看自己的会话 |
 | PUT | /api/admin/users/{id}/status?status= | 启停账号（仅 admin；停用同时作废其全部会话） |
 | DELETE | /api/admin/sessions/{jti} | 强制下线单个会话（仅 admin） |
-| GET/POST | /api/admin/cache/types · /cache/reheat?type=&key=&force= | 可刷新的缓存类型 · 重预热（admin+operator；FULL 分进程下显式报错，见第四节链路 4） |
+| GET/POST | /api/admin/cache/types · /cache/reheat?type=&key=&force= | 可刷新的缓存类型 · 重预热（admin+operator；FULL 分进程下显式回 41010，见第四节链路 4） |
+| GET | /api/admin/config | 在线配置总览：本档形态、当前生效值与来源（FORM/GLOBAL/DEFAULT）、每个形态的行、ORPHAN 与未上报服务、本进程被忽略的键 |
+| PUT/DELETE | /api/admin/config（body `cfgKey`+`form`+`value`+`remark` / `?cfgKey=&form=`） | 写在线覆盖 · 删行=恢复出厂。**只有 `admin` 角色**（operator 在网关可写运维，但改不动阈值），未声明的键与越界值一律 40000 |
+| POST | /api/admin/config/rebroadcast | 按 DB 现状重发快照（幂等）：修 `41009 配置已落库但未广播` 的那个窗口 |
 
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 106 个单测 / 25 个类：见下
-./scripts/smoke-test.sh  # 端到端 52 条断言（三套形态通用，需服务已启动）
+mvn test                 # 182 个单测 / 45 个类：见下
+./scripts/smoke-test.sh  # 端到端 72 条断言（五条链路，三套形态通用，需服务已启动）
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000）
 ```
 
-**单测（106 用例 / 25 类）**分五族：
+**单测（182 用例 / 45 类）**分六族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
@@ -414,6 +454,13 @@ mvn test                 # 106 个单测 / 25 个类：见下
   只读角色写 403、缺密钥时后台整片拒而 C 端不受影响）、审计摘要脱敏（JSON 与 key=value
   两种形态、驼峰与下划线都盖）；这一族的变异检查是必须的——把"敏感键判定"改成恒 false，
   5 条里红 4 条；把网关的"放行登录口"改成恒真，10 条里红 6 条；
+- **在线配置下发（⑤）**：形态解析优先级（`form 行 > GLOBAL 行`，且**别的形态一行都读不到**）、
+  逐条类型/边界校验与"未声明即忽略"、快照 JSON 坏了退化成空快照、轮询器版本比对与
+  "Redis 抖动时保住现值"、`ConfigSyncer` 让位条件、后台写侧四道裁决（未声明/越界/非法 form 拒、
+  删不中 404）、`INCR` 序号与"落库未广播 → 41009 + 重广播"、灰度 CSV 与 `[0,100]` 钳位、
+  `PromoEngineOnlineLimitTest`（在线把叠加数压到 1，引擎真的只应用一条）。
+  变异检查做了 20 处，全部咬人：例如把 `ConfigMerge` 改成"不区分别人的 form"，两条隔离断言立即红；
+  把 `resolve` 的"路由不在 map 里=不限流"改成 `limit=0`，那条暗道断言就红。
 - **装配层回归**：聚合形态扫描边界 + common 条件装配矩阵（含重预热注册表），
   用 ApplicationContextRunner + H2 + `127.0.0.1:1` 永不连接的 Lettuce 满足类型条件，
   不依赖中间件。这族把"预览栈起不来"这类装配 bug 从 2-3 分钟的构建+部署排查压到秒级。
@@ -450,11 +497,20 @@ Connection prematurely closed BEFORE response` → 该请求 500。机制：上�
 **五条路由却可能还没通**：Spring Cloud Gateway 对 `lb://` 是首次命中才去 Nacos 订阅该服务，
 订阅与实例推送到位前回 503 空响应。表现为"冒烟 28 条 C 端全红"，而症状与"异步链路坏了"
 一模一样（实测被它骗过一轮排查）。现在部署收尾会按路由各打一发真实请求、等到 `"code":0`
-才宣布就绪，等不到就非零退出。另一个同源现象：容器化部署时若同时重建多个服务，
+才宣布就绪，等不到就非零退出。**探针路径本身也会漂**：券路由那条原本打
+`/api/coupon/templates`，该接口早已不存在 → 恒 40400，部署每次白等 120s 再非零退出，而冒烟却全绿
+（两者判据不同，最容易骗人）。现在探针改成 `/api/coupon/stock/CT2026001`，并把末次响应打进失败文案——
+"路径漂了"与"订阅没到位"是两种病，别再混着查。另一个同源现象：容器化部署时若同时重建多个服务，
 Nacos 客户端有概率在 STARTING 阶段注册失败导致该 JVM 退出（`restart: unless-stopped` 会拉起），
 遇到单个服务反复重启先看这个。
 
-**冒烟（52 条，四链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+**同源现象⑤（实测）**：`deploy-full.sh` 的重启动作会把 broker 也重建（`SKIP_BUILD=1` 复跑后 34 秒
+broker 重新 boot），此时立刻跑冒烟会吃到一次"消息投出去但 2 分钟没人消费"——链路 3 停在
+`ACCEPTED`、40s 轮询超时，最后由 `local_message` 补偿扫描把它兜住（下单成功，只是慢）。
+这不是②/⑤的回归，但它是**托底链路第一次被实测证明有效**：MQ 通道失联时消息不丢，代价是延迟从
+秒级变成补偿周期级。要干净复跑，等 broker 起来一分钟后跑第二次；别把这一轮的红灯当成异步链路坏了。
+
+**冒烟（72 条，五链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、超预算 41003、灰度命中、可参与位切换）+ **预算算术守卫**：
 被拒扣减不留痕、重复扣减在 `data` 里标 `REPLAYED`、同 bizKey 换活动仍真扣 `DEDUCTED`；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖；
@@ -462,22 +518,34 @@ Nacos 客户端有概率在 STARTING 阶段注册失败导致该 JVM 退出（`r
 只读角色写 403 而读放行、分页带 total 且不超 size、**地雷 A 的回归锚**：改 DB 后缓存不动 →
 `reheat` 后 C 端余额等于新口径；被拒的重预热也显式报错并留审计、登出后同一 token 立即 40102）。
 链路 4 的两条重预热断言按形态分岔判据（读 `/cache/types` 而不是猜环境变量）：
-LITE 验"刷成功"，FULL 分进程验"显式 41000 且文案点名 owning 服务"——两边都是真断言，没有跳过。
+LITE 验"刷成功"，FULL 分进程验"显式 `41010 本形态不适用` 且文案点名 owning 服务"——两边都是真断言，没有跳过。
+
+**链路 5 在线配置下发**：本档形态自证（`ownForm=LITE`）、写 GLOBAL 阈值 3/s **不重启**就吃 429、
+越界与未声明的键在写侧就 40000（并同时断言报错文案，否则"body 没解析成功"能冒充"校验通过"）、
+operator 越权改阈值 40300、给另一档写 199999 **不污染**本档、删光 8 个快照键后退回本档 yml
+出厂值且网关继续服务、"重新广播"把在线值找回来、删行=恢复出厂、灰度按 DB 列改 5% 后 ≤8s
+生效且**删光 Redis 键也不会变成全量放行**、种子灰度仍在、收尾断言 `admin_config` 归零
+（跑挂了也不给下一档留一行极端阈值）。
+
+**脚本两条不变式**（都是踩过才写下的）：① `poll` 的针必须与紧随其后的断言针一致——轮询超时照样把
+最后一次响应打出来，只查 `"couponCode"` 这个键名会让 `PROCESSING`（`"couponCode":null`）蒙过断言，
+于是红点落在下一行的"核销 40000 couponCode 必填"上，看着像核销坏了（FULL 进程形态首跑那 1 条红就是它）；
+② `expect` 拒绝空针，因为 `grep -q ""` 恒真，"上一步取值失败"会伪装成"这条通过"。
 
 并发段的库存基线**从接口读、不写死**，并断言恒等式 `分桶余量 + DB 已售 == 总库存`
 （对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测连跑 3 轮全绿。
 
 **三套形态的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
-断言集在长（S2 加了 5 条预算/消息守卫，后台那批又加了链路 4 的 13 条），所以标了跑时的断言数
-—— **34/39 那几格是当时版本全绿，不代表已在 52 条下复跑过**。
+断言集在长（S2 加了 5 条预算/消息守卫，后台那批加了链路 4 的 13 条，⑤ 又加了链路 5 的 20 条），
+所以标了跑时的断言数——**低于当前基数的格子只代表"当时那一版全绿"，不等于已在新断言下复跑过**。
 
 | 形态 | 最近一次 | 通道证据 |
 |---|---|---|
-| LITE 服役档（容器） | **52/52**（2026-09-22，后台上线后复跑） | Redis Stream 键 + XDEL 生效（跑完 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致 |
+| LITE 服役档（容器） | **72/72**（2026-09-23，含链路 5 在线配置） | Redis Stream 键 + XDEL 生效（跑完 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零 |
 | dev 开发档（本机 2 JVM） | **52/52**（2026-09-22） | 同上 |
-| FULL · 本机进程形态 | **52/52**（2026-09-22，连跑 5 轮全绿） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0 |
+| FULL · 本机进程形态 | **72/72**（2026-09-23，含链路 5；紧接 LITE 那轮之后**不做任何 SQL 清理**原地切换） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零 |
 | FULL · 本机进程 · 每服务一库隔离档 | **52/52**（2026-09-22） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`，见上文引注 |
-| FULL · 容器化 1 副本 | **52/52**（2026-09-22） | 同上 + 后台走 `lb://marketing-admin` 服务发现 |
+| FULL · 容器化 1 副本 | **72/72**（2026-09-23） | 同上 + 后台走 `lb://marketing-admin` 服务发现 |
 | FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 52 复跑） | 第三节的多副本三条证据 |
 
 ## 七、扩展点（占位 → 生产的升级路径）
