@@ -57,7 +57,9 @@ mkt:cfg:schema:{service} STRING(JSON)     该服务自述的可改参数清单
 
 母版 §4 要求"配置类写只走 `/api/admin/**`"、§6.0 要求业务写端点长在 owning 服务、§6.2 又要求"所有写走 `AuditSink` 记 before/after"。三条在 FULL 分进程下不可能同时成立：`AuditSink` 与 `admin_audit_log` 都在 `marketing-admin`，而 activity/coupon/discount/seckill 进程既没有那张表的 DataSource，也不该有（每服务一库档它连不上）。⑤ 靠偏离 #3 避开了这个结（本段不开业务侧写端点）。
 
-③ 必须正面解决，已有倾向：owning 服务把审计记录 `LPUSH` 进 `mkt:audit:pending`（定长 `LTRIM` + TTL，防 admin 长时间不消费把 Redis 撑大），由 `marketing-admin` 定时 drain 落 `admin_audit_log`。这样 before/after 仍由唯一知道它们的进程给出，而表的所有权不下放。这条要在 ③ 的段内 spec 里定稿，不接受"先不落审计"。
+③ 必须正面解决，已有倾向：owning 服务把审计记录 `LPUSH` 进 `mkt:audit:pending`（定长 `LTRIM` + TTL，防 admin 长时间不消费把 Redis 撑大），由 `marketing-admin` 定时 drain 落 `admin_audit_log`。这样 before/after 仍由唯一知道它们的进程给出，而表的所有权不下放。这条已在 ③ 的段内 spec 定稿（`2026-09-23-admin-business-console-design.md` §4.1）：**改用 Redis Stream
+`mkt:audit:pending` + consumer group drain，而不是这里候选的 `LPUSH + LTRIM + TTL`**——TTL 淘汰等于
+静默丢审计，与 ⑤ 自己立下的"静默不一致最贵"直接冲突。不接受"先不落审计"这条仍然成立。
 
 ## 5. 生效路径（逐参数）
 

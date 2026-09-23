@@ -218,6 +218,10 @@ nacos 配置中心、refresh token / OAuth2 / SSO / LDAP、RBAC 角色表与权�
 
 按 ⑤ → ③ → ④ → ⑥ 逐段展开：每段进入实施前先按本文件出一份段内 spec（`docs/superpowers/specs/`）+ 实施计划，批次划分与验证清单在那一层给。
 
+已出：⑤ `2026-09-23-online-config-delivery-design.md`（已实施，偏离见本文件 §13）；
+③ `2026-09-23-admin-business-console-design.md`（含对本文件 §6.0 身份件形状、§6.3 重预热回执与
+⑤ §4 审计载荷三处修改，理由在那份里）。
+
 ## 13. 实施偏离（⑤ 落地时确认，已回写）
 
 ⑤ 的段内 spec 是 `2026-09-23-online-config-delivery-design.md`（含完整理由与实测证据），这里只留摘要：
