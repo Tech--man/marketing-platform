@@ -3,7 +3,7 @@ package com.example.marketing.admin.controller;
 import com.example.marketing.admin.dto.ChangePasswordRequest;
 import com.example.marketing.admin.dto.LoginRequest;
 import com.example.marketing.admin.dto.LoginView;
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.admin.service.AdminAuthService;
 import com.example.marketing.admin.service.AdminIdentityService;
 import com.example.marketing.common.api.Result;

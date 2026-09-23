@@ -1,12 +1,12 @@
 package com.example.marketing.admin.controller;
 
 import com.example.marketing.admin.dto.AdminUserView;
-import com.example.marketing.admin.security.AdminRoles;
+import com.example.marketing.common.security.AdminRoles;
 import com.example.marketing.admin.service.AdminIdentityService;
 import com.example.marketing.admin.service.AdminUserService;
 import com.example.marketing.common.api.PageQuery;
 import com.example.marketing.common.api.PageResult;
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.common.api.Result;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;

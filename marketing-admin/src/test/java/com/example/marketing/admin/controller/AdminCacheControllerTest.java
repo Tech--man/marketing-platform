@@ -2,7 +2,7 @@ package com.example.marketing.admin.controller;
 
 import com.example.marketing.admin.audit.AuditRecord;
 import com.example.marketing.admin.audit.AuditService;
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.admin.service.AdminIdentityService;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.cache.CacheReheatRegistry;

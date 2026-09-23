@@ -3,7 +3,7 @@ package com.example.marketing.admin.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.marketing.admin.dto.AdminUserView;
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.admin.infrastructure.entity.AdminUserEntity;
 import com.example.marketing.admin.infrastructure.mapper.AdminUserMapper;
 import com.example.marketing.admin.security.LoginPolicy;

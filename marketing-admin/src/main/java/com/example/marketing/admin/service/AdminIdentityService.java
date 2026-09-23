@@ -1,6 +1,6 @@
 package com.example.marketing.admin.service;
 
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.security.AdminClaims;

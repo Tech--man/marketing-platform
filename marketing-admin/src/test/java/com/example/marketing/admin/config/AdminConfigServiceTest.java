@@ -3,7 +3,7 @@ package com.example.marketing.admin.config;
 import com.example.marketing.admin.audit.AuditService;
 import com.example.marketing.admin.dto.ConfigOverviewView;
 import com.example.marketing.admin.dto.ConfigSetRequest;
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.config.ConfigDefinition;
 import com.example.marketing.common.config.ConfigKeys;

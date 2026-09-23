@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.marketing.admin.config.AdminProperties;
 import com.example.marketing.admin.audit.AuditRecord;
 import com.example.marketing.admin.dto.LoginView;
-import com.example.marketing.admin.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.admin.security.LoginGuard;
 import com.example.marketing.admin.infrastructure.entity.AdminSessionEntity;
 import com.example.marketing.admin.infrastructure.entity.AdminUserEntity;

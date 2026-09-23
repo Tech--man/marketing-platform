@@ -1,6 +1,7 @@
 package com.example.marketing.gateway.filter;
 
 import com.example.marketing.common.security.AdminClaims;
+import com.example.marketing.common.security.AdminRoles;
 import com.example.marketing.common.security.AdminTokenCodec;
 import com.example.marketing.common.security.TokenVerifyResult;
 import com.example.marketing.gateway.config.GatewayProperties;
@@ -82,7 +83,7 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
             return rejectedByStatus(exchange, result, path);
         }
         AdminClaims claims = result.claims();
-        if (isWrite(exchange) && "read-only".equals(claims.role())) {
+        if (isWrite(exchange) && AdminRoles.READ_ONLY.equals(claims.role())) {
             return reject(exchange, HttpStatus.FORBIDDEN, 40300, "只读角色不能执行写操作");
         }
         // 两次 Redis 串行：吊销位命中就不必再查作废时刻（单会话登出是最常见路径）
