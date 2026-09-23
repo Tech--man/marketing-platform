@@ -1,91 +1,89 @@
 #!/usr/bin/env bash
 # ============================================================
-# 复位演示容量：只调秒杀活动库存，**不删任何业务数据**
-#   冒烟与压测会持续吃掉 seckill 库存（sold_stock 涨到 total_stock 后开始返回"已售罄"），
-#   本脚本把 total_stock 抬到指定值并清掉 Redis 分桶键，让应用重启后按
+# 复位演示容量：调秒杀活动总库存，走后台端点，不直连 DB 也不直连 Redis
+#   冒烟与压测会持续吃掉 seckill 库存（sold_stock 涨到 total_stock 后恒返回"已售罄"），
+#   本脚本把 total_stock 抬到指定值；分桶由 owning 服务在**同一个事务里**按
+#   `remain = total - sold` 重建，所以账实一致不需要脚本再插手。
 #   （换库布局时必须跑一次：单库 ↔ 每服务一库之间分桶键是共用的、sold_stock 各算各的，
-#    不重置的话恒等式 "余量+已售==总库存" 会因为上一布局的消费记录对不上而红。）
-#   warm-up 的 `remain = total - sold` 口径重建，账实保持一致。
+#    不重置的话恒等式会因为上一布局的消费记录对不上而红。）
 # 用法：./scripts/reset-demo-data.sh [新总库存]   默认 5000
-# 支持三套形态：自动探测在跑的 mkt-preview-* / mkt-dev-* / mkt-* 容器
+# 前置：任一形态的网关在跑（三套形态的网关都是 :8090），后台账号已种子
+#   ③ 之前这里是三条形态分支（探测容器 → restart 容器 / 重启宿主机进程 → 等键数变多），
+#   现在形态差异对脚本不再可见 —— 这正是把写入口收到业务进程里换来的东西。
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+GW="${GW:-http://127.0.0.1:8090}"
 NEW_TOTAL=${1:-5000}
 ACT=SK2026001
+JSON="Content-Type: application/json"
 
-pick() { docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 -E "$1" || true; }
-MYSQL="$(pick '^mkt-(preview|dev)-mysql$|^mkt-mysql$')"
-REDIS="$(pick '^mkt-(preview|dev)-redis$|^mkt-redis$')"
-
-if [ -z "$MYSQL" ] || [ -z "$REDIS" ]; then
-  echo "!! 没有同时探测到本项目的 MySQL 与 Redis 容器，无法复位" >&2
-  echo "   当前在跑：$(docker ps --format '{{.Names}}' | tr '\n' ' ')" >&2
+# 冷栈守卫：脚本什么都能做，唯独不能在栈没起来时装作成功了。
+# 上一版这里只打两行提示就 0 退出，实测把 FULL 进程形态留成 41007「秒杀库存未预热」
+# + 冒烟整片红，而退出码看起来一切正常。
+if ! curl -fs --max-time 3 "$GW/actuator/health" >/dev/null 2>&1; then
+  echo "!! 网关不可达（$GW）：先起任一形态（deploy-preview / deploy-full / start-dev）再复位" >&2
   exit 1
 fi
 
-echo "==> 目标容器：$MYSQL / $REDIS"
-# 表所在库随形态不同：LITE/dev 是单库 marketing，FULL 是 marketing_seckill —— 查出来再用
-SCHEMA="$(docker exec "$MYSQL" mysql -umarketing -pmarketing123 -N -e \
-  "SELECT table_schema FROM information_schema.tables WHERE table_name='seckill_activity' LIMIT 1;" 2>/dev/null)"
-if [ -z "$SCHEMA" ]; then echo "!! 在 $MYSQL 里找不到 seckill_activity 表" >&2; exit 1; fi
-echo "==> 秒杀表所在库：$SCHEMA"
-docker exec "$MYSQL" mysql -umarketing -pmarketing123 -e \
-  "UPDATE ${SCHEMA}.seckill_activity SET total_stock=${NEW_TOTAL} WHERE activity_no='${ACT}';" 2>/dev/null
+TOKEN=$(curl -s -m 25 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
+  -d '{"username":"admin","password":"rootdev123"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+if [ -z "$TOKEN" ]; then
+  echo "!! 后台登录失败：账号未种子、口令不对，或刚被 LoginGuard 限速（每 IP 10 次/分钟）" >&2
+  exit 1
+fi
+AAUTH="Authorization: Bearer $TOKEN"
 
-# 只删分桶键：SETNX 语义下不删就永远不会按新库存重建。
-# 不动 seckill:bought:*（防重购标记）——冒烟每轮用随机用户段，本就不冲突；删掉反而会让
-# 老用户重新扣一次桶却在 DB 撞唯一索引，白白造成"桶比实际少"的保守漂移。
-docker exec "$REDIS" sh -c "
-  redis-cli --scan --pattern 'seckill:stock:${ACT}:*' | xargs -r redis-cli DEL
-" | tr -d '\r' | xargs echo "==> 已清理分桶键数："
+# version 必须先读回来：改库存带乐观锁，脚本自己造一个数会把 41008 变成常态。
+# 按 '{' 切行再挑本活动那条，是为了不把别的活动的 version 抓来。
+LIST=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/seckill/activities?page=1&size=50")
+ROW=$(echo "$LIST" | tr '{' '\n' | grep "\"activityNo\":\"$ACT\"" | head -1 || true)
+if [ -z "$ROW" ]; then
+  echo "!! 后台列表里没有 $ACT，末次响应: $(echo "$LIST" | head -c 200)" >&2
+  exit 1
+fi
+field() { echo "$ROW" | sed -n "s/.*\"$1\":\([0-9]*\).*/\1/p"; }
+OLD_TOTAL=$(field totalStock)
+SOLD=$(field soldStock)
+VERSION=$(field version)
+STATUS=$(echo "$ROW" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+echo "==> $ACT：total=$OLD_TOTAL sold=$SOLD status=$STATUS version=$VERSION → 抬到 $NEW_TOTAL"
 
-echo "==> 预热只在应用启动时按 (total - sold) 重建分桶，需要重启应用侧："
-if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
-  # 必须先记下旧启动时刻：docker restart 返回时旧 JVM 可能还在响应 /actuator/health，
-  # 只看健康检查会"提前放行"，冒烟就撞上新 JVM 的启动窗口（实测 500 connection refused）。
-  before=$(docker inspect -f '{{.State.StartedAt}}' mkt-preview-standalone)
-  docker restart mkt-preview-standalone >/dev/null
-  echo "    已重启 mkt-preview-standalone（LITE 服役档）"
-  for _ in $(seq 1 90); do
-    now=$(docker inspect -f '{{.State.StartedAt}}' mkt-preview-standalone)
-    if [ "$now" != "$before" ] \
-       && curl -fs --max-time 3 http://127.0.0.1:8085/actuator/health 2>/dev/null | grep -q '"UP"'; then
-      break
-    fi
-    sleep 1
-  done
-elif sk=$(docker ps --format '{{.Names}}' | grep -m1 -E '(^|-)marketing-seckill-[0-9]+$'); then
-  # FULL 容器形态：应用容器不发布端口（多副本设计），就绪只能看"分桶键是否被重建"。
-  # 容器名按后缀匹配：项目名前缀随 compose 的 name 变（现在是 mkt-full-）
-  docker restart "$sk" >/dev/null
-  echo "    已重启 $sk（FULL 容器形态）"
-  for _ in $(seq 1 90); do
-    n=$(docker exec "$REDIS" sh -c "redis-cli --scan --pattern 'seckill:stock:${ACT}:*' | wc -l" | tr -d '\r')
-    [ "${n:-0}" -gt 0 ] && { echo "    分桶已重建（键数 $n）"; break; }
-    sleep 1
-  done
-elif [ -f "$PWD/run/marketing-seckill.pid" ] && kill -0 "$(cat "$PWD/run/marketing-seckill.pid")" 2>/dev/null; then
-  # FULL 进程形态：应用是宿主机 JVM，没有容器可 restart。复用 start-all.sh 的单服务启动，
-  # 只重启持有分桶预热的那个服务（SKIP_BUILD=1 沿用刚构建好的 jar）。
-  echo "    重启宿主机 marketing-seckill 进程（FULL 进程形态）"
-  kill "$(cat "$PWD/run/marketing-seckill.pid")" 2>/dev/null || true
-  sleep 3
-  SKIP_BUILD=1 ./scripts/start-all.sh marketing-seckill >/dev/null
-  for _ in $(seq 1 60); do
-    n=$(docker exec "$REDIS" sh -c "redis-cli --scan --pattern 'seckill:stock:${ACT}:*' | wc -l" | tr -d '\r')
-    [ "${n:-0}" -gt 0 ] && { echo "    分桶已重建（键数 $n）"; break; }
-    sleep 1
-  done
-else
-  # 走到这里说明既没有可重启的容器、也没有本仓库启动的进程。此时分桶键已被删掉，
-  # 栈是"冷"的——必须非零退出：上一版这里只打两行提示就 0 退出，实测把 FULL 进程形态
-  # 留成了 41007「秒杀库存未预热」+ 冒烟整片红，而退出码看起来一切正常。
-  echo "!! 找不到可重启的应用侧（容器与 run/marketing-seckill.pid 都不存在）" >&2
-  echo "   分桶键已删除但未重建，请手工启动应用侧后再跑冒烟" >&2
+if [ "$STATUS" != "ONLINE" ]; then
+  # 不"顺手"帮忙上线：只有 ONLINE 的活动会重建分桶（开闸是独立动作，③ 的 T6 钉过这条）
+  echo "    注意：活动是 $STATUS，改完库存不会重建分桶（要放票需另做上线动作）"
+fi
+
+RESP=$(curl -s -m 15 -X PUT -H "$AAUTH" -H "$JSON" \
+  "$GW/api/admin/seckill/activities/$ACT/stock" \
+  -d "{\"totalStock\":$NEW_TOTAL,\"version\":${VERSION:-0}}")
+if ! echo "$RESP" | grep -q '"code":0'; then
+  echo "!! 改库存失败: $(echo "$RESP" | head -c 300)" >&2
+  echo "   41008=有人（或上一次运行）先改过 version，重跑一次即可；40000=新值低于已售数 $SOLD" >&2
   exit 1
 fi
 
-echo "==> 复位后状态："
-docker exec "$REDIS" sh -c "redis-cli --scan --pattern 'seckill:stock:${ACT}:*' | xargs -r redis-cli MGET | awk '{s+=\$1} END {print \"  Redis 分桶余量合计=\" s+0}'"
+# 恒等式复查走 C 端读路径：分桶余量合计 + 已售 == 新总库存。
+# 读 C 端而不是读 Redis：脚本因此不需要知道键名，也不依赖 docker exec 能进得去。
+# 先 sed 出 data 数组再相加：整串直接喂给 awk 的话，第一个桶会跟着 `"data":[` 一起
+# 变成非数字而被当成 0（实测少算一个桶，把一次正常的复位读成恒等式破了）。
+buckets_sum() {
+  curl -s -m 10 -H "Authorization: Bearer ${GATEWAY_TOKEN:-demo-token-123}" \
+    "$GW/api/seckill/stock/$ACT" \
+    | sed -n 's/.*"data":\[\([^]]*\)\].*/\1/p' \
+    | tr ',' '\n' | awk '{s += $1 + 0} END {print s + 0}'
+}
+WANT=$((NEW_TOTAL - SOLD))
+SUM=0
+for _ in $(seq 1 30); do
+  SUM=$(buckets_sum)
+  [ "${SUM:-0}" -eq "$WANT" ] && break
+  sleep 2
+done
+if [ "${SUM:-0}" -ne "$WANT" ]; then
+  echo "!! 分桶余量合计=$SUM，与期望 $WANT 不符（新总库存 $NEW_TOTAL − 已售 $SOLD）" >&2
+  echo "   恒等式对不上时不要接着跑冒烟：那会把'库存未预热'的 41007 当成新 bug 查" >&2
+  exit 1
+fi
+echo "==> 复位后：分桶余量合计=$SUM，已售=$SOLD，合计 $((SUM + SOLD)) == 新总库存 $NEW_TOTAL"

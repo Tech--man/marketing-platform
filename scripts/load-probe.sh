@@ -15,7 +15,8 @@
 #
 # 前提：数据层 + 应用侧已启动（LITE 与 FULL 两种通道都能测，排空口径按落库数判定，
 #   见 persisted() 注释）。Stream 积压那一列只在 LITE 有值，FULL 恒为 0 属正常。
-#   券模板 per_user_limit=1、库存有限，测前先确认余量（必要时 ./scripts/reset-demo-data.sh）
+#   券模板 per_user_limit=1、库存有限，测前先确认余量（必要时 ./scripts/reset-demo-data.sh，
+#   ③ 之后它改走后台端点：需要栈在跑 + 种子后台账号，且每次只登一次后台，别和冒烟挤在同一分钟里）
 # ============================================================
 set -uo pipefail
 cd "$(dirname "$0")/.."

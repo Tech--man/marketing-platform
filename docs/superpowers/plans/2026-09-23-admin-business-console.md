@@ -1766,14 +1766,14 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 
 搬家本身已在 T3-T6 各自任务里做完（含删 C 端旧路径）。本任务只剩三件事：
 
-- [ ] **Step 1: `reset-demo-data.sh` 换成"登录 + 改库存"**
+- [x] **Step 1: `reset-demo-data.sh` 换成"登录 + 改库存"**
   删掉 `:29-91` 的三条形态分支（探测容器 → restart seckill 容器 → 重启宿主机进程）与
   `docker exec redis-cli ... DEL/MGET` 那几段；改成：
   `POST /api/admin/auth/login` 换 token → `PUT /api/admin/seckill/SK2026001/stock` →
   分桶由 owning 服务在同一事务里重建。**冷栈守卫保留**（现状那一段"栈是冷的就非零退出"
   是最有价值的部分，别在改写时弄丢）。脚本因此需要 `ADMIN_JWT_SECRET` 可达的登录路径，
   dev/LITE/FULL 三套都要实测一遍。
-- [ ] **Step 2: 新链路 6（母版 §9）**
+- [x] **Step 2: 新链路 6（母版 §9）**
   四条断言：① C 端 token 打 `POST /api/activity`（已搬走）必 `404`；
   ② admin token 打 C 端交易路径（`/api/coupon/grant`）仍通；
   ③ 只有裸 `X-Admin-Role: admin` 头、直连业务端口（不经网关）打 `PUT /api/admin/activities/.../budget`
@@ -1782,7 +1782,7 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
   ⑤（T8 落地时补上的缺口）`GET /api/admin/discount/rules` 带 admin token 必 `"code":0` ——
   T4 把这条路径改到了后台前缀，但冒烟里一次都没打过它（实测证据来自当时的手工活验），
   于是 `deploy-full.sh` 的就绪探针替它跑了一次就红了。边界断言不能只靠部署脚本兜。
-- [ ] **Step 3: `load-probe.sh:18` 的提示语**（"必要时 reset-demo-data.sh"这句仍成立，
+- [x] **Step 3: `load-probe.sh:18` 的提示语**（"必要时 reset-demo-data.sh"这句仍成立，
   只需补一句"需要后台账号"）；跑一次 `bash -n` 三条脚本。
 
 提交：`test(smoke): ③ 链路 6 四条边界断言（含直连端口的裸头 40100）；reset-demo-data 改走后台端点`
@@ -1941,6 +1941,18 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
     （再多会撞 LoginGuard 的每分钟十次，把探测变成限速测试）。
     顺带暴露一个更该记的账：**冒烟里从来没有打过 `/api/admin/discount/rules`**，
     T4 那条"实测证据"来自当时的手工验证，所以这个红只能被部署探针抓到 —— 已补进 T9 链路 6 的第 ⑤ 条。
+32. **链路 6 的 ② 与计划写反了**：计划说"admin token 打 C 端交易路径 `/api/coupon/grant` 仍通"，
+    实测是 `40100 鉴权失败` —— 两套凭证不互通本来就是双向的（链路 4 早就钉了"C 端 token 打后台被拒"，
+    同一枚反过来的性质没有理由不同）。照计划写下去就是一条恒红的断言。改成两条：
+    **C 端 token 打 C 端交易路径仍通**（收口没误伤）+ **后台 token 打 C 端路径被拒**（不互通是双向的）。
+33. **`reset-demo-data.sh` 的第一版恒等式复查是自己的解析 bug 造的假红**：把整个响应体
+    `tr -d '[]"'` 后喂给 awk，第一个桶会连着 `"data":[` 变成非数字而被算成 0，
+    于是"合计 4758 ≠ 期望 5076"。产品侧其实完全正确（16 桶实测合计就是 5076）。
+    修法是先 `sed` 出 data 数组再逐行相加。记这条是因为它长得太像"发现了真缺陷"——
+    报错方向指向产品、真因在脚本，靠"先把读到的数和手工数一遍对上"才分清。
+34. 写死 `userId=799001` 让链路 6 第二轮起恒吃 41000「已超过单人限领数量」：券模板
+    `per_user_limit=1` 是**跨轮次持久**的状态。改成每轮随机（980000 段，避开链路 1 的 880000 段），
+    与"每轮用全新活动编号 ACT-SMOKE-*"是同一条纪律：**断言不许依赖共享种子的可消耗额度**。
 
 ## 编写进度
 
@@ -1973,10 +1985,12 @@ Task 2 已落地（`feat(gateway): ③ 四条后台前缀路由…`）：四条�
 | T6 | `/api/admin/seckill/activities` 列表/新建/库存/上下线；`stock` 不存在改 40400；桶数写死的 16 收进 `SeckillRuntimeConfig.buckets()` | 11 | 新建 OFFLINE 时分桶 0 键，改库存仍 0 键（不开闸），上线后 16 键合计 800；探针已删净 |
 | T7 | `AuditOutboxDrainer`（消费组 + ACK + XDEL + 脏载荷跳过）与 `AuditService.recordPayload`；冒烟基线 72→74 | 6 | 54 条积压全部入表（business 动作 59 行、`XLEN` 归 0）；新两条断言在 LITE 真栈 74/74 |
 | T8 | `ReheatDispatcher`（按 type 订阅、从 0 建组、失败也写回执）+ `AdminCacheController` 三分岔（同步 DONE / DISPATCHED / 无人认领才 41010）+ `GET /cache/reheat/ack`；`StreamKeys` 重预热键改 per-type + TTL；冒烟 FULL 分支 74→75 | 14 | FULL 容器真栈：`DISPATCHED` → 轮询 ack 得 `DONE` 且 `after=5100` → C 端余额 5100 分；`type=nosuchtype` → 41010，而 `mkt:reheat:budget:pending` 的组实测由 activity 建起（2 consumers、pending 0）；`id=999999` → UNKNOWN；LITE 仍同步返回、74/74 |
+| T9 | `reset-demo-data.sh` 重写成"登录 → `PUT /api/admin/seckill/activities/SK2026001/stock` → 按恒等式复查"（三条形态分支与 `docker exec redis-cli` 全删，冷栈守卫换成"网关不可达 / 登录失败 / 恒等式不成立"三处非零退出）；冒烟新增链路 6 七条；`load-probe.sh` 提示语补"需要后台账号" | 0（Java 不变） | FULL 容器实测：`total=6000 sold=924 version=1 → 5000`，复位后分桶合计 4076、`4076+924==5000`；再跑一次幂等（sold 涨到 1107 后合计 3893 仍自洽）；链路 6 七条全绿，FULL 冒烟 82/82 |
 
 变异检查逐批做：T1 五、T2 四、T4 两处（去 `@NotNull`、去乐观锁）、T5 一处（`overwrite`→`warmIfAbsent`）、
 T7 三处（建组改 `latest()`、去 XDEL、去 XACK —— 单条逐个跑，全部 CAUGHT）、
 T8 五处（去掉同步分支、先 XADD 后写标记、不查消费组、执行失败不写回执、建组回到默认最新位置 —— 全部 CAUGHT）。
-当前实测总数：**272 用例 / 59 类**，全绿；LITE 冒烟 74/74、FULL 容器冒烟 75/75（多的那条是回执轮询）。
+当前实测总数：**272 用例 / 59 类**，全绿；冒烟基线（T9 之后）LITE 81、FULL 82
+（多的那条是跨进程回执轮询），五形态复跑留给 T10。
 T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
 —— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。

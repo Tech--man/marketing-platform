@@ -463,6 +463,64 @@ fi
 expect "种子活动 ACT2026001 的灰度仍是 100%" '"data":true' \
   "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit?userId=70001")"
 
+head2 "链路 6：写入口收口（配置类写只剩 /api/admin/**，绕过网关等于没有凭证）"
+# ① 旧的 C 端配置类写路径必须"真的没了"：命中 40400 而不是被静默转发到某个还在听的进程
+R=$(curl -s -m 10 -X POST -H "$AUTH" -H "$JSON" -d '{"activityNo":"ACT-SMOKE-GONE"}' "$GW/api/activity")
+expect "C 端 POST /api/activity 已收口（40400 资源不存在）" '"code":40400' "$R"
+R=$(curl -s -m 10 -X PUT -H "$AUTH" -H "$JSON" \
+  -d '{"budgetAmount":1.00,"version":1}' "$GW/api/activity/ACT2026001/budget")
+expect "C 端改预算路径已收口（40400）" '"code":40400' "$R"
+
+# ② 收口不能误伤交易写：C 端领券仍要照常受理。
+# 用户段必须每轮随机（券模板 per_user_limit=1，写死一个 userId 会让第二轮起
+# 恒吃 41000「已超过单人限领数量」—— 那是状态残留，不是收口把路径写坏了）；
+# 980000 段避开链路 1 用的 880000 段，同一轮里两个用户不互相抢额度。
+REQ6="SMOKE6-$(date +%s)-$RANDOM"
+USER6=$((980000 + RANDOM % 10000))
+R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AUTH" -H "$JSON" \
+  -d "{\"requestId\":\"$REQ6\",\"userId\":$USER6,\"templateNo\":\"CT2026001\"}")
+expect "C 端交易写路径未被收口误伤（领券受理）" '"code":0' "$R"
+# 两套凭证不互通是双向的：后台 token 打 C 端交易路径同样被拒。
+# 只在"打后台被拒"这一侧设防的话，收口就等于给后台凭证开了一条 C 端写入口。
+R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AAUTH" -H "$JSON" \
+  -d "{\"requestId\":\"$REQ6-B\",\"userId\":$USER6,\"templateNo\":\"CT2026001\"}")
+expect "后台 token 打 C 端交易路径被拒（40100）" '"code":40100' "$R"
+
+# ③ 部署级回归锚（③ 段内 spec §3.2）：只带裸 X-Admin-* 头、**绕过网关**直连业务进程，
+# 必须 40100。业务端口绑的是 *:808x（FULL 进程形态）而 standalone:8085 也发布了（LITE），
+# 所以"头能伪造"不是假设，是这台机器上的事实。
+FORGE_PATH="/api/admin/activities/$ACT_NO/budget"
+forge_to() { # $@ = 额外身份参数（不带就是裸头）；返回首个可直连进程的响应
+  local body port c base
+  for base in http://127.0.0.1:8081 http://127.0.0.1:8085; do
+    body=$(curl -s -m 5 -X PUT "$@" -H "X-Admin-Role: admin" -H "X-Admin-Name: attacker" -H "$JSON" \
+      -d '{"budgetAmount":1.00,"version":1}' "$base$FORGE_PATH" 2>/dev/null || true)
+    echo "$body" | grep -q '"code"' && { echo "$body"; return; }
+  done
+  # FULL 容器形态不发布应用端口（多副本设计），只能进容器打它自己的 8081
+  c=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 -E '(^|-)marketing-activity-[0-9]+$' || true)
+  [ -n "$c" ] || return
+  docker exec "$c" curl -s -m 5 -X PUT "$@" -H "X-Admin-Role: admin" -H "X-Admin-Name: attacker" \
+    -H "Content-Type: application/json" -d '{"budgetAmount":1.00,"version":1}' \
+    "http://127.0.0.1:8081$FORGE_PATH" 2>/dev/null || true
+}
+FORGED=$(forge_to)
+if [ -z "$FORGED" ]; then
+  bad "没找到可直连的业务进程（裸头 40100 这条没跑成）" "候选 8081/8085 与容器内 curl 都无 JSON 响应"
+else
+  expect "只带裸 X-Admin-* 头直连业务端口被拒（伪造头不等于凭证）" '"code":40100' "$FORGED"
+fi
+# 配对断言：同一个直连口子换成正牌 X-Admin-Token 必须过身份这一关。
+# version 故意写 999，让它停在 41008 而不是真的改共享种子数据。
+# 少了这条，上面的 40100 也可能只是"端口不通/路由不存在"的另一种写法。
+FORGED_OK=$(forge_to -H "X-Admin-Token: $ADMIN_TOKEN")
+expect "同一发直连请求带合法 token 时身份放行（拒的是凭证不是路由）" '"code":41008' "$FORGED_OK"
+
+# ④ discount 唯一的 GET 收进了后台前缀：冒烟此前一次都没打过它，
+# 结果这条路径的红只能被部署探针抓到（修正 #31）
+expect "后台规则列表可读（③ 之后 discount 唯一的 GET）" '"code":0' \
+  "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/discount/rules?page=1&size=3")"
+
 head2 "收尾：清理在线配置、登出与会话吊销（链路 5 之后才做，全脚本只登录这几次）"
 # 清理放在登出之前：登出之后 ADMIN_TOKEN 就作废了，trap 里再删只会静默失败
 config_cleanup
