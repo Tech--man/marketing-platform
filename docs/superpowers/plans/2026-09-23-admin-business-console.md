@@ -81,7 +81,7 @@
 - Consumes: `AdminTokenCodec.verify(String, long)` → `TokenVerifyResult`（`status()` + `claims()`，已有）；`BizException.of(ErrorCode, String)`（已有）。
 - Produces: `AdminRequestIdentity.require(HttpServletRequest, String...)` → `AdminPrincipal`；`AuditPayload`（13 字段 record）与 `AuditPayloadCodec.write/read`；`StreamKeys.auditPending()` / `reheatPending()` / `reheatAck()` / `ADMIN_DRAIN_GROUP`。Task 7 与 Task 3-6 直接消费这三件。
 
-- [ ] **Step 1: 把两个 record/常量类移进 common**
+- [x] **Step 1: 把两个 record/常量类移进 common**
 
 `git mv` 保历史，包名从 `admin.security` 换到 `common.security`，类内容一字不改（`AdminPrincipal` 的类注释里"字段全部来自网关注入的 X-Admin-* 头"这句要改，见 Step 2 之后的事实）：
 
@@ -106,7 +106,7 @@ done
 
 同一条命令要跑第二遍、把 `src/test` 里的引用一起改掉（上面 grep 已覆盖 test，因为传的是模块目录不是 `src/main`）。
 
-- [ ] **Step 2: 写失败测试 —— 只有裸身份头时必须 40100**
+- [x] **Step 2: 写失败测试 —— 只有裸身份头时必须 40100**
 
 `AdminRequestIdentityTest.java`。这个文件里最重要的一条就是它：**没有签名 token、只带 `X-Admin-*` 头的请求必须被拒**。它是本段与母版 §6.0 分歧的回归锚——将来谁觉得"读头更省事"而退回裸头，这条必须红。
 
@@ -207,7 +207,7 @@ class AdminRequestIdentityTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=AdminRequestIdentityTest`
 Expected: 编译失败（`AdminRequestIdentity` 不存在）。这是红。
 
-- [ ] **Step 3: 实现 `AdminRequestIdentity`**
+- [x] **Step 3: 实现 `AdminRequestIdentity`**
 
 ```java
 package com.example.marketing.common.security;
@@ -272,7 +272,7 @@ public class AdminRequestIdentity {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=AdminRequestIdentityTest`
 Expected: PASS（5 个用例）。
@@ -282,7 +282,7 @@ Expected: PASS（5 个用例）。
 2. `new AdminPrincipal(claims...)` 改成 `new AdminPrincipal(..., request.getHeader("X-Admin-Role"), ...)` → `roleComesFromClaimsNotHeaders` 必须红；
 3. 空密钥守卫删掉 → `blankSecretFailsFast` 必须红。
 
-- [ ] **Step 5: 写失败测试 —— 审计载荷往返与"读侧永不抛"**
+- [x] **Step 5: 写失败测试 —— 审计载荷往返与"读侧永不抛"**
 
 `AuditPayloadCodecTest.java`。载荷必须与 `admin_audit_log` 的列一一对应，否则 drain 落表时要猜字段。
 `before`/`after` 不单独开字段：admin 现有的记法是把它们拼进 `requestSummary`
@@ -332,7 +332,7 @@ class AuditPayloadCodecTest {
 Run: `mvn -q -pl marketing-common -am test -Dtest=AuditPayloadCodecTest`
 Expected: 编译失败。
 
-- [ ] **Step 6: 实现载荷与编解码**
+- [x] **Step 6: 实现载荷与编解码**
 
 `AuditPayload.java`：
 
@@ -464,7 +464,7 @@ public final class StreamKeys {
 }
 ```
 
-- [ ] **Step 7: 跑测试确认通过 + 变异检查**
+- [x] **Step 7: 跑测试确认通过 + 变异检查**
 
 Run: `mvn -q -pl marketing-common -am test -Dtest=AuditPayloadCodecTest`
 Expected: PASS（3 个用例）。
@@ -472,7 +472,7 @@ Expected: PASS（3 个用例）。
 变异检查：把 `read` 里某个字段错位（`actorName` 读成 `role`）→ `roundTripsEveryField` 必须红；
 把 `read` 改成直接抛 → `readNeverThrows` 必须红。
 
-- [ ] **Step 8: 写失败测试 —— 装配矩阵（Servlet 装、密钥空不炸上下文）**
+- [x] **Step 8: 写失败测试 —— 装配矩阵（Servlet 装、密钥空不炸上下文）**
 
 `AdminSecurityAutoConfigurationTest.java`，手法沿用 ⑤ 的 `ConfigCommonAutoConfigurationTest`
 （`ApplicationContextRunner`，不连中间件）：
@@ -534,7 +534,7 @@ class AdminSecurityAutoConfigurationTest {
 Run: `mvn -q -pl marketing-common -am test -Dtest=AdminSecurityAutoConfigurationTest`
 Expected: 编译失败（`AdminSecurityAutoConfiguration` 不存在）。
 
-- [ ] **Step 9: 实现装配并登记**
+- [x] **Step 9: 实现装配并登记**
 
 ```java
 package com.example.marketing.common.config;
@@ -575,12 +575,12 @@ public class AdminSecurityAutoConfiguration {
 com.example.marketing.common.config.AdminSecurityAutoConfiguration
 ```
 
-- [ ] **Step 10: 跑测试确认通过**
+- [x] **Step 10: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test`
 Expected: PASS。`marketing-admin` 必须一起跑 —— Step 1 挪走了它的两个类，编译能过才算改干净。
 
-- [ ] **Step 11: 提交**
+- [x] **Step 11: 提交**
 
 ```bash
 git add marketing-common marketing-admin
@@ -1802,6 +1802,26 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 
 ---
 
+## 落地时对计划的修正
+
+1. **`git mv` 之后必须改 `package` 行**（Task 1 Step 1 漏写了这半句）：只改 import 的话编译报
+   `cannot find symbol`，而报错位置在**引用方**（11 个 admin 文件），看起来像是 sed 没跑干净，
+   实际是被移动文件自己的 `package com.example.marketing.admin.security;` 还在。
+   Task 9 要搬 `ClientIp` 时同样注意。
+2. **测试里的"时刻"必须用真实时钟**：`AdminTokenCodec.verify` 只比 `now > exp + skew`，
+   写死一个 `NOW = 1_800_000_000` 会让那条"过期 token"断言随日历悄悄变成"还没过期"——
+   它测的就不再是过期。改成 `now()` 现取 `Instant.now().getEpochSecond()`。
+3. **`StreamOperations` 没有 `expire(...)`**（那是 `KeyOperations` / 模板上的方法）：
+   "绝不设 TTL"这条只能断言 `verify(redis, never()).expire(anyString(), any(Duration.class))`。
+   `XADD` 的 maxlen 也不用 `StreamRecords` 那套构造：本仓库用
+   `opsForStream().add(key, Map.of(FIELD, json))` + `opsForStream().trim(key, MAX_LEN)` 两段式，
+   断言分别打在 `add` 的 map 只有一个 `payload` 键、以及 `trim` 的上界参数上。
+4. **`@DisplayName` 里不能再嵌双引号**：`"防止"谁签一枚"）"` 这种写法是编译错误（字符串提前闭合）。
+   中文引号或改写句子，别用转义——转义后在终端里可读性更差。
+5. **`AuditOutbox` 的失败注入只能这样打**：`when(stream.add(anyString(), anyMap()))` 抛异常，
+   然后断言 `record` 不外溢 + 计数 +1。用 `doThrow` 配 `verify` 那条路在本仓库的 Mockito 版本上
+   会撞上 `add` 的返回类型（`RecordId`）问题。
+
 ## 编写进度
 
 Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
@@ -1815,5 +1835,9 @@ Task 4-6（discount / coupon / seckill）同上，且只写与 Task 3 的差异 
 （身份、乐观锁、审计）用引用而不是复制代码。
 
 Task 7-10 同上：T7 审计投递与 drain、T8 重预热回执、T9 脚本冲击面、T10 五形态复跑与 README。
+
+**执行进度**：Task 1 已落地（`feat(common): ③ 后台身份件与审计投递口…`）——
+18 条新用例、5 处变异检查全部咬人、全仓 200 用例 / 49 类绿。
+`AuditOutbox` 按计划提前到 T1 落了（T7 只剩 admin 侧 drain，届时它那份 Files 列表按"Modify"读）。
 T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
 —— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。
