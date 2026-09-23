@@ -981,8 +981,8 @@ class ActivityAdminWriteTest {
 }
 ```
 
-> `ErrorCode.CONFIG_VERSION_CONFLICT.getCode()` —— 若 `ErrorCode` 的取值方法不叫 `getCode()`
-> （先看 `ErrorCode.java` 与既有用例的写法），按实际方法名改，别改 `ErrorCode`。
+> `BizException.getCode()` 返回 int（⑤ 的 `GlobalExceptionHandler` 就这么用），
+> 所以断言直接和 `ErrorCode.CONFIG_VERSION_CONFLICT.getCode()` 比，不要写字符串比较。
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-activity -am test -Dtest=ActivityAdminWriteTest`
 Expected: 编译失败（`updateBudget`/`updateGray` 不存在）。
@@ -1331,6 +1331,304 @@ EOF
 
 ---
 
+### Task 4: discount —— 规则读写搬家（`bumpVersion` 从 controller 挪进事务内的 service）
+
+**形状与 Task 3 完全一致**（controller 只认签名 token、写方法带 `expectedVersion`、冲突 `41008`、
+写成功投 `AuditPayload`、收尾把 C 端旧路径删掉并同步改冒烟）。这里只写差异。
+
+**Files:**
+- Create: `marketing-discount/.../controller/DiscountAdminController.java`、`.../dto/RuleView.java`
+- Create: `marketing-discount/.../service/RuleAdminService.java`
+- Modify: `marketing-discount/.../controller/DiscountController.java`（删 `saveRule` 与 `listRules`，把 `toDsl`/`fill` 两个私有辅助搬去 service）
+- Modify: `scripts/smoke-test.sh`（链路 2 里若用到规则管理则换路径；**先 grep 确认**：`grep -n "api/discount/rules" scripts/*.sh`）
+- Test: `marketing-discount/src/test/java/.../service/RuleAdminServiceTest.java`
+
+**已核实的现状（三条，都会影响写法）**：
+1. `DiscountController.saveRule`（`:48-65`）现在**在 controller 里**做 upsert 并调
+   `ruleCacheManager.bumpVersion()` —— 没有 `@Transactional`，也没有乐观锁期望值：
+   两个 operator 同时改一条规则，后写的静默覆盖前者。这是 ③ 要修的既有缺陷，不是新能力。
+2. `RuleCacheManager` 的类注释自己写着"写路径（规则管理接口）调用 `bumpVersion()`，多实例间秒级生效"
+   —— 所以 discount 的缓存失效**不是** `CacheReheater`（它没有实现，也不该为 ③ 新增实现），
+   而是版本号；`bumpVersion()` 同时把 `localCheckedAt=0` 让本实例立即失效。
+3. `listRules` 返回 `List<PromoRuleEntity>`（把整条 DSL JSON 原样吐给共享 demo token）。
+   搬到 admin 侧后换 `PageResult<RuleView>`，`RuleView` 里带 `version` 供乐观锁回传。
+
+- [ ] **Step 1: 写失败测试**
+
+`RuleAdminServiceTest.java` 三条（mock `PromoRuleMapper` + mock `RuleCacheManager`）：
+
+```java
+    @Test
+    @DisplayName("规则写必须 bumpVersion：不推版本号，其他实例还在用旧快照")
+    void saveBumpsCacheVersion() { /* verify(cacheManager).bumpVersion() */ }
+
+    @Test
+    @DisplayName("expectedVersion 与库里不一致 → 41008，且不写库、不推版本")
+    void staleVersionRejected() { /* never(insert/updateById/bumpVersion) */ }
+
+    @Test
+    @DisplayName("bumpVersion 前抛异常时不留版本：写失败不推版本号")
+    void versionNotBumpedWhenWriteFails() { /* updateById 抛 → assertThrows + verify(never()).bumpVersion() */ }
+```
+
+第三条是这条链路上唯一"半应用"的窗口：版本推了但 DB 没写，全实例会去重建一份**旧**规则并以为新
+（回源 DB 是权威，所以后果是自愈的）—— 反过来（DB 写了没推）则是改动秒级不可见。
+两者都要防，所以顺序固定为 **写库 → 推版本**，且在同一事务方法内。
+
+- [ ] **Step 2: 实现 `RuleAdminService.save`**
+
+```java
+    /**
+     * 规则 upsert + 版本号推进，同一事务。顺序不能反：先推版本再写库的话，
+     * 全实例会立刻去重建一份还没改好的规则（虽然回源 DB 会自愈，但窗口里算错价）。
+     *
+     * <p>缓存失效走版本号而不是 {@code CacheReheater}：{@code RuleCacheManager} 的读路径就是
+     * 比对 Redis 版本号，给它再加一个 reheat 入口等于两套真相。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public RuleView save(RuleSaveRequest request, Integer expectedVersion) {
+        PromoRuleEntity existing = byRuleNo(request.getRuleNo());
+        if (existing == null) {
+            if (expectedVersion != null && expectedVersion != 0) {
+                throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "规则不存在，不能带 version 新建");
+            }
+            PromoRuleEntity entity = new PromoRuleEntity();
+            fill(entity, request, JsonUtils.toJson(toDsl(request)));
+            entity.setVersion(0);
+            promoRuleMapper.insert(entity);
+            ruleCacheManager.bumpVersion();
+            return RuleView.from(entity);
+        }
+        requireVersion(existing, expectedVersion);
+        fill(existing, request, JsonUtils.toJson(toDsl(request)));
+        if (promoRuleMapper.updateById(existing) == 0) {
+            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "规则已被他人修改，请刷新后重试");
+        }
+        ruleCacheManager.bumpVersion();
+        return RuleView.from(existing);
+    }
+```
+
+（`byRuleNo` / `requireVersion` / `fill` / `toDsl` 与 Task 3 同名同语义；`fill`/`toDsl` 从
+`DiscountController` 原样搬过来，别改逻辑 —— 它们是既有的 DSL 组装口径。）
+
+新建还要求 `expectedVersion` 缺省或 0：**没有"不存在就顺手建一条"**，否则误写 ruleNo 会静默造规则。
+
+- [ ] **Step 3-5: 列表、controller、审计**
+
+照 Task 3 Step 4-6 的形状做，两处不同：
+1. 列表要"一次读全表"换成 `PageResult`（`promoRuleMapper.selectPage`，按 `priority desc, id asc`，
+   与引擎的互斥组最优口径同一排序，见 `RuleSnapshot`）；
+2. 审计的 `summary` 只放**规则的关键字段**（`type`/`threshold`/`discountValue`/`priority`/`status`），
+   **不要**把整条 DSL JSON 塞进去：`admin_audit_log.request_summary` 是定长列，
+   而 DSL 里可能带很长的 CSV（`requiredTags`）。脱敏口径沿用 `RequestSummary`。
+
+- [ ] **Step 6: 删 C 端两条、跑测试、跑冒烟、提交**
+
+```bash
+source scripts/common.sh && mvn -q -pl marketing-discount,marketing-common -am test
+./scripts/smoke-test.sh   # 栈在跑的话；期望 72/72（链路 2 不断言规则管理，通常不受影响）
+git add marketing-discount scripts/ && git commit -m "feat(discount): ③ 规则管理搬到 owning 服务，bumpVersion 进事务，补乐观锁"
+```
+
+---
+
+### Task 5: coupon —— 券模板创建/编辑（今天完全没有接口）
+
+**Files:**
+- Create: `marketing-coupon/.../controller/CouponAdminController.java`、`.../dto/TemplateCreateRequest.java`、`TemplateView.java`
+- Modify: `marketing-coupon/.../service/CouponTemplateService.java`（新增 `create` / `updateStock`）
+- Test: `marketing-coupon/src/test/java/.../service/CouponTemplateAdminWriteTest.java`
+
+**已核实的现状**：`CouponTemplateService` 已是 `CacheReheater`（`type()="coupon-stock"`，
+`reheat(templateNo, force)` 在 `:90`），且 `warmStock(template)`（`:54`）是 SETNX 语义 ——
+**所以新建模板必须显式 warm，改库存必须 `reheat(force=true)`**，与预算那条同族。
+券模板今天只能靠 `docker/mysql/init*/01-schema.sql` 种子写入，本任务是净新增能力。
+
+- [ ] **Step 1: 写失败测试（四条）**
+
+先确认这三处事实再动笔：`CouponTemplateService.reheat` 的公式（`:90-101`）、
+`warmStock` 的键名与 SETNX（`:54-60`）、`CouponTemplateEntity.version`（`Integer`，`:42` 带 `@Version`）。
+夹具与 `RuleAdminServiceTest` 同构（mock `CouponTemplateMapper` 与 `StringRedisTemplate`/
+`ValueOperations`，沿用本模块既有 `CouponTemplateServiceTest` 里那套 Redis 桩），四条：
+
+```java
+    @Test
+    @DisplayName("新建模板必须显式预热库存键：不 warm 的话第一笔领券吃 NOT_WARMED")
+    void createWarmsStock() {
+        when(templateMapper.exists(any(LambdaQueryWrapper.class))).thenReturn(false);
+        service.create(request("CT9009"));
+        // 断言外部可见事实而不是"自己调了自己"：同类的自调用是 Mockito 的盲点
+        verify(ops).setIfAbsent(org.mockito.ArgumentMatchers.startsWith("coupon:stock:"), anyString());
+    }
+
+    @Test
+    @DisplayName("改总库存必须 force 重预热：键里存的是剩余量，不 DEL 就永远旧")
+    void stockUpdateForcesReheat() {
+        stubTemplate("CT9009", 1000, 2);
+        when(templateMapper.updateById(any())).thenReturn(1);
+        service.updateTotalStock("CT9009", 500, 2);
+        verify(redisTemplate).delete(org.mockito.ArgumentMatchers.argThat(
+                k -> ((String) k).startsWith("coupon:stock:")));
+    }
+
+    @Test
+    @DisplayName("expectedVersion 过期 → 41008，既不写库也不删键")
+    void staleVersionRejected() {
+        stubTemplate("CT9009", 1000, 5);
+        BizException e = assertThrows(BizException.class,
+                () -> service.updateTotalStock("CT9009", 500, 2));
+        assertEquals(41008, e.getCode());
+        verify(templateMapper, never()).updateById(any());
+        verify(redisTemplate, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("templateNo 重复是 41000 业务错误，不是 41008（41008 只表示并发覆盖）")
+    void duplicateTemplateNoIsBizError() {
+        when(templateMapper.exists(any(LambdaQueryWrapper.class))).thenReturn(true);
+        BizException e = assertThrows(BizException.class, () -> service.create(request("CT9009")));
+        assertEquals(41000, e.getCode());
+    }
+```
+
+> 第一条为什么不断言 `verify(service).warmStock(...)`：`create` 与 `warmStock` 落在同一个类里，
+> 自调用绕过代理也绕不过 mock 记账的直觉都不成立 —— Mockito 不会记录"自己调自己"。
+> 所以断言打在**外部可见事实**（Redis 里出现了库存键）上。不要为了好 verify 把方法拆到别的类。
+> `coupon:stock:` 这个前缀以 `CouponTemplateService` 里的真实键名为准，落地前先 grep 一次，
+> 别把键名猜成 `coupon:stock` 结果断言永远为真（`startsWith("")` 就是这种假绿的极端）。
+
+第四条是码表纪律：`41008` 只表示"有人比你先改"，唯一键冲突是 `41000` —— 混用的话
+④ 与后台前端会给出错误的动作建议（一个让你刷新，一个让你改编号）。
+
+- [ ] **Step 2: 实现**
+
+```java
+    @Transactional(rollbackFor = Exception.class)
+    public CouponTemplateEntity create(TemplateCreateRequest request) {
+        if (templateMapper.exists(Wrappers.<CouponTemplateEntity>lambdaQuery()
+                .eq(CouponTemplateEntity::getTemplateNo, request.templateNo()))) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "券模板编号已存在: " + request.templateNo());
+        }
+        CouponTemplateEntity entity = new CouponTemplateEntity();
+        // 字段逐条 set（含 activityNo/couponType/faceValue/thresholdAmount/validDays/
+        // totalCount/perUserLimit/status），口径照 init.sql 的种子列
+        entity.setVersion(0);
+        templateMapper.insert(entity);
+        warmStock(entity);          // 新建必须显式预热：SETNX 语义下不 warm 就是 NOT_WARMED 一次
+        return entity;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public CouponTemplateEntity updateTotalStock(String templateNo, int totalCount, Integer expectedVersion) {
+        CouponTemplateEntity entity = getRequiring(templateNo);
+        requireVersion(entity, expectedVersion);
+        int before = entity.getTotalCount();
+        if (totalCount < before - remainingOf(templateNo)) {
+            throw BizException.of(ErrorCode.BAD_REQUEST,
+                    "总库存不能小于已发出数（已发 " + (before - remainingOf(templateNo)) + "，试图设为 " + totalCount + "）");
+        }
+        entity.setTotalCount(totalCount);
+        if (templateMapper.updateById(entity) == 0) {
+            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "券模板已被他人修改，请刷新后重试");
+        }
+        // 键里存的是"剩余"，改的是"总量"：DEL 后按对账口径重建才自洽（force=true 的那条路）
+        reheat(templateNo, true);
+        return entity;
+    }
+```
+
+> `remainingOf` 与 `reheat` 的"已发数"口径必须与 `CouponTemplateService.reheat` 里那段对账公式
+> 一致（`init.sql` 的 `total_count - 已发` 与 Redis 键的语义）。实现时先读那个方法，
+> 把它的公式抽成一个包内可见的 `computeRemain(...)` 复用，**不要复制第二份**——
+> 地雷 E 的起因就是两处各写一遍同一公式。
+
+- [ ] **Step 3: controller + 审计 + 跑测试 + 提交**
+
+照 Task 3 Step 4-8 做（列表 `GET /api/admin/coupon/templates` 走 `PageResult<TemplateView>`；
+`POST` 新建；`PUT /{no}/stock`；`PUT /{no}/status` 上下线）。审计 `resourceType="coupon-template"`。
+本模块收尾跑：
+
+```bash
+source scripts/common.sh && mvn -q -pl marketing-coupon -am test && ./scripts/smoke-test.sh
+```
+
+---
+
+### Task 6: seckill —— 活动创建/上下线 + 库存编辑，并把 `stock` 的 404 归一
+
+**Files:**
+- Create: `marketing-seckill/.../controller/SeckillAdminController.java`、`.../dto/SeckillActivityCreateRequest.java`、`SeckillActivityView.java`
+- Modify: `marketing-seckill/.../service/SeckillWarmUpService.java`、`.../controller/SeckillController.java`（`:60-70` 的 stock）
+- Test: `marketing-seckill/src/test/java/.../service/SeckillAdminWriteTest.java`
+
+**已核实的现状**：`SeckillWarmUpService` 是 `CacheReheater`（`type()="seckill-stock"`），
+`SeckillStockService.allocateBuckets(total, buckets)`（`:49`）与 `warmUp(activity, bucketStocks)`（`:64`）
+已经分得很干净 —— 改库存的正确动作就是"按新 total 重新算桶 + 覆写桶键"，**这段逻辑只能留在 owning 服务**。
+桶数 `seckill.buckets` 是**刻意不做成在线参数**的（母版 §10），所以库存编辑要读 properties 的桶数。
+
+- [ ] **Step 1: 写失败测试（四条）**
+
+```java
+    @Test
+    @DisplayName("改库存必须重算并覆写全部桶：只改 DB 的话分桶余量还是旧总数")
+    void stockEditRewarmsBuckets() {
+        stubActivity("SK9009", 1000, 3);
+        when(mapper.updateById(any())).thenReturn(1);
+        service.updateStock("SK9009", 600, 3);
+        verify(stockService).warmUp(any(), eq(List.of(200, 200, 200)));
+    }
+
+    @Test
+    @DisplayName("expectedVersion 过期 → 41008：不写库也不动桶")
+    void staleVersionRejected() {
+        stubActivity("SK9009", 1000, 5);
+        BizException e = assertThrows(BizException.class, () -> service.updateStock("SK9009", 600, 3));
+        assertEquals(41008, e.getCode());
+        verify(mapper, never()).updateById(any());
+        verify(stockService, never()).warmUp(any(), any());
+    }
+
+    @Test
+    @DisplayName("新建活动：余数摊给前几个桶，且总和等于新总数（与 allocateBuckets 的既有口径一致）")
+    void createAllocatesBucketsWithRemainder() {
+        when(mapper.exists(any(LambdaQueryWrapper.class))).thenReturn(false);
+        service.create(request("SK9010", 10, 4));      // 10 件 4 桶
+        verify(stockService).warmUp(any(), eq(List.of(3, 3, 2, 2)));
+    }
+
+    @Test
+    @DisplayName("GET /api/seckill/stock/{不存在活动} 返回 40400，不再返回空数组（①② spec §10 漏网）")
+    void missingActivityStockIs40400() {
+        when(stockService.readBuckets("SK_NOPE")).thenReturn(List.of());   // 既有方法名以真实签名为准
+        BizException e = assertThrows(BizException.class,
+                () -> controller.stock("SK_NOPE", new MockHttpServletRequest()));
+        assertEquals(40400, e.getCode());
+    }
+```
+
+> 最后一条要先看 `SeckillController.stock`（`:60-70`）实际调的是哪个方法名，
+> 按真实签名写断言；`List.of()` 与"活动不存在"在现状里是**混在一起**的，
+> 所以本步骤要求 service 层给出可区分的判据（`exists(activityNo)`），
+> 而不是靠"桶列表为空"猜 —— 空桶也可能是真的售罄，那必须仍是 200 + 余量 0。
+
+第四条会改 `GET /api/seckill/stock/{no}` 的行为 —— 先确认没有断言依赖空数组：
+`grep -n "seckill/stock" scripts/*.sh` 与 `grep -rn "stock(" marketing-seckill/src/test` 都要看。
+
+- [ ] **Step 2-4: service / controller / 冒烟**
+
+`updateStock(activityNo, totalStock, expectedVersion)`：校验 → 写库 →
+`warmUp(activity, allocateBuckets(total, properties.getBuckets()))` 同事务。
+Controller 形状照 Task 3。
+
+冒烟链路 3 的 `库存基线从接口读` 那段（`smoke-test.sh:200+`）继续可读，只是不存在活动现在报
+`40400`；`reset-demo-data.sh` 在 T9 之前仍走直连，所以本任务不碰它。
+
+收尾：`mvn -q -pl marketing-seckill -am test && ./scripts/smoke-test.sh`（期望 72/72），
+提交 `feat(seckill): ③ 活动与库存管理端点，改库存同事务重建分桶；stock 不存在改 40400`。
+
+---
+
 ## 编写进度
 
 Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
@@ -1340,6 +1638,9 @@ Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2
 
 Task 3（activity）同上颗粒度。
 
-**Task 4-10 待写**（顺序即依赖顺序，每个任务都按"失败测试 → 实现 → 变异检查 → 提交"展开）：
-T4 discount、T5 coupon、T6 seckill、T7 审计 Stream 投递与 drain、
-T8 重预热回执、T9 脚本冲击面（搬家已分散在 T3-T6 内做完）、T10 五形态复跑与 README。
+Task 4-6（discount / coupon / seckill）同上，且只写与 Task 3 的差异 —— 三处形状完全一致的部分
+（身份、乐观锁、审计）用引用而不是复制代码。
+
+**Task 7-10 待写**：T7 审计 Stream 投递与 admin drain、T8 重预热回执（41010 → DISPATCHED/ack）、
+T9 脚本冲击面（`reset-demo-data.sh` 改写 + 新链路 6 + `load-probe.sh`；搬家本身已分散在 T3-T6 内做完）、
+T10 五形态复跑与 README 收口。
