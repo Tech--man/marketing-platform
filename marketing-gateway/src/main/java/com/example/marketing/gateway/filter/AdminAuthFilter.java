@@ -119,11 +119,15 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
 
     /**
      * 重写请求：剥掉 Authorization，注入网关确认过的身份。
+     * token 原文换成放进 {@code X-Admin-Token}：下游不需要区分 bearer 形状，
+     * 也不必把原始 Authorization 一路带到业务进程。
      * claims 为 null 表示登录口 —— 此时连身份头都不给，避免"未登录也带着 X-Admin-User"
      * 被下游误信。
      */
     private ServerWebExchange pass(ServerWebExchange exchange, AdminClaims claims) {
         exchange.getAttributes().put(VERIFIED, Boolean.TRUE);
+        // 先取原文再改头：tokenOf 读的就是这个未 mutation 的 exchange
+        String token = tokenOf(exchange);
         ServerHttpRequest request = exchange.getRequest().mutate()
                 .headers(headers -> {
                     headers.remove(HttpHeaders.AUTHORIZATION);
@@ -131,11 +135,16 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
                     headers.remove("X-Admin-Role");
                     headers.remove("X-Admin-Jti");
                     headers.remove("X-Admin-Uid");
+                    headers.remove("X-Admin-Token");
                     if (claims != null) {
                         headers.set("X-Admin-User", claims.sub());
                         headers.set("X-Admin-Role", claims.role());
                         headers.set("X-Admin-Jti", claims.jti());
                         headers.set("X-Admin-Uid", String.valueOf(claims.uid()));
+                        // ③：业务服务只认这枚签名。裸 X-Admin-* 头对"直连 808x 的人"不设防，
+                        // 而 ③ 之后那些端口上挂着改预算/改库存的写端点（段内 spec §3.2）。
+                        // 这里不重新签发，只透传刚验过的那一枚，下游用同一个 codec 无状态验签。
+                        headers.set("X-Admin-Token", token);
                     }
                 })
                 .build();

@@ -603,6 +603,8 @@ EOF
 **Files:**
 - Modify: `marketing-gateway/src/main/resources/application.yml`（local 段 `:26-79`、nacos 段 `:112-128`）
 - Modify: `marketing-gateway/src/main/java/com/example/marketing/gateway/filter/AdminAuthFilter.java`（remove 列表 + set）
+- Modify: `marketing-gateway/src/main/java/com/example/marketing/gateway/config/GatewayConfigDefinitions.java`
+  （**九条自述**：⑤ 的防漂移测试会让 yml 与声明清单任一侧漂移都红，见修正 #6）
 - Test: `marketing-gateway/src/test/java/com/example/marketing/gateway/filter/AdminAuthFilterTest.java`（加 2 条）
 - Test: `marketing-gateway/src/test/java/com/example/marketing/gateway/config/GatewayAdminRoutesTest.java`（新建，读 yml 断言）
 
@@ -610,7 +612,7 @@ EOF
 - Consumes: `AdminAuthFilter` 已有的 `pass(...)`（`:127-137` 那串 headers 操作）。
 - Produces: `/api/admin/activities/**`、`/api/admin/coupon/**`、`/api/admin/discount/**`、`/api/admin/seckill/**` 四条路由 + 同名四个限流 map 项；`X-Admin-Token` 头透传给下游。Task 3-6 的 controller 依赖这两件事都成立。
 
-- [ ] **Step 1: 写失败测试 —— yml 里四前缀都在两套 profile 出现，且都进了限流 map**
+- [x] **Step 1: 写失败测试 —— yml 里四前缀都在两套 profile 出现，且都进了限流 map**
 
 网关最容易漏的两件事：只改了 local 忘了 nacos（表现为"注册中心形态下 404"），以及新路由
 不进 `rate-limit` map（表现为**完全不限流**，且不报错，见 README 事实 #3）。所以这条断言直接读
@@ -686,7 +688,7 @@ class GatewayAdminRoutesTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=GatewayAdminRoutesTest`
 Expected: 三条都 FAIL（前缀 0 次、id 0 次、`-1 < admin`）。
 
-- [ ] **Step 2: 加路由与限流（两段都要改）**
+- [x] **Step 2: 加路由与限流（两段都要改）**
 
 local 段（`spring.cloud.gateway.server.webflux.routes` 下，紧接现有 `admin-route` 之后）四条：
 
@@ -737,14 +739,14 @@ nacos 段同样四条，只把 `uri` 换成 `lb://marketing-activity` 等。
 > `gateway.ratelimit.<route>.limit` 与查 map 的（`GatewayConfigDefinitions.keyOf`），
 > 拼错的表现是"这条路由完全不限流"，而不是报错。
 
-- [ ] **Step 3: 跑测试确认通过**
+- [x] **Step 3: 跑测试确认通过**
 
 Run: `mvn -q -pl marketing-gateway -am test -Dtest=GatewayAdminRoutesTest`
 Expected: PASS。
 
 变异检查：把 nacos 段里 `admin-seckill-route` 那条删掉 → 断言必须红（"只在 1 个 profile 里配了"）。
 
-- [ ] **Step 4: 写失败测试 —— 网关透传 X-Admin-Token，且客户端自带的被删**
+- [x] **Step 4: 写失败测试 —— 网关透传 X-Admin-Token，且客户端自带的被删**
 
 沿用 `AdminAuthFilterTest` 已有的夹具风格：该文件用 `ArgumentCaptor<ServerWebExchange> captured`
 + `verify(chain).filter(captured.capture())`，再从 `captured.getValue().getRequest().getHeaders()`
@@ -794,7 +796,7 @@ Expected: PASS。
 Run: `mvn -q -pl marketing-gateway -am test -Dtest=AdminAuthFilterTest`
 Expected: 前两条 FAIL（下游没有 `X-Admin-Token`）。
 
-- [ ] **Step 5: 实现透传**
+- [x] **Step 5: 实现透传**
 
 `pass(ServerWebExchange, AdminClaims)`（`:124-142`）**签名不用改**：它拿到的 `exchange` 还是
  mutation 之前那个，所以里面直接复用 `tokenOf(exchange)`（`:163-167` 那个已有的 Bearer 解析 helper，
@@ -830,14 +832,14 @@ Expected: 前两条 FAIL（下游没有 `X-Admin-Token`）。
 `pass` 的类注释（`:119-123`）补一句：token 仍在，但换成了 `X-Admin-Token`，
 `Authorization` 照旧剥掉 —— 下游不需要区分 bearer 形状，C 端服务也看不到原始凭证。
 
-- [ ] **Step 6: 跑测试确认通过 + 变异检查**
+- [x] **Step 6: 跑测试确认通过 + 变异检查**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test`
 Expected: PASS（含 ⑤ 原有的 28 个用例不退步）。
 
 变异检查：把 `headers.remove("X-Admin-Token")` 那行删掉 → `stripsClientSuppliedTokenHeader` 必须红。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add marketing-gateway
@@ -1822,6 +1824,22 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
    然后断言 `record` 不外溢 + 计数 +1。用 `doThrow` 配 `verify` 那条路在本仓库的 Mockito 版本上
    会撞上 `add` 的返回类型（`RecordId`）问题。
 
+6. **Task 2 漏写了一处必改文件**：`application.yml` 的 rate-limit map 一加四条，
+   ⑤ 留下的 `GatewayConfigDefinitionsTest.definitionsMatchYamlRateLimitMap` 立刻红
+   （"yml 的 rate-limit 条目与声明清单漂移了"）。这条红是**设计如此**，别绕过它：
+   新阈值必须同时进 `GatewayConfigDefinitions` 才能在线改，否则后台没有输入框、
+   写了也没人消费。落地时按九个键补齐（四条新前缀各 50/s，与 admin-route 同档）。
+7. **限流 map 的项是 `{limit, window-seconds}` 两段结构**，不是裸标量：
+   写成 `admin-activity-route: ${RL_ADMIN_ACTIVITY:50}` 会被 binder 静默丢掉，
+   表现恰好是"这条路由完全不限流"。Task 2 的测试因此加了一条"形状也必须对"的断言。
+8. **yml 的语法/结构错误没有任何单测能抓**（`GatewayAdminRoutesTest` 读的是文本）。
+   所以 T2 的收尾必须真起一次栈：LITE `deploy-preview.sh` + `smoke-test.sh`，
+   并用 `curl` 验四条新前缀在无凭证时回 `40100`（证明路由生效，而不是 404 或 500）。
+9. **`headers.remove("X-Admin-Token")` 在已鉴权路径上不是 load-bearing**（`set` 本来就会顶掉），
+   所以那条断言要打在**免鉴权登录口**上：那里 claims 为 null、没有任何 set，
+   少了 remove 就等于"未登录的请求带着 X-Admin-Role: admin 到下游"。变异检查证实：
+   删掉 remove 后只有那条新写红的的测试会红（`expected: <null> but was: <attacker-minted>`）。
+
 ## 编写进度
 
 Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
@@ -1836,8 +1854,10 @@ Task 4-6（discount / coupon / seckill）同上，且只写与 Task 3 的差异 
 
 Task 7-10 同上：T7 审计投递与 drain、T8 重预热回执、T9 脚本冲击面、T10 五形态复跑与 README。
 
-**执行进度**：Task 1 已落地（`feat(common): ③ 后台身份件与审计投递口…`）——
-18 条新用例、5 处变异检查全部咬人、全仓 200 用例 / 49 类绿。
+**执行进度**：Task 1 已落地（`feat(common): ③ 后台身份件与审计投递口…`）。
+Task 2 已落地（`feat(gateway): ③ 四条后台前缀路由…`）：四条路由两套 profile 齐、
+限流九条、`X-Admin-Token` 透传；LITE 真起栈复跑 72/72，四条新前缀无凭证回 40100。
+全仓 **207 用例 / 50 类绿**。变异检查累计 9 处（T1 五 + T2 四），全部咬人。
 `AuditOutbox` 按计划提前到 T1 落了（T7 只剩 admin 侧 drain，届时它那份 Files 列表按"Modify"读）。
 T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
 —— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。

@@ -214,4 +214,57 @@ class AdminAuthFilterTest {
         assertTrue(filter.getOrder() < new AuthFilter(properties).getOrder());
         assertFalse(AdminAuthFilter.VERIFIED.isEmpty());
     }
+
+    // ---- ③：把已验签的 token 透传给业务服务（业务侧不采信裸身份头） ----
+
+    @Test
+    @DisplayName("下游收到 X-Admin-Token：业务服务要靠它验签，裸 X-Admin-* 头对直连端口不设防")
+    void forwardsVerifiedTokenToDownstream() {
+        String bearer = token(1L, "admin", "admin", "jti-1");
+
+        filter.filter(adminGet("Bearer " + bearer), chain).block();
+
+        verify(chain).filter(captured.capture());
+        HttpHeaders headers = captured.getValue().getRequest().getHeaders();
+        assertEquals(bearer, headers.getFirst("X-Admin-Token"));
+        assertNull(headers.getFirst(HttpHeaders.AUTHORIZATION), "原始 bearer 照旧剥掉");
+    }
+
+    @Test
+    @DisplayName("已鉴权路径：客户端注入的 X-Admin-Token 被网关自己那枚顶掉")
+    void stripsClientSuppliedTokenHeader() {
+        String bearer = token(1L, "admin", "admin", "jti-1");
+        MockServerWebExchange req = MockServerWebExchange.from(
+                MockServerHttpRequest.get("http://gw/api/admin/users")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
+                        .header("X-Admin-Token", "attacker-minted"));
+
+        filter.filter(req, chain).block();
+
+        verify(chain).filter(captured.capture());
+        HttpHeaders headers = captured.getValue().getRequest().getHeaders();
+        assertEquals(1, headers.get("X-Admin-Token").size(), "不能把客户端注入的那一枚留在列表里");
+        assertEquals(bearer, headers.getFirst("X-Admin-Token"), "留下的必须是网关验过并透传的那枚");
+    }
+
+    @Test
+    @DisplayName("免鉴权登录口：外部塞进来的身份头必须被清空（这条才是 remove 的真判据）")
+    void permitRouteStripsSpoofedIdentityHeaders() {
+        properties.getAdmin().setPermitPaths(java.util.List.of("/api/admin/auth/login"));
+        MockServerWebExchange req = MockServerWebExchange.from(
+                MockServerHttpRequest.post("http://gw/api/admin/auth/login")
+                        .header("X-Admin-Token", "attacker-minted")
+                        .header("X-Admin-Role", "admin")
+                        .header("X-Admin-Uid", "1"));
+
+        filter.filter(req, chain).block();
+
+        verify(chain).filter(captured.capture());
+        HttpHeaders headers = captured.getValue().getRequest().getHeaders();
+        // 这条路径上 claims 为 null、没有 set 会顶掉它们 —— 少了 remove，
+        // 下游就会看到一个"未登录但带着 admin 身份"的请求
+        assertNull(headers.getFirst("X-Admin-Token"), "登录口不给任何 token");
+        assertNull(headers.getFirst("X-Admin-Role"), "未登录也不该带着 X-Admin-Role");
+        assertNull(headers.getFirst("X-Admin-Uid"));
+    }
 }

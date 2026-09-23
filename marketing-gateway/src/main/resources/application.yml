@@ -40,6 +40,26 @@ spring:
           uri: http://${SECKILL_HOST:127.0.0.1}:${SECKILL_PORT:8084}
           predicates:
             - Path=/api/seckill/**
+        # ③：业务管理面的写端点长在 owning 服务上，但路径统一在 /api/admin/ 前缀下。
+        # 这四条**必须排在下面那条 admin-route 之前**：网关按声明顺序取第一个命中的路由，
+        # 而 admin-route 的 /api/admin/** 会把它们整片吞掉（表现是"后台改预算永远打到 admin 进程"）。
+        # LITE 下这四条与 admin-route 同指 standalone:8085（compose 已把四个 *_HOST/*_PORT 指过去）。
+        - id: admin-activity-route
+          uri: http://${ACTIVITY_HOST:127.0.0.1}:${ACTIVITY_PORT:8081}
+          predicates:
+            - Path=/api/admin/activities/**
+        - id: admin-coupon-route
+          uri: http://${COUPON_HOST:127.0.0.1}:${COUPON_PORT:8082}
+          predicates:
+            - Path=/api/admin/coupon/**
+        - id: admin-discount-route
+          uri: http://${DISCOUNT_HOST:127.0.0.1}:${DISCOUNT_PORT:8083}
+          predicates:
+            - Path=/api/admin/discount/**
+        - id: admin-seckill-route
+          uri: http://${SECKILL_HOST:127.0.0.1}:${SECKILL_PORT:8084}
+          predicates:
+            - Path=/api/admin/seckill/**
         # 管理后台：LITE 下 ADMIN_HOST=standalone、ADMIN_PORT=8085（同一进程），
         # 默认值是 FULL 进程形态的独立 admin:8086
         - id: admin-route
@@ -78,6 +98,21 @@ marketing:
       # 而它和 C 端同进程时会连带影响服役档业务。route id 不在 map 里=完全不限流。
       admin-route:
         limit: ${RL_ADMIN:50}
+        window-seconds: 1
+      # ③ 的四条业务后台路由各占一桶。50/s 与 admin-route 同档：这些是低频写，
+      # 而且后台登录口那条理由（BCrypt 50-100ms 吃 CPU）同样适用于它们背后的账号校验。
+      # 不在 map 里=完全不限流且不报错，所以这四条与路由本身同等重要。
+      admin-activity-route:
+        limit: ${RL_ADMIN_ACTIVITY:50}
+        window-seconds: 1
+      admin-coupon-route:
+        limit: ${RL_ADMIN_COUPON:50}
+        window-seconds: 1
+      admin-discount-route:
+        limit: ${RL_ADMIN_DISCOUNT:50}
+        window-seconds: 1
+      admin-seckill-route:
+        limit: ${RL_ADMIN_SECKILL:50}
         window-seconds: 1
 
     admin:
@@ -122,6 +157,20 @@ spring:
         - id: seckill-route
           uri: lb://marketing-seckill
           predicates: [ Path=/api/seckill/** ]
+        # ③ 的四条：与 local 段一起改。漏这条的表现和 local 漏 nacos 一样阴——
+        # LITE 一切正常，只有升档后后台写整片 404。
+        - id: admin-activity-route
+          uri: lb://marketing-activity
+          predicates: [ Path=/api/admin/activities/** ]
+        - id: admin-coupon-route
+          uri: lb://marketing-coupon
+          predicates: [ Path=/api/admin/coupon/** ]
+        - id: admin-discount-route
+          uri: lb://marketing-discount
+          predicates: [ Path=/api/admin/discount/** ]
+        - id: admin-seckill-route
+          uri: lb://marketing-seckill
+          predicates: [ Path=/api/admin/seckill/** ]
         # 必须和上面 local 那段一起改：漏这条的表现是 FULL 形态后台整片 404，
         # 而 LITE 一切正常——只在升档后才暴露。
         - id: admin-route
