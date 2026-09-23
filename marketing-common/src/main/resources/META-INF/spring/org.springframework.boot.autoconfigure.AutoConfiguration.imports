@@ -1,1 +1,2 @@
 com.example.marketing.common.config.MarketingCommonAutoConfiguration
+com.example.marketing.common.config.ConfigCommonAutoConfiguration

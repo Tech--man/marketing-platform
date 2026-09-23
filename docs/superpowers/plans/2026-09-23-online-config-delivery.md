@@ -1128,10 +1128,11 @@ class ConfigSnapshotPollerTest {
             }
             return store.get(inv.<String>getArgument(0));
         });
-        when(ops.set(anyString(), anyString())).thenAnswer(inv -> {
+        // ValueOperations.set(K,V) 返回 void：桩它只能用 doAnswer/doThrow，when() 编不过
+        org.mockito.Mockito.doAnswer(inv -> {
             store.put(inv.getArgument(0), inv.getArgument(1));
-            return "OK";
-        });
+            return null;
+        }).when(ops).set(anyString(), anyString());
         ConfigSchemaRegistry registry = new ConfigSchemaRegistry(List.of(new ConfigDefinitionProvider() {
             @Override
             public String service() {
