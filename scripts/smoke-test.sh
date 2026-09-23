@@ -57,7 +57,10 @@ mysql_admin() { docker exec -i mkt-mysql mysql --default-character-set=utf8mb4 \
   -umarketing -pmarketing123 "$@"; }
 
 # 断言响应包含指定片段
+# 空针必须判失败：grep -q "" 恒真，会静默造出"绿"——实测券码取空时，
+# "可用券列表包含新券"就是这样假绿的，真问题拖到下一行核销才暴露。
 expect() { # desc needle body
+  if [ -z "$2" ]; then bad "$1（断言针为空：脚本上一步取值失败）" "$3"; return; fi
   if echo "$3" | grep -q "$2"; then ok "$1"; else bad "$1" "$3"; fi
 }
 
@@ -140,8 +143,12 @@ USER_ID=$((880000 + RANDOM % 10000))
 R=$(curl -s -X POST "$GW/api/coupon/grant" -H "$AUTH" -H "$JSON" \
   -d "{\"requestId\":\"$REQ_ID\",\"userId\":$USER_ID,\"templateNo\":\"CT2026001\"}")
 expect "领券受理（requestId=${REQ_ID}）" '"code":0' "$R"
-R=$(poll "$GW/api/coupon/grant/result/$REQ_ID" '"couponCode":"' 15)
-expect "轮询到领券 SUCCESS 并返回券码" '"couponCode"' "$R"
+# 断言针必须与 poll 针一致：poll 超时后照样把最后一次响应打出来，若这里只查
+# "couponCode" 这个键名，PROCESSING（couponCode:null）会蒙过去，接着券码取空、
+# 核销报 40000"couponCode 必填"——红在错误的行上，看着像核销坏了。
+# 券码固定 CP 前缀，针带到 CP 才算是真 SUCCESS；FULL 首次消费要走 RocketMQ 冷启动，给 30s。
+R=$(poll "$GW/api/coupon/grant/result/$REQ_ID" '"couponCode":"CP' 30)
+expect "轮询到领券 SUCCESS 并返回券码" '"couponCode":"CP' "$R"
 COUPON_CODE=$(echo "$R" | sed -n 's/.*"couponCode":"\([^"]*\)".*/\1/p')
 R=$(curl -s -H "$AUTH" "$GW/api/coupon/usable?userId=$USER_ID")
 expect "用户可用券列表包含新券" "$COUPON_CODE" "$R"
@@ -181,7 +188,7 @@ R=$(curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
   -d "{\"activityNo\":\"SK2026001\",\"userId\":$SK_BASE}")
 expect "抢购受理返回排队 token" '"code":0' "$R"
 TK=$(echo "$R" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-R=$(poll "$GW/api/seckill/grab/result/$TK" 'SUCCESS' 40)
+R=$(poll "$GW/api/seckill/grab/result/$TK" 'SUCCESS:' 40)
 expect "轮询到下单 SUCCESS" 'SUCCESS:' "$R"
 ORDER_NO=$(echo "$R" | sed -n 's/.*SUCCESS:\([^",]*\).*/\1/p')
 R=$(curl -s -X POST "$GW/api/seckill/pay/$ORDER_NO" -H "$AUTH")

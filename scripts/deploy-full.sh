@@ -68,20 +68,23 @@ wait_healthy marketing-gateway 8090 180
 echo "==> 等待五条路由真正可服务（服务发现订阅是懒加载的）"
 CT="Authorization: Bearer ${GATEWAY_TOKEN:-demo-token-123}"
 wait_route() { # url desc 期望片段
-  local url=$1 desc=$2 want=$3
+  local url=$1 desc=$2 want=$3 body=""
   for _ in $(seq 1 60); do
-    if curl -s -m 5 -H "$CT" "http://127.0.0.1:8090$url" | grep -q "$want"; then
+    body=$(curl -s -m 5 -H "$CT" "http://127.0.0.1:8090$url")
+    if echo "$body" | grep -q "$want"; then
       echo "    $desc 可服务"
       return 0
     fi
     sleep 2
   done
-  echo "!! $desc 在 120s 内没有返回预期响应（$url）" >&2
+  # 把末次响应带出来：路径漂了（接口改名/404）与订阅没到位是两种病，
+  # 只看"没返回预期响应"会让人去查服务发现（实测这样红过一次，真因是探针路径已不存在）
+  echo "!! $desc 在 120s 内没有返回预期响应（$url），末次响应: $(echo "$body" | head -c 160)" >&2
   return 1
 }
 rc=0
 wait_route "/api/activity/ACT2026001" "活动路由" '"code":0' || rc=1
-wait_route "/api/coupon/templates" "券路由" '"code":0' || rc=1
+wait_route "/api/coupon/stock/CT2026001" "券路由" '"code":0' || rc=1
 wait_route "/api/discount/rules" "优惠路由" '"code":0' || rc=1
 wait_route "/api/seckill/activities" "秒杀路由" '"code":0' || rc=1
 # 后台路由用登录探：它同时验到 lb://marketing-admin → DB → BCrypt 这条完整链
