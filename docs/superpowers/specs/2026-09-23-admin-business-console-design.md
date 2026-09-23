@@ -51,23 +51,56 @@
 ```
 
 `AdminAuthFilter` 按 `ADMIN_PREFIX = "/api/admin/"` 判定（`AdminAuthFilter.java:47`），
-所以**四条新前缀天然已被双 token 分区与角色粗筛覆盖，①② 的 filter 零改动**；
-网关对这些身份头先 remove 后 set，业务侧读 `X-Admin-*` 不需要自己验签。
-
-网关侧要做的是：local 与 nacos 两套 profile 各加四条路由（现结构 `application.yml:26-79` 与
-`:112-128`），每条都要进 `rate-limit` map（`application.yml:60-`，事实 #3 同源：不在 map 里＝完全不限流），
-其中 `admin-*` 四条在 LITE 下与 `admin-route` 同指 standalone:8085。
+所以**四条新前缀天然已被双 token 分区与角色粗筛覆盖，①② 的 filter 只剩一处小改**（见 §3.2）。
 
 ### 3.1 身份件：一处实现，不做五份
 
 母版建议"形状放 common、各服务一个 30 行实现"。**这一条我改**：common 直接给
-`AdminRequestIdentity`（final 类 + 静态方法，从 `HttpServletRequest` 读 `X-Admin-Uid/Role/Nickname`
-与 `requireRole(String...)`），业务侧每个写端点一行 `AdminRequestIdentity.requireRole(request, "admin")`。
+`AdminRequestIdentity`（从请求里取出 `AdminPrincipal` + `requireRole(String...)`），
+业务侧每个写端点一行 `adminIdentity.require(request, "admin")`。
 
 理由：五份 30 行实现正是本仓库在 `marketing.*` 上等值副本踩过一次的坑（Task #11）；而这个件里
-唯一可能漂移的语义（角色字符串、缺头如何判）恰好必须五处一致。
-它不带 Redis 吊销回退（那是 admin 的 `AdminIdentityService` 的事，网关已经判过），所以放 common
-不引入 Redis 依赖，也不需要 DataSource —— 与 ⑤ 的 `ConfigValues` 同一装配档位。
+唯一可能漂移的语义（角色字符串、缺凭证如何判）恰好必须五处一致。它不带 Redis 吊销回退
+（那是 admin 的 `AdminSessionService` 的事），所以放 common 不引入 Redis 依赖，也不需要 DataSource
+—— 与 ⑤ 的 `ConfigValues` 同一装配档位。
+
+### 3.2 母版 §6.0 第四条理由不成立，本段换一种凭证
+
+母版写"业务侧读 `X-Admin-*` 身份头即可（网关对这些头先 remove 后 set，客户端伪造不到）"。
+**"客户端伪造不到"只对经网关的请求成立**，而 ③ 恰恰把这些端口变成了**改钱**的入口：
+
+- FULL 进程形态：seckill 监听 `*:8084`（实测 `lsof`），同机任何人 `curl -H 'X-Admin-Role: admin'`
+  就能改库存；
+- LITE 服役档：`standalone` 的 8085 **按设计发布到宿主机**（`AdminIdentityService` 的类注释自己写着这一点），
+  而 LITE 是常态服役档 —— 这条路径不是异常，是日常。
+
+所以业务侧不能把裸头当授权。定稿：**网关把已验签的 token 透传成 `X-Admin-Token`，业务侧自己验签**：
+
+1. 网关 `AdminAuthFilter.pass` 在 remove 列表里加 `X-Admin-Token`，并把它 set 成自己刚验过的那个 token
+   （`Authorization` 照旧剥掉，下游不需要原始 bearer）；
+2. 业务侧 `AdminRequestIdentity`：`X-Admin-Token` → common 的 `AdminTokenCodec.verify(token, now)`
+   → 从 `AdminClaims` 取 uid/username/role（**头里的 role 一律不采信**）；缺头/签错/过期 → `40100`；
+   角色不够 → `40300`。`AdminTokenCodec` 本来就是 common 里的普通类
+   （`common/security/AdminTokenCodec.java`，HS256 手写、无 JJWT），业务侧零新密码学；
+3. 吊销与"整号作废时刻"仍只在网关与 admin 判（网关已判，业务侧不必重复）；
+   代价是：一枚被吊销的 token 在直连业务端口时仍可写到过期为止 —— 这条写进 §10 的已知边界，
+   而不是靠给业务侧再装一套 Redis 吊销来掩盖。
+
+**代价（必须一起做的部署改动）**：`ADMIN_JWT_SECRET` 要从"gateway + admin 两进程"扩到六个进程
+（`start-all.sh`、`start-dev.sh`、`docker-compose.preview.yml`、`docker-compose.full-app.yml` 的 `&app-env` 锚点）。
+缺失时的行为沿用 admin 现有口径：**服务拒绝启动**，而不是"签得出但没人能验"或"业务写免鉴权"。
+
+这把母版那句"网关已经判过"换成了一句可测的话：**任何进程的后台写端点，都要能在没有网关的情况下
+被独立判为 40100**（§9 的验收里有这条断言，直连端口打，不带 token）。
+
+### 3.3 网关侧要做的两件事
+
+1. local 与 nacos 两套 profile 各加四条路由（现结构 `application.yml:26-79` 与 `:112-128`），
+   每条都要进 `rate-limit` map（`application.yml:60-`，事实 #3 同源：**不在 map 里＝完全不限流**）。
+   后台登录口的 BCrypt 单次 50-100ms 这条理由对四条新前缀同样成立 —— 它们也都是"低频但不免费"的写；
+   LITE 下四条与 `admin-route` 同指 standalone:8085；
+2. `AdminAuthFilter.pass` 的 remove 列表加 `X-Admin-Token` 并 set 成刚验过的 token（§3.2）。
+   这是 ①② 那套 filter 在本段唯一的改动。
 
 ## 4. 正面结掉两个跨进程缺口
 
@@ -148,7 +181,8 @@ Redis 被清空这件事也仍然看得见（键没了 vs 消费组没了，是�
 
 ## 8. 批次
 
-T1 common 身份件 + 审计载荷 + Stream 键名；T2 网关四前缀路由与限流（两套 profile）；
+T1 common 身份件（验签式）+ 审计载荷 + Stream 键名；T2 网关四前缀路由与限流（两套 profile）
++ `X-Admin-Token` 透传 + `ADMIN_JWT_SECRET` 扩到六进程（四套入口脚本/编排）；
 T3 activity（搬两条 + 列表 + 预算/灰度编辑 + reheat 同事务）；T4 discount（规则读写搬家 + 编辑）；
 T5 coupon（券模板创建/编辑/列表 —— 净新增）；T6 seckill（活动创建/上下线 + 库存编辑 + stock 404 归一）；
 T7 审计 Stream 投递 + admin drain；T8 重预热回执（41010 → DISPATCHED/ack）；
@@ -157,12 +191,21 @@ T9 C 端写路径删除与三处脚本冲击面；T10 五形态复跑 + README �
 ## 9. 验收
 
 - 单测 +≈24：每端点一条"没调 `reheat(key,true)` 就红"、一条 `@Version` 冲突出 `41008`、
-  一条 read-only/operator 写 `40300`、审计载荷编解码往返、drain 的 XACK 与 MAXLEN 行为、
+  一条 read-only/operator 写 `40300`、**一条"只有 `X-Admin-Role: admin` 裸头而没有 token 时必须 40100"**
+  （§3.2 的那条边界，变异检查：把 `AdminRequestIdentity` 退回读头，这条必须红）、
+  审计载荷编解码往返、drain 的 XACK 与 MAXLEN 行为、
   `41010` 在 LITE 仍同步、FULL 走 DISPATCHED。关键断言逐条做变异检查。
 - smoke 链路 6 新断言 + 基线 **72 条在迁移后必须同时全绿**（母版 §9 的约束按 ⑤ 之后的新基线读）。
 - 五形态复跑：LITE 容器 / FULL 进程 / FULL 容器 / dev / 每服务一库，每档 72+ 全绿；
   LITE 内存继续 `docker stats` 复核（standalone 超 640 MiB 才动 `mem_limit`，⑤ 复跑区间 517-599）。
 - 每服务一库档跑冒烟记得 `MYSQL_DB=marketing_activity`（⑤ 执行记录里的这条口径同样适用于本段的新断言）。
+
+## 9.1 已知边界（写在这里，不用再加一套机制去掩盖）
+
+被吊销的会话（登出/改密/停用）在**直连业务端口**时仍可写到 token 自然过期：吊销判定在网关与 admin，
+业务侧只做无状态验签。经网关的路径不受影响（网关查吊销位与整号作废时刻）。
+要把这个窗口也关掉，就得给四个业务进程各装一套 Redis 吊销回退 —— 那是第五份等值实现，
+代价大于收益；正确做法是把业务端口留在不可信网络之外（README 已立此规）。
 
 ## 10. 不做
 
