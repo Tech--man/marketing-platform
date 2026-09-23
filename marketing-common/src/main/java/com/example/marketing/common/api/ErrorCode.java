@@ -27,6 +27,12 @@ public enum ErrorCode {
     DUPLICATE_REQUEST(41005, "重复请求处理中，请稍后查询结果"),
     RISK_REJECTED(41006, "风控拦截"),
     ACTIVITY_NOT_ONLINE(41007, "活动未上线或已结束"),
+    /** 乐观锁冲突：后台两个标签页同时编辑同一行（③ 的字段编辑也用它） */
+    CONFIG_VERSION_CONFLICT(41008, "数据已被他人修改，请刷新后重试"),
+    /** DB 已提交但 Redis 广播失败：静默不一致的显式出口，配"重新广播"动作修复 */
+    CONFIG_NOT_BROADCAST(41009, "配置已落库但未广播，请用重新广播修复"),
+    /** 该能力在当前形态下不存在（reheat 从 41000 迁到这里；41000 继续只表示业务失败） */
+    FORM_NOT_APPLICABLE(41010, "本形态不适用该操作"),
 
     SYSTEM_ERROR(50000, "系统繁忙，请稍后再试"),
     CALC_TIMEOUT(50001, "计算超时，已降级");
