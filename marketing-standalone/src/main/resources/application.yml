@@ -46,14 +46,16 @@ mybatis-plus:
 
 # 消息通道：Redis Stream 替代 RocketMQ（common 自动装配按此选型）
 marketing:
-  # 只保留真正存在形态差异 / 无代码默认的配置：
-  # mq.type（LITE 用 Redis Stream）与下方 gray（灰度规则是数据，不是默认值）
+  # 只保留真正存在形态差异 / 无代码默认的配置：mq.type（LITE 用 Redis Stream）、
+  # config.form（在线配置按形态取值）、admin（后台密钥）。
+  # 灰度规则已从这里的 marketing.gray 移进 activity.gray_percent 列——它是数据，不是配置
   mq:
     type: ${MQ_TYPE:redis-stream}
+  config:
+    form: ${DEPLOY_FORM:}
+    poll-seconds: ${CONFIG_POLL_SECONDS:5}
   gray:
-    ACT2026001:
-      percent: 100
-      whitelist: [ ]
+    refresh-seconds: ${GRAY_REFRESH_SECONDS:5}
   # 后台聚进本进程，所以 ADMIN_JWT_SECRET 必须在 standalone 与 gateway 两处同值下发；
   # 留空会让 AdminSecurityConfig 启动即失败（而不是默默签出一个谁都能伪造的 token）
   admin:

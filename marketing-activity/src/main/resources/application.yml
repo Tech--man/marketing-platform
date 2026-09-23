@@ -45,12 +45,15 @@ management:
     tags:
       application: ${spring.application.name}
 
-# 本地灰度规则（profile=nacos 时由 Nacos 配置中心推送覆盖/刷新）
+# 在线配置下发：灰度真值已从这里的 marketing.gray 搬进 activity.gray_percent/gray_whitelist 列
+# （yml 那份既改不动——全仓零 @RefreshScope，也要在重启后漂走；见 2026-09-23 段内 spec §3 偏离 3）
 marketing:
+  config:
+    form: ${DEPLOY_FORM:}
+    poll-seconds: ${CONFIG_POLL_SECONDS:5}
   gray:
-    ACT2026001:
-      percent: 100
-      whitelist: [ ]
+    # 灰度规则的刷新节拍；真值在 DB 列，这里只调回源频率
+    refresh-seconds: ${GRAY_REFRESH_SECONDS:5}
 
 logging:
   level:

@@ -32,6 +32,10 @@ public class ActivityEntity {
     /** 已用预算（元），DB 兜底，实时以 Redis 为准 */
     private BigDecimal usedAmount;
     private String remark;
+    /** 灰度放量百分比 0-100；null = 未配灰度 = 全量放行（GrayService 的既有语义） */
+    private Integer grayPercent;
+    /** 灰度白名单 userId CSV；null 或空 = 无白名单 */
+    private String grayWhitelist;
 
     @Version
     private Integer version;
