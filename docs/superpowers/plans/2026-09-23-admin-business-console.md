@@ -20,6 +20,10 @@
 - **缺 `ADMIN_JWT_SECRET` 就拒绝启动**（沿用 admin 的口径）：本段把它从 gateway+admin 两进程扩到六个进程，业务侧的 `AdminRequestIdentity` 构造期对空密钥抛异常，**不做"没有密钥就免鉴权"的降级**。
 - **基线**：现有 **72 条** smoke 断言在迁移后必须同时全绿；单测基线 **45 类 / 182 个 `@Test`**（⑤ 收尾时刷新过），本段收尾再刷新一次。
 - **每处关键断言做变异检查**：把被测那一行注释掉/改坏，对应测试必须红。红了才算断言存在。
+- **每个任务收尾时 72 条基线必须回绿**：所以"搬家"与"删掉 C 端旧路径"必须在同一个任务里做完
+  （T3-T6 各自搬自己的端点并顺手改 `smoke-test.sh` 对应那几行），不能拆成"先加新的、最后统一删旧的" ——
+  中间那几个任务会留下两个入口都能改预算的状态，那正是地雷 A 的成因，而且基线红着没法继续跑。
+  T9 只剩"没有搬家负担"的部分：`reset-demo-data.sh` 改写、新链路 6、`load-probe.sh` 提示语。
 - 提交信息用中文，前缀沿用本仓库历史（`feat(...)` / `fix(...)` / `refactor(...)` / `test(...)` / `docs(...)`）。
 - 五形态复跑口径与 ⑤ 相同：LITE 容器 / FULL 进程 / FULL 容器 / dev / 每服务一库；每服务一库档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`。
 
@@ -35,6 +39,7 @@
 | `common/audit/AuditPayload.java` | 一条审计的跨进程载荷，字段与 `admin_audit_log` 列一一对应（before/after 已在 `requestSummary` 里） |
 | `common/audit/AuditPayloadCodec.java` | 载荷 JSON 编解码；读侧永不抛（与 ⑤ 的 `ConfigSnapshotCodec` 同一纪律） |
 | `common/transport/StreamKeys.java` | `mkt:audit:pending` / `mkt:reheat:pending` / `mkt:reheat:ack` 与两个消费组名，唯一允许出现这些字面量的地方 |
+| `common/audit/AuditOutbox.java` | 业务侧投递：`XADD mkt:audit:pending`，`MAXLEN ~100000`、**无 TTL**（TTL=静默丢审计）；XADD 失败只 warn + 计数，绝不把业务写回滚掉 |
 | `common/config/AdminSecurityAutoConfiguration.java` | 装上面几件的 `@AutoConfiguration`，`@ConditionalOnWebApplication(SERVLET)`，**不挂 DataSource 条件** |
 
 **marketing-gateway**（改 2 处）：`application.yml` 两套 profile 各加四条路由 + 四条限流项；`AdminAuthFilter` 的 remove 列表加 `X-Admin-Token` 并 set 刚验过的 token。
@@ -65,6 +70,12 @@
 - Test: `marketing-common/src/test/java/com/example/marketing/common/security/AdminRequestIdentityTest.java`
 - Test: `marketing-common/src/test/java/com/example/marketing/common/audit/AuditPayloadCodecTest.java`
 - Test: `marketing-common/src/test/java/com/example/marketing/common/config/AdminSecurityAutoConfigurationTest.java`
+- Create: `marketing-common/src/main/java/com/example/marketing/common/audit/AuditOutbox.java`
+- Test: `marketing-common/src/test/java/com/example/marketing/common/audit/AuditOutboxTest.java`
+
+> **顺序提醒**：`AuditOutbox` 必须在 T1 就落，因为 T3-T6 的每个写端点都要 `outbox.record(payload)`
+> （母版 §6.2 的"所有写记 before/after"）。T7 只做 admin 侧的 drain，中间几天审计堆在 Stream 里
+> 不丢 —— 这正是选 Stream + 无 TTL 的原因。
 
 **Interfaces:**
 - Consumes: `AdminTokenCodec.verify(String, long)` → `TokenVerifyResult`（`status()` + `claims()`，已有）；`BizException.of(ErrorCode, String)`（已有）。
@@ -842,13 +853,493 @@ EOF
 
 ---
 
+### Task 3: activity —— 创建/流转搬家 + 预算与灰度编辑（地雷 A 的正面防守）
+
+**Files:**
+- Create: `marketing-activity/src/main/java/com/example/marketing/activity/controller/ActivityAdminController.java`
+- Create: `marketing-activity/src/main/java/com/example/marketing/activity/dto/ActivityView.java`
+- Create: `marketing-activity/src/main/java/com/example/marketing/activity/dto/BudgetUpdateRequest.java`
+- Create: `marketing-activity/src/main/java/com/example/marketing/activity/dto/GrayUpdateRequest.java`
+- Modify: `marketing-activity/src/main/java/com/example/marketing/activity/service/ActivityService.java`
+- Modify: `marketing-activity/src/main/java/com/example/marketing/activity/controller/ActivityController.java`（删 `create`、`transition` 两个方法与不再用到的 import）
+- Modify: `scripts/smoke-test.sh`（链路 0 的创建与流转两处换路径换 token）
+- Test: `marketing-activity/src/test/java/com/example/marketing/activity/service/ActivityAdminWriteTest.java`
+- Test: `marketing-activity/src/test/java/com/example/marketing/activity/controller/ActivityAdminControllerTest.java`
+
+**Interfaces:**
+- Consumes: T1 的 `AdminRequestIdentity.require(HttpServletRequest, String...)`、`AuditOutbox.record(AuditPayload)`、`AuditPayload`、`AdminRoles.ADMIN`；已有的 `BudgetService implements CacheReheater`（`reheat(String, boolean)` → `CacheReheater.Result(String type, String key, long before, long after, String formula)`）；`PageQuery.of(Integer, Integer)`（`@Data`，取页码用 `getPage()`/`getSize()`，不是 record 访问器）/
+`PageResult.of(long, int, int, List)` / `PageResult.map(Function)` / `Result.ok(T)`。
+- Produces: `ActivityService.updateBudget(String, BigDecimal, Integer)`、`updateGray(String, Integer, String, Integer)`、`list(PageQuery, String status)`、`transition` 的冲突码改成 `41008`。T7 的 drain 靠这些端点产生的 `AuditPayload` 才有内容可落。
+
+**已核实的现状**（写代码前要知道的三件事）：
+1. `ActivityEntity.version` 是 `Integer` 且带 `@Version`（`ActivityEntity.java:40-41`），
+   `MybatisPlusConfig` 里 `OptimisticLockerInnerInterceptor` 与 `PaginationInnerInterceptor` 都在；
+2. `ActivityService.transition` 现在的乐观锁失败抛的是 `ErrorCode.BIZ_ERROR`（41000，`:50-53`），
+   本任务把它迁到 `41008`，与新的字段编辑同码 —— `41000` 继续只表示业务失败（⑤ T9 立的口径）；
+3. 灰度**不需要** reheat：`GrayService` 走 `GrayRuleCache` 每 5s 回源 DB（⑤ 偏离 #3），
+   所以 `updateGray` 只写 DB 就是完整语义。这条要在代码注释里写明，否则下一个人会以为漏了刷新。
+
+- [ ] **Step 1: 写失败测试 —— 改预算不刷缓存就是没改**
+
+`ActivityAdminWriteTest.java`（H2 `MODE=MySQL` + Mockito，手法沿用 `ActivityServiceTest`）。
+这个文件里最值钱的断言是 `verify(budgetService).reheat(no, true)` —— 把实现里那一行注释掉，
+这条必须红。这是地雷 A 唯一的回归锚。
+
+```java
+package com.example.marketing.activity.service;
+
+import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
+import com.example.marketing.activity.infrastructure.mapper.ActivityMapper;
+import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.cache.CacheReheater;
+import com.example.marketing.common.exception.BizException;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * 后台写路径的地雷 A 防守：改了 budget_amount 而不 force 重建预算键，
+ * warmIfAbsent 是 SETNX，旧键永远还在（ActivityService.java:56 的既有语义）。
+ */
+class ActivityAdminWriteTest {
+
+    private final ActivityMapper mapper = mock(ActivityMapper.class);
+    private final BudgetService budgetService = mock(BudgetService.class);
+    private final ActivityService service = new ActivityService(mapper, budgetService);
+
+    private ActivityEntity existing(String no, String budget, int version) {
+        ActivityEntity e = new ActivityEntity();
+        e.setActivityNo(no);
+        e.setBudgetAmount(new BigDecimal(budget));
+        e.setVersion(version);
+        return e;
+    }
+
+    @Test
+    @DisplayName("改预算必须 force 重预热预算键（SETNX 语义下不删键=改动永不生效）")
+    void budgetUpdateForcesReheat() {
+        when(mapper.selectOne(any())).thenReturn(existing("ACT9001", "100.00", 3));
+        when(mapper.updateById(any())).thenReturn(1);
+        when(budgetService.reheat(eq("ACT9001"), eq(true)))
+                .thenReturn(new CacheReheater.Result("budget", "ACT9001", 10000L, 8000L, "对账口径"));
+
+        service.updateBudget("ACT9001", new BigDecimal("80.00"), 3);
+
+        verify(budgetService).reheat("ACT9001", true);
+    }
+
+    @Test
+    @DisplayName("客户端 version 与库里不一致时 41008，且不写库、不刷缓存")
+    void staleVersionRejectedBeforeWrite() {
+        when(mapper.selectOne(any())).thenReturn(existing("ACT9001", "100.00", 5));
+        BizException e = assertThrows(BizException.class,
+                () -> service.updateBudget("ACT9001", new BigDecimal("80.00"), 3));
+        assertEquals(ErrorCode.CONFIG_VERSION_CONFLICT.getCode(), e.getCode());
+        verify(mapper, never()).updateById(any());
+        verify(budgetService, never()).reheat(anyString(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("updateById 返回 0（真并发）同样是 41008，不再是 41000")
+    void concurrentUpdateMapsTo41008() {
+        when(mapper.selectOne(any())).thenReturn(existing("ACT9001", "100.00", 3));
+        when(mapper.updateById(any())).thenReturn(0);
+        BizException e = assertThrows(BizException.class,
+                () -> service.updateBudget("ACT9001", new BigDecimal("80.00"), 3));
+        assertEquals(ErrorCode.CONFIG_VERSION_CONFLICT.getCode(), e.getCode());
+    }
+
+    @Test
+    @DisplayName("改灰度不刷预算键：灰度真值每 5s 回源 DB，刷新是 GrayRuleCache 的事")
+    void grayUpdateDoesNotTouchBudgetCache() {
+        when(mapper.selectOne(any())).thenReturn(existing("ACT9001", "100.00", 1));
+        when(mapper.updateById(any())).thenReturn(1);
+        service.updateGray("ACT9001", 5, "70001,70002", 1);
+        verify(budgetService, never()).reheat(anyString(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("灰度 null 与越界：null=未配灰度=全量放行（GrayService 既有语义），越界直接拒")
+    void grayPercentBounds() {
+        when(mapper.selectOne(any())).thenReturn(existing("ACT9001", "100.00", 1));
+        assertThrows(BizException.class, () -> service.updateGray("ACT9001", 130, null, 1));
+        assertThrows(BizException.class, () -> service.updateGray("ACT9001", -1, null, 1));
+    }
+}
+```
+
+> `ErrorCode.CONFIG_VERSION_CONFLICT.getCode()` —— 若 `ErrorCode` 的取值方法不叫 `getCode()`
+> （先看 `ErrorCode.java` 与既有用例的写法），按实际方法名改，别改 `ErrorCode`。
+
+Run: `source scripts/common.sh && mvn -q -pl marketing-activity -am test -Dtest=ActivityAdminWriteTest`
+Expected: 编译失败（`updateBudget`/`updateGray` 不存在）。
+
+- [ ] **Step 2: 实现两个写方法与冲突码迁移**
+
+`ActivityService` 追加（放在 `transition` 之后、`getByNo` 之前）：
+
+```java
+    /**
+     * 后台改总预算。<b>必须在同一事务里 force 重预热预算键</b>：
+     * 上线预热走的是 SETNX（{@code warmIfAbsent}），键已存在时改 DB 不动键，
+     * 于是"改了预算但 C 端余额还是旧的"（地雷 A，母版 §6.3）。
+     *
+     * @param expectedVersion 前端列表里带回去的 version；与库里不一致说明有人先改了，41008
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ActivityEntity updateBudget(String activityNo, BigDecimal budgetAmount, Integer expectedVersion) {
+        ActivityEntity entity = getByNo(activityNo);
+        requireVersion(entity, expectedVersion);
+        BigDecimal before = entity.getBudgetAmount();
+        entity.setBudgetAmount(budgetAmount);
+        flushWithVersion(entity);
+        budgetService.reheat(activityNo, true);
+        log.info("[activity] 预算变更 {} {} -> {}", activityNo, before, budgetAmount);
+        return entity;
+    }
+
+    /**
+     * 后台改灰度。不需要 reheat：灰度真值就是这两列，owning 侧 `GrayRuleCache` 每 5s 回源 DB
+     * 重建（⑤ 段内 spec §3 偏离 #3），所以写库即完整语义 —— 别在这里加一次"顺手刷缓存"，
+     * 那会让人以为不刷就不生效。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ActivityEntity updateGray(String activityNo, Integer grayPercent, String grayWhitelist,
+                                     Integer expectedVersion) {
+        if (grayPercent != null && (grayPercent < 0 || grayPercent > 100)) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "灰度百分比必须在 0-100，当前 " + grayPercent);
+        }
+        ActivityEntity entity = getByNo(activityNo);
+        requireVersion(entity, expectedVersion);
+        entity.setGrayPercent(grayPercent);
+        entity.setGrayWhitelist(grayWhitelist);
+        flushWithVersion(entity);
+        log.info("[activity] 灰度变更 {} percent={} whitelist={}", activityNo, grayPercent, grayWhitelist);
+        return entity;
+    }
+
+    /** 后台列表：只读，状态可选过滤 */
+    public PageResult<ActivityView> list(PageQuery query, String status) {
+        Page<ActivityEntity> page = activityMapper.selectPage(
+                new Page<>(query.getPage(), query.getSize()),
+                Wrappers.<ActivityEntity>lambdaQuery()
+                        .eq(status != null && !status.isBlank(), ActivityEntity::getStatus, status)
+                        .orderByDesc(ActivityEntity::getId));
+        return PageResult.of(page.getTotal(), query.getPage(), query.getSize(),
+                page.getRecords().stream().map(ActivityView::from).toList());
+    }
+
+    private void requireVersion(ActivityEntity entity, Integer expectedVersion) {
+        if (expectedVersion == null || !expectedVersion.equals(entity.getVersion())) {
+            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT,
+                    "活动已被他人修改（你看到的是 version=" + expectedVersion
+                            + "，当前 " + entity.getVersion() + "），请刷新后重试");
+        }
+    }
+
+    private void flushWithVersion(ActivityEntity entity) {
+        if (activityMapper.updateById(entity) == 0) {
+            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "数据已被他人修改，请刷新后重试");
+        }
+    }
+```
+
+同时把 `transition` 里那句 `new BizException(ErrorCode.BIZ_ERROR, "并发更新冲突，请重试")`
+改成 `throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT, "状态已被他人变更，请刷新后重试")`
+—— 同一件事在同一个类里不能有两个码（`41000` 继续只表示业务失败）。
+
+新增 import：`com.example.marketing.common.api.PageQuery`、`PageResult`、
+`com.example.marketing.activity.dto.ActivityView`、`com.baomidou.mybatisplus.extension.plugins.pagination.Page`。
+
+`ActivityView` / 两个请求体：
+
+```java
+package com.example.marketing.activity.dto;
+
+import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+/**
+ * 后台列表用的活动视图。
+ *
+ * <p>VO 只在 admin 侧强制（母版 §6.2）：C 端 `GET /api/activity/{no}` 仍返回实体，
+ * 免得把基线断言卷进无关改动。`version` 必须带出去 —— 前端下一次编辑要拿它做乐观锁的期望值。</p>
+ */
+public record ActivityView(
+        String activityNo, String name, String status, BigDecimal budgetAmount, BigDecimal usedAmount,
+        Integer grayPercent, String grayWhitelist, Integer version,
+        LocalDateTime startTime, LocalDateTime endTime) {
+
+    public static ActivityView from(ActivityEntity e) {
+        return new ActivityView(e.getActivityNo(), e.getName(), e.getStatus(), e.getBudgetAmount(),
+                e.getUsedAmount(), e.getGrayPercent(), e.getGrayWhitelist(), e.getVersion(),
+                e.getStartTime(), e.getEndTime());
+    }
+}
+```
+
+```java
+package com.example.marketing.activity.dto;
+
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotNull;
+
+import java.math.BigDecimal;
+
+/** @param version 列表里带回来的乐观锁版本，不传等于"我不在乎被别人改过" —— 所以必填 */
+public record BudgetUpdateRequest(
+        @NotNull @DecimalMin(value = "0.00", message = "预算不能为负") BigDecimal budgetAmount,
+        @NotNull(message = "version 必填（乐观锁）") Integer version,
+        String remark) {
+}
+```
+
+```java
+package com.example.marketing.activity.dto;
+
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+
+/**
+ * @param grayPercent null = 清除灰度（回到"未配灰度 = 全量放行"）；0-100
+ * @param version     乐观锁期望版本，必填
+ */
+public record GrayUpdateRequest(
+        @Min(value = 0, message = "灰度百分比不能为负") @Max(value = 100, message = "灰度百分比不能超过 100")
+        Integer grayPercent,
+        String grayWhitelist,
+        @NotNull(message = "version 必填（乐观锁）") Integer version) {
+}
+```
+
+- [ ] **Step 3: 跑测试确认通过 + 变异检查**
+
+Run: `mvn -q -pl marketing-activity -am test -Dtest=ActivityAdminWriteTest`
+Expected: PASS（5 个用例）。
+
+变异检查四处，逐条做完改回：
+1. 注释掉 `budgetService.reheat(activityNo, true)` → `budgetUpdateForcesReheat` 必须红（地雷 A 的锚）；
+2. `requireVersion` 改成空方法 → `staleVersionRejectedBeforeWrite` 必须红；
+3. `flushWithVersion` 的 `== 0` 改成不判断 → `concurrentUpdateMapsTo41008` 必须红；
+4. 把 `updateGray` 里加一句 `budgetService.reheat(activityNo, true)` → `grayUpdateDoesNotTouchBudgetCache` 必须红
+   （这条防的是"到处刷缓存"这种看似安全的习惯）。
+
+- [ ] **Step 4: 写失败测试 —— controller 层的身份与审计**
+
+`ActivityAdminControllerTest.java`：不引 MockMvc，直接 new controller + mock service（本仓库既有做法），
+钉三件事：裸身份头 40100、read-only 写 40300、写成功要投一条审计且 `requestSummary` 里带 before/after。
+
+```java
+    @Test
+    @DisplayName("只有裸 X-Admin-* 头时 40100：身份必须来自签名")
+    void bareHeadersRejected() { /* identity mock 抛 BizException(UNAUTHORIZED)，断言 code=40100 */ }
+
+    @Test
+    @DisplayName("read-only 改预算 40300")
+    void readOnlyCannotWrite() { /* 与 ⑤ 的 AdminConfigControllerTest 同法：identity.require 抛 FORBIDDEN */ }
+
+    @Test
+    @DisplayName("写成功要投审计，summary 里能看到 from/to")
+    void writesAuditPayload() { /* verify(outbox).record(argThat(p -> p.requestSummary().contains("from=100.00"))) */ }
+```
+
+（三条的完整体在实现时照 `AdminConfigControllerTest` 的写法补全 —— 那个文件已经立好了
+"identity 抛 → 端点原样抛、审计仍落"的形状。**不要**在本任务里发明第二套测试夹具。）
+
+- [ ] **Step 5: 实现 controller**
+
+```java
+package com.example.marketing.activity.controller;
+
+import com.example.marketing.activity.dto.ActivityView;
+import com.example.marketing.activity.dto.BudgetUpdateRequest;
+import com.example.marketing.activity.dto.CreateActivityRequest;
+import com.example.marketing.activity.dto.GrayUpdateRequest;
+import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
+import com.example.marketing.activity.service.ActivityService;
+import com.example.marketing.common.api.PageQuery;
+import com.example.marketing.common.api.PageResult;
+import com.example.marketing.common.api.Result;
+import com.example.marketing.common.audit.AuditOutbox;
+import com.example.marketing.common.audit.AuditPayload;
+import com.example.marketing.common.security.AdminPrincipal;
+import com.example.marketing.common.security.AdminRequestIdentity;
+import com.example.marketing.common.security.AdminRoles;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 活动管理面（③）。路径在 `/api/admin/**` 下但**由 activity 进程自己发布**：
+ * 预算写与它必须的 force 重预热不能跨进程拆开（母版 §6.0/§6.3）。
+ *
+ * <p>身份只认签名 token（`X-Admin-Token`），不认裸 `X-Admin-Role`：本服务在 FULL 进程形态
+ * 监听 `*:8081`，把裸头当授权等于局域网里谁都能改预算。</p>
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/admin/activities")
+@RequiredArgsConstructor
+public class ActivityAdminController {
+
+    private final ActivityService activityService;
+    private final AdminRequestIdentity identity;
+    private final AuditOutbox outbox;
+
+    @GetMapping
+    public Result<PageResult<ActivityView>> list(@RequestParam(required = false) Integer page,
+                                                 @RequestParam(required = false) Integer size,
+                                                 @RequestParam(required = false) String status,
+                                                 HttpServletRequest request) {
+        identity.require(request, AdminRoles.ADMIN, AdminRoles.OPERATOR, AdminRoles.READ_ONLY);
+        return Result.ok(activityService.list(PageQuery.of(page, size), status));
+    }
+
+    @PostMapping
+    public Result<ActivityView> create(@Valid @RequestBody CreateActivityRequest body,
+                                       HttpServletRequest request) {
+        AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
+        ActivityEntity e = activityService.create(body);
+        audit(actor, "activity.create", e.getActivityNo(), "POST /api/admin/activities",
+                "from=, to=budget=" + e.getBudgetAmount() + ", name=" + e.getName(), request);
+        return Result.ok(ActivityView.from(e));
+    }
+
+    @PostMapping("/{activityNo}/transition")
+    public Result<ActivityView> transition(@PathVariable String activityNo,
+                                           @RequestParam String event,
+                                           HttpServletRequest request) {
+        AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
+        ActivityEntity before = activityService.getByNo(activityNo);
+        String from = before.getStatus();
+        ActivityEntity e = activityService.transition(activityNo,
+                com.example.marketing.activity.domain.ActivityEvent.valueOf(event));
+        audit(actor, "activity.transition", activityNo, "POST /api/admin/activities/" + activityNo + "/transition",
+                "from=" + from + ", to=" + e.getStatus() + ", event=" + event, request);
+        return Result.ok(ActivityView.from(e));
+    }
+
+    @PutMapping("/{activityNo}/budget")
+    public Result<ActivityView> updateBudget(@PathVariable String activityNo,
+                                             @Valid @RequestBody BudgetUpdateRequest body,
+                                             HttpServletRequest request) {
+        AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
+        ActivityEntity before = activityService.getByNo(activityNo);
+        ActivityEntity e = activityService.updateBudget(activityNo, body.budgetAmount(), body.version());
+        audit(actor, "activity.budget.set", activityNo, "PUT /api/admin/activities/" + activityNo + "/budget",
+                "from=" + before.getBudgetAmount() + ", to=" + e.getBudgetAmount()
+                        + ", version=" + e.getVersion(), request);
+        return Result.ok(ActivityView.from(e));
+    }
+
+    @PutMapping("/{activityNo}/gray")
+    public Result<ActivityView> updateGray(@PathVariable String activityNo,
+                                           @Valid @RequestBody GrayUpdateRequest body,
+                                           HttpServletRequest request) {
+        AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
+        ActivityEntity before = activityService.getByNo(activityNo);
+        ActivityEntity e = activityService.updateGray(activityNo, body.grayPercent(),
+                body.grayWhitelist(), body.version());
+        audit(actor, "activity.gray.set", activityNo, "PUT /api/admin/activities/" + activityNo + "/gray",
+                "from=" + before.getGrayPercent() + ", to=" + e.getGrayPercent()
+                        + ", whitelist=" + (e.getGrayWhitelist() == null ? "" : e.getGrayWhitelist())
+                        + ", version=" + e.getVersion(), request);
+        return Result.ok(ActivityView.from(e));
+    }
+
+    private void audit(AdminPrincipal actor, String action, String resourceId, String path,
+                       String summary, HttpServletRequest request) {
+        outbox.record(new AuditPayload(actor.uid(), actor.username(), actor.role(), action,
+                "activity", resourceId, request.getMethod(), path, summary, 0, "",
+                ClientIp.of(request), 0L, System.currentTimeMillis() / 1000));
+    }
+}
+```
+
+> `ClientIp` 现在是 admin 模块里的包私有类（`admin/controller/ClientIp.java`）。本任务要把它
+> **提到 `common/web/ClientIp.java`**（网关之外六个 Servlet 进程都用得上，且审计的 ip 列
+> 在 LITE 与 FULL 都得是真的），改 admin 那 3 处 import。它的类注释里那段"容器形态下 XFF 是
+> 宿主机地址"的粒度说明要一起搬过去，别丢。
+
+- [ ] **Step 6: 删掉 C 端的两个写方法，并把冒烟的两行换掉**
+
+`ActivityController`：删 `create`（`:38-42`）与 `transition`（`:50-55`）及其 import。
+其余读与交易写不动。
+
+`scripts/smoke-test.sh` 链路 0：
+
+```bash
+# ③：创建与流转换到后台路径、换后台 token（脚本已在链路 4 头部登录过一次）
+R=$(curl -s -m 10 -X POST -H "$AAUTH" -H "$JSON" "$GW/api/admin/activities" -d '{...}')
+R=$(curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=SUBMIT")
+```
+
+登录必须提前到脚本头部（现在在链路 4），否则链路 0 用不上 `$AAUTH`：
+把 `head2 "链路 4：..."` 里那段 login 与 `ADM`/`ADMIN_TOKEN` 的构造整体上移到 `链路 0` 之前，
+并在最后保留登出（⑤ T10 已经把登出挪到全脚本最后，那部分不动）。
+`ACT_NO` 的构造与后面所有引用不变。
+
+- [ ] **Step 7: 跑本模块测试 + LITE 冒烟**
+
+```bash
+source scripts/common.sh && mvn -q -pl marketing-activity,marketing-admin -am test
+./scripts/deploy-preview.sh && ./scripts/smoke-test.sh
+```
+Expected: 单测 PASS；冒烟 **72/72**（本任务不该改变断言条数，只换链路 0 的两条路径）。
+若链路 0 红在 `40100`：登录上移没生效；红在 `41000`：`transition` 的冲突码迁移漏了。
+
+- [ ] **Step 8: 提交**
+
+```bash
+git add marketing-activity marketing-admin scripts/smoke-test.sh marketing-common
+git commit -m "$(cat <<'EOF'
+feat(activity): ③ 活动管理端点长在 owning 服务，预算改动同事务 force 重预热
+
+/api/admin/activities 五条（列表/创建/流转/预算/灰度），身份只认签名 token；
+预算写与 reheat(force=true) 同方法同事务（SETNX 预热下不删键=改动永不生效，地雷 A），
+灰度刻意不刷缓存（真值每 5s 回源 DB）。乐观锁冲突从 41000 迁到 41008，
+与新的字段编辑同码；C 端 create/transition 一并删除，冒烟链路 0 换路径。
+ClientIp 提到 common（六个 Servlet 进程都要真 ip）。
+EOF
+)"
+```
+
+---
+
 ## 编写进度
 
-Task 1-2 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
+Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
 `AdminClaims(uid, sub, role, pwdVersion, jti, iat, exp)` 七参、`JsonUtils.parse(String, TypeReference)`、
 `TOKEN_EXPIRED=40101`/`FORBIDDEN=40300`、`AdminAuthFilter.tokenOf(exchange)` 与 `pass(exchange, claims)`
 私有签名、`AdminAuthFilterTest` 的 `adminGet/token/chain/captured` 夹具、全文件 0 处 `StripPrefix`）。
 
-**Task 3-10 待写**（顺序即依赖顺序，每个任务都按"失败测试 → 实现 → 变异检查 → 提交"展开）：
-T3 activity、T4 discount、T5 coupon、T6 seckill、T7 审计 Stream 投递与 drain、
-T8 重预热回执、T9 C 端收口与脚本冲击面、T10 五形态复跑与 README。
+Task 3（activity）同上颗粒度。
+
+**Task 4-10 待写**（顺序即依赖顺序，每个任务都按"失败测试 → 实现 → 变异检查 → 提交"展开）：
+T4 discount、T5 coupon、T6 seckill、T7 审计 Stream 投递与 drain、
+T8 重预热回执、T9 脚本冲击面（搬家已分散在 T3-T6 内做完）、T10 五形态复跑与 README。
