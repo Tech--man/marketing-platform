@@ -3,12 +3,15 @@ package com.example.marketing.admin.audit;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.marketing.admin.infrastructure.entity.AdminAuditLogEntity;
+import com.example.marketing.common.audit.AuditPayload;
 import com.example.marketing.admin.infrastructure.mapper.AdminAuditLogMapper;
 import com.example.marketing.common.api.PageQuery;
 import com.example.marketing.common.api.PageResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
 
 /**
  * 审计落库与查询。
@@ -26,13 +29,40 @@ public class AuditService implements AuditSink {
 
     @Override
     public void record(AuditRecord record) {
+        insert(toEntity(record), null);
+    }
+
+    /**
+     * drain 落表入口：把业务侧投来的载荷写成一行。
+     *
+     * <p>这里做形状转换而不是让 drainer 自己拼 entity，是为了让 {@code cut()} 那套按列宽
+     * 截断的口径只有一份 —— 两份不一致时，同一句摘要会一条存得下、一条把整行 INSERT 撑爆。</p>
+     *
+     * @param occurredAt <b>业务动作发生的时刻</b>，不是搬运时刻：admin 停十分钟再起来，
+     *                   用搬运时刻会让整条审计时间线位移，而审计的唯一用处就是还原时间线
+     */
+    public void recordPayload(AuditPayload p, LocalDateTime occurredAt) {
+        record(new AuditRecord(p.actorId(), p.actorName(), p.role(), p.action(), p.resourceType(),
+                p.resourceId(), p.method(), p.path(), p.requestSummary(), p.resultCode(),
+                p.errorMsg(), p.ip(), p.costMs()), occurredAt);
+    }
+
+    public void record(AuditRecord record, LocalDateTime occurredAt) {
+        insert(toEntity(record), occurredAt);
+    }
+
+    private void insert(AdminAuditLogEntity entity, LocalDateTime occurredAt) {
+        if (occurredAt != null) {
+            entity.setCreateTime(occurredAt);
+        }
         try {
-            auditMapper.insert(toEntity(record));
+            auditMapper.insert(entity);
         } catch (RuntimeException e) {
             log.warn("[audit] 落库失败，动作结果不受影响 actor={}, action={}, resource={}#{}, "
                             + "code={}, msg={}, ip={}, cause={}",
-                    record.actorName(), record.action(), record.resourceType(), record.resourceId(),
-                    record.resultCode(), record.errorMsg(), record.ip(), e.toString());
+                    entity.getActorName(), entity.getAction(), entity.getResourceType(),
+                    entity.getResourceId(), entity.getResultCode(), entity.getErrorMsg(),
+                    entity.getIp(), e.toString());
         }
     }
 

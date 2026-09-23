@@ -459,6 +459,18 @@ LEFT=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/config" \
   2>/dev/null || echo "?")
 [ "$LEFT" = "0" ] && ok "本轮写过的真值行已全部清掉（不留 3/s 或 199999 给下一档）" \
   || bad "admin_config 里还留着 $LEFT 行本轮写的覆盖" "left=$LEFT"
+# ③：业务侧的写（改预算/改库存/上下线）不直连 admin 的表，走 mkt:audit:pending 投递、
+# 由 admin 每 5s drain。跑完这条流必须归零：不归零说明要么没投递、要么没消费——
+# 两种都是静默的（业务写仍然 200），所以只能在这里钉。
+for _ in $(seq 1 8); do
+  [ "$(redis_admin XLEN mkt:audit:pending)" = "0" ] && break
+  sleep 2
+done
+expect "业务侧审计已全部 drain 落表（pending 流归零）" '^0$' "$(redis_admin XLEN mkt:audit:pending)"
+# 落了表还不够，得是"本轮这条活动"落了表：只按 action 查会把上一轮的算成本轮成果
+expect "本轮活动写动作确实进了审计表" "\"resourceId\":\"$ACT_NO\"" \
+  "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/audits?action=activity.transition&resourceId=$ACT_NO&page=1&size=1")"
+
 curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/auth/logout" >/dev/null
 expect "登出后会话立即失效" '"code":40102' "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/users")"
 

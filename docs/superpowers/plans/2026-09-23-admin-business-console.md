@@ -1643,7 +1643,7 @@ Controller 形状照 Task 3。
 后只 warn（"落库失败不影响动作结果"）；`toEntity` 逐字段 `cut(...)` 截断到列宽；
 `createTime` 由 DB 默认值给。drain 的记录**必须带业务侧时刻**，否则"改预算的时间"会变成"被搬运的时间"。
 
-- [ ] **Step 1: 写失败测试 —— 投递侧**
+- [x] **Step 1: 写失败测试 —— 投递侧**
 
 `AuditOutboxTest.java`（mock `StringRedisTemplate` + `StreamOperations`）四条：
 
@@ -1686,7 +1686,7 @@ Controller 形状照 Task 3。
 > （`XADD` 的 maxlen 也可以直接 `XADD ... MAXLEN ~ n`，若 `add` 不带 maxlen 参数，
 > 就把 `trim` 那行留着并断言它被调用）。**不要**为了少一次调用把 `trim` 省掉。
 
-- [ ] **Step 2: 写失败测试 —— drain 侧**
+- [x] **Step 2: 写失败测试 —— drain 侧**
 
 `AuditOutboxDrainerTest.java` 三条：
 
@@ -1715,13 +1715,13 @@ Controller 形状照 Task 3。
 > `@EnableScheduling`；若没有，就在这里用一个 daemon `ScheduledExecutorService`
 > （与 ⑤ 的 `ConfigSnapshotPoller` 同一手法，理由也相同：漏加开关的表现是"审计永远不落表"）。
 
-- [ ] **Step 3: LITE 与 FULL 同一条路径**
+- [x] **Step 3: LITE 与 FULL 同一条路径**
 
 LITE 下 standalone 里既有 outbox 又有 drainer，审计照样绕一圈 Redis。
 **不做"同进程就直落"的捷径**：两条路径意味着 LITE 测不到 drain，而 drain 恰恰是 ③ 里
 唯一会静默丢数据的组件。绕一圈的代价是 ≤5s 延迟与一次 Redis 往返，值得。
 
-- [ ] **Step 4: 冒烟断言 + 收尾**
+- [x] **Step 4: 冒烟断言 + 收尾**
 
 `smoke-test.sh` 加一条（放在链路 4 的"本轮动作写入审计"旁边，同一把 `audit_max_id` 前后差值口径）：
 后台改一次预算 → 等 `drain-ms` → `GET /api/admin/audits?action=activity.budget.set` 必须有本轮新行，
@@ -1896,6 +1896,18 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 23. 在 shell 里嵌 python heredoc 时，**终止符必须独占一行**、后面不能再跟 shell 命令：
     我把 `echo "dto done"` 写进了 `PY` 块内，python 报 SyntaxError 而整段文件一个都没落成，
     看起来却像"写完了"。凡是批量写文件，写完立刻 `grep` 验一次落点。
+
+24. **"跑完 XLEN 恒 0"这条断言一开始就红了，因为它揭示了两个真缺陷**（不是断言写错）：
+    - 计划只写了 ACK，没写 XDEL。总线上的条目 ACK 之后还留着，`XLEN` 只增不减，
+      `MAXLEN` 最终会把<b>最旧的真审计</b>挤掉 —— 那才是真的丢数据。现在 ACK 后再 XDEL
+      （顺序不能反：先删后确认会在"已删未确认"的窗口里让这条审计彻底消失）。
+      这与 LITE 消息通道"消费完 XDEL、跑完 XLEN 恒 0"是同一手法，断言口径也复用了它。
+    - `createGroup(key, group)` 默认从<b>最新消息</b>开始。先有投递、后建组（首次部署、
+      或键比消费组先存在）的那批审计永远不会被投给消费者 —— 它们不是脏数据，是没读过的真账。
+      改成 `ReadOffset.from("0")` 建组，并加一条断言钉住这个 offset（"从最新消息建组=静默丢账"）。
+      环境里那 54 条积压正是这么来的：销毁旧组重启后全部入表（`XLEN` 归 0、表里 business 动作 59 行）。
+25. drain 的落表走 `AuditService.recordPayload(...)` 而不是自己拼 entity：
+    `cut()` 那套按列宽截断必须只有一份口径。
 
 ## 编写进度
 
