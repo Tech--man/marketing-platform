@@ -1355,7 +1355,7 @@ EOF
 3. `listRules` 返回 `List<PromoRuleEntity>`（把整条 DSL JSON 原样吐给共享 demo token）。
    搬到 admin 侧后换 `PageResult<RuleView>`，`RuleView` 里带 `version` 供乐观锁回传。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `RuleAdminServiceTest.java` 三条（mock `PromoRuleMapper` + mock `RuleCacheManager`）：
 
@@ -1377,7 +1377,7 @@ EOF
 （回源 DB 是权威，所以后果是自愈的）—— 反过来（DB 写了没推）则是改动秒级不可见。
 两者都要防，所以顺序固定为 **写库 → 推版本**，且在同一事务方法内。
 
-- [ ] **Step 2: 实现 `RuleAdminService.save`**
+- [x] **Step 2: 实现 `RuleAdminService.save`**
 
 ```java
     /**
@@ -1416,7 +1416,7 @@ EOF
 
 新建还要求 `expectedVersion` 缺省或 0：**没有"不存在就顺手建一条"**，否则误写 ruleNo 会静默造规则。
 
-- [ ] **Step 3-5: 列表、controller、审计**
+- [x] **Step 3-5: 列表、controller、审计**
 
 照 Task 3 Step 4-6 的形状做，两处不同：
 1. 列表要"一次读全表"换成 `PageResult`（`promoRuleMapper.selectPage`，按 `priority desc, id asc`，
@@ -1425,7 +1425,7 @@ EOF
    **不要**把整条 DSL JSON 塞进去：`admin_audit_log.request_summary` 是定长列，
    而 DSL 里可能带很长的 CSV（`requiredTags`）。脱敏口径沿用 `RequestSummary`。
 
-- [ ] **Step 6: 删 C 端两条、跑测试、跑冒烟、提交**
+- [x] **Step 6: 删 C 端两条、跑测试、跑冒烟、提交**
 
 ```bash
 source scripts/common.sh && mvn -q -pl marketing-discount,marketing-common -am test
@@ -1855,6 +1855,25 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
     `budget_amount` 从种子的 1000000.00 改成了 78.00。改回来用的正是新端点（顺带再验一次
     reheat 生效）。**跑完探针要么还原、要么重跑冒烟**，否则下一轮的绿是假的。
     实测还原后重跑 72/72。
+
+13. **手工探针的金额必须在规则门槛之上**：第一次探"改规则秒级生效"用了 199.90 元，
+    而种子的 `满200减30` 与新加的 `满100减7` 都判不出差别（三次都是 0），
+    看起来像"bumpVersion 没用"。换成 299.90 才拿到基线 30.00 → 建规则 37.00 → 停用回 30.00
+    这条真实曲线。**验证一个机制前先确认探针有分辨力。**
+14. Mockito 的 `never` 用法：`verify(mock, never()).method(any())`，
+    写成 `never(mock).method(...)` 编译期就报 `cannot be applied to given types`。
+15. **T4 顺带修掉一个既有契约缺陷**（不在计划里，是探针撞出来的）：`CalcInput`/`CalcItem`
+    一个约束都没有，客户端把 `unitPrice` 拼成 `price` 就得到 `50000 系统繁忙`
+    （NPE 被 catch-all 兜住）。现在 `@NotNull`/`@DecimalMin`/`@Min(1)` + `@NotEmpty @Valid`，
+    三行 MockMvc 用例钉住"客户端错误必须报 40000 并点名是哪个字段"。
+    **`@Valid` 必须打在 `List<CalcItem>` 上**，否则 CalcItem 里的约束全都形同不存在 ——
+    这是嵌套校验最常见的漏法。
+16. `deploy-full.sh` 的优惠路由探针必须一起改：discount 已经没有 C 端 GET 了。
+    新增 `wait_route_admin`（先登录拿 token）打 `/api/admin/discount/rules`，
+    这比原来那条更有代表性（同时验到 `lb://marketing-discount` → DB → MyBatis 整条链）。
+17. **在 python 里生成 shell 片段时不要用 shell 层的 `'"'"'` 转义**：那是给 heredoc 用的，
+    在 python 字符串里会原样落进脚本，产出 `'"'"'"code":0'"'"'` 这种坏参数。
+    `bash -n` 抓得住（这次就是它抓的），所以脚本改完必跑 `bash -n`。
 
 ## 编写进度
 

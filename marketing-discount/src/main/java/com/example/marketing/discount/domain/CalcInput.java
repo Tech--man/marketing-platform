@@ -1,5 +1,7 @@
 package com.example.marketing.discount.domain;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -20,6 +22,9 @@ public class CalcInput {
     private String activityNo;
     /** 用户标签（会员等级、人群包等），与规则 requiredTags 匹配 */
     private Set<String> userTags;
+    /** 行项：@Valid 是逐行校验的开关，缺它则 CalcItem 上的约束全都形同不存在 */
+    @NotEmpty(message = "购物车不能为空")
+    @Valid
     private List<CalcItem> items;
 
     /** 购物车原始总价（元） */

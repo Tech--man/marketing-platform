@@ -82,10 +82,31 @@ wait_route() { # url desc 期望片段
   echo "!! $desc 在 120s 内没有返回预期响应（$url），末次响应: $(echo "$body" | head -c 160)" >&2
   return 1
 }
+# ③：业务后台前缀要带 admin token（C 端 demo token 打 /api/admin/** 必 40100）
+ADMIN_BOOT_TOKEN=$(curl -s -m 25 -X POST http://127.0.0.1:8090/api/admin/auth/login \
+  -H "Content-Type: application/json" -d '{"username":"admin","password":"rootdev123"}' \
+  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+wait_route_admin() { # url desc 期望片段
+  local url=$1 desc=$2 want=$3
+  for _ in $(seq 1 60); do
+    body=$(curl -s -m 5 -H "Authorization: Bearer ${ADMIN_BOOT_TOKEN}" "http://127.0.0.1:8090$url")
+    if echo "$body" | grep -q "$want"; then
+      echo "    $desc 可服务"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "!! $desc 在 120s 内没有返回预期响应（$url），末次响应: $(echo "$body" | head -c 160)" >&2
+  return 1
+}
+
 rc=0
 wait_route "/api/activity/ACT2026001" "活动路由" '"code":0' || rc=1
 wait_route "/api/coupon/stock/CT2026001" "券路由" '"code":0' || rc=1
-wait_route "/api/discount/rules" "优惠路由" '"code":0' || rc=1
+# ③ 之后 discount 没有 C 端 GET 了（规则读写搬进 /api/admin/discount/rules，
+# 因为 GET 那条会把整套规则 DSL 交给共享 demo token）。探测改用后台列表：
+# 它同时验到 lb://marketing-discount → DB → MyBatis 这条链，比原来的 C 路径更有代表性。
+wait_route_admin "/api/admin/discount/rules" "优惠路由" '"code":0' || rc=1
 wait_route "/api/seckill/activities" "秒杀路由" '"code":0' || rc=1
 # 后台路由用登录探：它同时验到 lb://marketing-admin → DB → BCrypt 这条完整链
 if curl -s -m 10 -X POST http://127.0.0.1:8090/api/admin/auth/login -H "Content-Type: application/json" \
