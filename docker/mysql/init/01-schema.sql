@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS activity (
     budget_amount DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '预算总额（元）',
     used_amount   DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '已消耗预算（元，DB 兜底口径）',
     remark        VARCHAR(255) NULL,
+    gray_percent  INT          NULL COMMENT '灰度放量百分比 0-100；NULL=未配灰度=全量放行',
+    gray_whitelist VARCHAR(255) NULL COMMENT '灰度白名单 userId CSV；NULL 或空=无白名单',
     version       INT          NOT NULL DEFAULT 0 COMMENT '乐观锁',
     create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -97,9 +99,10 @@ CREATE TABLE IF NOT EXISTS local_message (
     KEY idx_status_retry (status, next_retry_time)
 ) ENGINE = InnoDB COMMENT '本地消息表（事务消息最终一致）';
 
--- 种子：一个在线活动
-INSERT INTO activity (activity_no, name, status, start_time, end_time, budget_amount, used_amount, remark)
-SELECT 'ACT2026001', '2026 秋季大促', 'ONLINE', NOW() - INTERVAL 7 DAY, NOW() + INTERVAL 365 DAY, 1000000.00, 0.00, '脚手架演示活动'
+-- 种子：一个在线活动（gray_percent=100 与原 yml marketing.gray.ACT2026001.percent 等值，
+-- 灰度真值从 yml 搬进列之后，这一行就是链路 0"已配灰度活动命中"断言的唯一支撑）
+INSERT INTO activity (activity_no, name, status, start_time, end_time, budget_amount, used_amount, remark, gray_percent)
+SELECT 'ACT2026001', '2026 秋季大促', 'ONLINE', NOW() - INTERVAL 7 DAY, NOW() + INTERVAL 365 DAY, 1000000.00, 0.00, '脚手架演示活动', 100
 WHERE NOT EXISTS (SELECT 1 FROM activity WHERE activity_no = 'ACT2026001');
 
 -- ============================================================
@@ -417,3 +420,20 @@ WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'operator');
 INSERT INTO admin_user (username, password_hash, display_name, role, status, pwd_version)
 SELECT 'viewer', '$2a$10$o1dcGQ41rEUu7qCLu68A/uftVufxdN6jObAgQtcyea5eU8NqykrYC', '只读访客', 'read-only', 'ACTIVE', 1
 WHERE NOT EXISTS (SELECT 1 FROM admin_user WHERE username = 'viewer');
+
+-- 在线配置真值。只有被代码里 ConfigDefinitionProvider 声明过的键才会被读方采纳：
+-- "不一致时代码赢"，DB 里的陈旧行既不生效也不报错，由 ④ 的 ORPHAN 清单显式暴露。
+-- 删行 = 恢复出厂（不是写回原值，否则 yml 改了会被一行陈旧 DB 值永远压住）。
+CREATE TABLE IF NOT EXISTS admin_config (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    cfg_key     VARCHAR(64)  NOT NULL COMMENT '参数键，与 ConfigDefinition.key 一致',
+    form        VARCHAR(16)  NOT NULL DEFAULT 'GLOBAL' COMMENT 'GLOBAL/LITE/FULL/DEV',
+    cfg_value   VARCHAR(255) NOT NULL COMMENT '按声明的 type 解析；越界或类型不符时读方逐条忽略',
+    version     BIGINT       NOT NULL DEFAULT 0 COMMENT '写入时 mkt:cfg:seq 的值，仅用于展示第几版生效',
+    updated_by  VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '最后一次写的后台账号',
+    remark      VARCHAR(255) NOT NULL DEFAULT '',
+    create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_key_form (cfg_key, form)
+) ENGINE = InnoDB COMMENT '在线配置真值（删行即恢复出厂）';
