@@ -1909,6 +1909,13 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 25. drain 的落表走 `AuditService.recordPayload(...)` 而不是自己拼 entity：
     `cut()` 那套按列宽截断必须只有一份口径。
 
+26. **用 `str.replace` 改文档时，锚点必须是从文件里取出来的，不能凭记忆写**：
+    我给 T3-T7 追加"执行记录"时连续几次都用记忆中的句子当锚，替换没匹配上、python 也不报错、
+    `git commit` 照样成功 —— 结果文档里只有 T1/T2 的记录，我以为写了。
+    这是修正 #23 的同类错误（"写完立刻验落点"）我又犯了一次，且这次是**静默**的。
+    规矩：脚本改文档后要 `grep` 一次新内容；改动的断言/数字必须来自命令输出而不是脑子。
+27. 同一次自查还抓到我写进文档的**估数**："263 用例 / 59 类"是脑补的，实测 258 / 58。
+
 ## 编写进度
 
 Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
@@ -1928,5 +1935,20 @@ Task 2 已落地（`feat(gateway): ③ 四条后台前缀路由…`）：四条�
 限流九条、`X-Admin-Token` 透传；LITE 真起栈复跑 72/72，四条新前缀无凭证回 40100。
 全仓 **207 用例 / 50 类绿**。变异检查累计 9 处（T1 五 + T2 四），全部咬人。
 `AuditOutbox` 按计划提前到 T1 落了（T7 只剩 admin 侧 drain，届时它那份 Files 列表按"Modify"读）。
+
+**Task 3-7 的执行记录**（这一段先前被静默丢了：我用 `str.replace` 追加时锚点是凭记忆写的，
+与实际文件不符 → 替换没匹配上、python 不报错、提交照过。见修正 #26）：
+
+| 任务 | 交付 | 新增用例 | 落地的实测证据 |
+|---|---|---|---|
+| T3 | `/api/admin/activities` 列表/创建/流转/预算/灰度；C 端两条写删除；`ClientIp` 提到 common | 12 | 改预算 77 元 → C 端 remain 从 999952 元跳到 34 元；直连 `:8085` 只带裸头 → 40100 |
+| T4 | `/api/admin/discount/rules` 读写；写进事务 + `bumpVersion` 顺序固定 + 乐观锁；`CalcInput`/`CalcItem` 补约束；`deploy-full` 优惠探针改打后台列表 | 13 | 299.90 元基线 30.00 → 建"满100减7" 4s 内 37.00 → 停用回 30.00；字段名拼错从 50000 变 40000 |
+| T5 | `/api/admin/coupon/templates` 列表/新建/改库存/上下线（净新增能力）；`requireVersion` 三处收进 `VersionGuard` | 8 | 100000→100100 使 remain 92841→92949（已还原）；低于已发数 40000；operator 40300 |
+| T6 | `/api/admin/seckill/activities` 列表/新建/库存/上下线；`stock` 不存在改 40400；桶数写死的 16 收进 `SeckillRuntimeConfig.buckets()` | 11 | 新建 OFFLINE 时分桶 0 键，改库存仍 0 键（不开闸），上线后 16 键合计 800；探针已删净 |
+| T7 | `AuditOutboxDrainer`（消费组 + ACK + XDEL + 脏载荷跳过）与 `AuditService.recordPayload`；冒烟基线 72→74 | 6 | 54 条积压全部入表（business 动作 59 行、`XLEN` 归 0）；新两条断言在 LITE 真栈 74/74 |
+
+变异检查逐批做：T1 五、T2 四、T4 两处（去 `@NotNull`、去乐观锁）、T5 一处（`overwrite`→`warmIfAbsent`）、
+T7 三处（建组改 `latest()`、去 XDEL、去 XACK —— 单条逐个跑，全部 CAUGHT）。
+当前实测总数：**258 用例 / 58 类**，全绿；LITE 冒烟 74/74。
 T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
 —— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。
