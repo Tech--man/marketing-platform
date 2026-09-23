@@ -1,7 +1,5 @@
 package com.example.marketing.activity.controller;
 
-import com.example.marketing.activity.domain.ActivityEvent;
-import com.example.marketing.activity.dto.CreateActivityRequest;
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.service.ActivityService;
 import com.example.marketing.activity.service.BudgetService;
@@ -15,7 +13,6 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -34,24 +31,14 @@ public class ActivityController {
     private final BudgetService budgetService;
     private final GrayService grayService;
 
-    /** 创建草稿活动 */
-    @PostMapping
-    public Result<ActivityEntity> create(@Valid @RequestBody CreateActivityRequest request) {
-        return Result.ok(activityService.create(request));
-    }
-
     /** 查询活动 */
     @GetMapping("/{activityNo}")
     public Result<ActivityEntity> get(@PathVariable String activityNo) {
         return Result.ok(activityService.getByNo(activityNo));
     }
 
-    /** 状态机流转 */
-    @PutMapping("/{activityNo}/transition")
-    public Result<ActivityEntity> transition(@PathVariable String activityNo,
-                                             @RequestParam ActivityEvent event) {
-        return Result.ok(activityService.transition(activityNo, event));
-    }
+    // ③：创建与状态流转已搬到 /api/admin/activities（长在 owning 进程上）。
+    // 这里刻意**不保留转发式别名**：两个入口都能改预算，就是地雷 A 的成因。
 
     /** 活动是否可参与（下游校验位点） */
     @GetMapping("/{activityNo}/participatable")

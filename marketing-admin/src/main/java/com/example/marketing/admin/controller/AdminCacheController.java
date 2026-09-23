@@ -1,5 +1,6 @@
 package com.example.marketing.admin.controller;
 
+import com.example.marketing.common.web.ClientIp;
 import com.example.marketing.common.security.AdminRoles;
 import com.example.marketing.admin.service.AdminIdentityService;
 import com.example.marketing.common.api.ErrorCode;

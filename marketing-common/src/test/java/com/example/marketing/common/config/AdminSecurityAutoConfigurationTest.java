@@ -55,6 +55,28 @@ class AdminSecurityAutoConfigurationTest {
     }
 
     @Test
+    @DisplayName("真实自动配置顺序下（Redis 自动配置在后）AuditOutbox 仍然装得上")
+    void registersOutboxWithRealRedisAutoConfigurationOrdering() {
+        // 这里刻意不用手搓的 mock StringRedisTemplate：那样测不到"条件评估早于
+        // RedisAutoConfiguration 注册 bean"这个真实顺序，LITE 启动失败就是这么来的。
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration.class,
+                        AdminSecurityAutoConfiguration.class))
+                .withBean(SimpleMeterRegistry.class)
+                .withPropertyValues(
+                        "marketing.admin.token-secret=test-secret",
+                        "spring.data.redis.host=127.0.0.1",
+                        "spring.data.redis.port=1")   // 永不连接：只要 bean 定义在，条件就该成立
+                .run(ctx -> {
+                    assertNotNull(ctx.getBeanNamesForType(AuditOutbox.class).length == 1
+                                    ? ctx.getBean(AuditOutbox.class) : null,
+                            "afterName 丢了这条就会红：AuditOutbox 缺席，业务进程起不来");
+                    assertNotNull(ctx.getBean(AdminRequestIdentity.class));
+                });
+    }
+
+    @Test
     @DisplayName("reactive 上下文（网关）不装这两个件")
     void reactiveContextSkipsThem() {
         new ReactiveWebApplicationContextRunner()

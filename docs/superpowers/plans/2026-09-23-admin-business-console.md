@@ -881,7 +881,7 @@ EOF
 3. 灰度**不需要** reheat：`GrayService` 走 `GrayRuleCache` 每 5s 回源 DB（⑤ 偏离 #3），
    所以 `updateGray` 只写 DB 就是完整语义。这条要在代码注释里写明，否则下一个人会以为漏了刷新。
 
-- [ ] **Step 1: 写失败测试 —— 改预算不刷缓存就是没改**
+- [x] **Step 1: 写失败测试 —— 改预算不刷缓存就是没改**
 
 `ActivityAdminWriteTest.java`（H2 `MODE=MySQL` + Mockito，手法沿用 `ActivityServiceTest`）。
 这个文件里最值钱的断言是 `verify(budgetService).reheat(no, true)` —— 把实现里那一行注释掉，
@@ -989,7 +989,7 @@ class ActivityAdminWriteTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-activity -am test -Dtest=ActivityAdminWriteTest`
 Expected: 编译失败（`updateBudget`/`updateGray` 不存在）。
 
-- [ ] **Step 2: 实现两个写方法与冲突码迁移**
+- [x] **Step 2: 实现两个写方法与冲突码迁移**
 
 `ActivityService` 追加（放在 `transition` 之后、`getByNo` 之前）：
 
@@ -1130,7 +1130,7 @@ public record GrayUpdateRequest(
 }
 ```
 
-- [ ] **Step 3: 跑测试确认通过 + 变异检查**
+- [x] **Step 3: 跑测试确认通过 + 变异检查**
 
 Run: `mvn -q -pl marketing-activity -am test -Dtest=ActivityAdminWriteTest`
 Expected: PASS（5 个用例）。
@@ -1142,7 +1142,7 @@ Expected: PASS（5 个用例）。
 4. 把 `updateGray` 里加一句 `budgetService.reheat(activityNo, true)` → `grayUpdateDoesNotTouchBudgetCache` 必须红
    （这条防的是"到处刷缓存"这种看似安全的习惯）。
 
-- [ ] **Step 4: 写失败测试 —— controller 层的身份与审计**
+- [x] **Step 4: 写失败测试 —— controller 层的身份与审计**
 
 `ActivityAdminControllerTest.java`：不引 MockMvc，直接 new controller + mock service（本仓库既有做法），
 钉三件事：裸身份头 40100、read-only 写 40300、写成功要投一条审计且 `requestSummary` 里带 before/after。
@@ -1164,7 +1164,7 @@ Expected: PASS（5 个用例）。
 （三条的完整体在实现时照 `AdminConfigControllerTest` 的写法补全 —— 那个文件已经立好了
 "identity 抛 → 端点原样抛、审计仍落"的形状。**不要**在本任务里发明第二套测试夹具。）
 
-- [ ] **Step 5: 实现 controller**
+- [x] **Step 5: 实现 controller**
 
 ```java
 package com.example.marketing.activity.controller;
@@ -1288,7 +1288,7 @@ public class ActivityAdminController {
 > 在 LITE 与 FULL 都得是真的），改 admin 那 3 处 import。它的类注释里那段"容器形态下 XFF 是
 > 宿主机地址"的粒度说明要一起搬过去，别丢。
 
-- [ ] **Step 6: 删掉 C 端的两个写方法，并把冒烟的两行换掉**
+- [x] **Step 6: 删掉 C 端的两个写方法，并把冒烟的两行换掉**
 
 `ActivityController`：删 `create`（`:38-42`）与 `transition`（`:50-55`）及其 import。
 其余读与交易写不动。
@@ -1306,7 +1306,7 @@ R=$(curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transiti
 并在最后保留登出（⑤ T10 已经把登出挪到全脚本最后，那部分不动）。
 `ACT_NO` 的构造与后面所有引用不变。
 
-- [ ] **Step 7: 跑本模块测试 + LITE 冒烟**
+- [x] **Step 7: 跑本模块测试 + LITE 冒烟**
 
 ```bash
 source scripts/common.sh && mvn -q -pl marketing-activity,marketing-admin -am test
@@ -1315,7 +1315,7 @@ source scripts/common.sh && mvn -q -pl marketing-activity,marketing-admin -am te
 Expected: 单测 PASS；冒烟 **72/72**（本任务不该改变断言条数，只换链路 0 的两条路径）。
 若链路 0 红在 `40100`：登录上移没生效；红在 `41000`：`transition` 的冲突码迁移漏了。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add marketing-activity marketing-admin scripts/smoke-test.sh marketing-common
@@ -1839,6 +1839,22 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
    所以那条断言要打在**免鉴权登录口**上：那里 claims 为 null、没有任何 set，
    少了 remove 就等于"未登录的请求带着 X-Admin-Role: admin 到下游"。变异检查证实：
    删掉 remove 后只有那条新写红的的测试会红（`expected: <null> but was: <attacker-minted>`）。
+
+10. **`@AutoConfiguration` 用了 `@ConditionalOnBean(StringRedisTemplate)` 就必须
+    `afterName = RedisAutoConfiguration`**（T1 的实现漏了，T3 起 LITE 时 standalone
+    **直接起不来**：`No qualifying bean of type 'AuditOutbox'`）。
+    同一 @AutoConfiguration 的成员条件评估时看不到别的自动配置稍后才注册的 bean ——
+    ⑤ 给 `ConfigCommonAutoConfiguration` 写了这行，我抄漏了。
+    **更该记住的是测试的形状**：`AdminSecurityAutoConfigurationTest` 原本手搓 mock 的
+    `StringRedisTemplate`，所以这个装配缺陷在 5 条单测全绿的情况下存活了一整轮，
+    直到真起栈才炸。现在补了一条 runner 里真放 `RedisAutoConfiguration` 的用例，
+    去掉 `afterName` 它就红（变异检查已验）。
+11. **MyBatis-Plus 3.5.7 的 `updateById` 有两个重载**（单条 / `Collection`）：
+    Mockito 里写 `any()` 会报 `reference to updateById is ambiguous`，必须 `any(ActivityEntity.class)`。
+12. **手工探针会污染共享种子**：T3 验证"改预算→C 端余额跟着变"时把 `ACT2026001` 的
+    `budget_amount` 从种子的 1000000.00 改成了 78.00。改回来用的正是新端点（顺带再验一次
+    reheat 生效）。**跑完探针要么还原、要么重跑冒烟**，否则下一轮的绿是假的。
+    实测还原后重跑 72/72。
 
 ## 编写进度
 

@@ -1,5 +1,6 @@
 package com.example.marketing.admin.controller;
 
+import com.example.marketing.common.web.ClientIp;
 import com.example.marketing.admin.dto.ChangePasswordRequest;
 import com.example.marketing.admin.dto.LoginRequest;
 import com.example.marketing.admin.dto.LoginView;

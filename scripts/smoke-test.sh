@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# 五条核心链路冒烟测试（全部经网关 8090；链路 0-3 用 C 端演示 token，链路 4-5 用后台账号）
+# 五条核心链路冒烟测试（全部经网关 8090。C 端演示 token 用于运行时读与交易写；
+# 配置类写自 ③ 起只存在于 /api/admin/**，链路 0 的创建/流转因此也用后台 token —— 脚本开头登录一次全脚本共用）
 # 前置：./scripts/start-all.sh 已就绪；种子数据已由 docker init.sql 写入
 # 用法：GATEWAY_TOKEN=xxx ./scripts/smoke-test.sh
 # ============================================================
@@ -74,23 +75,36 @@ poll() { # url needle max_seconds
   echo "$body"; return 1
 }
 
-head2 "链路 0：活动中心（状态机 → 灰度 → 预算）"
+ADM="Authorization: Bearer"
+# ③：后台登录上移到全脚本开头。链路 0 的"创建活动/状态流转"本来就是配置类写，
+# 现在搬到 /api/admin/activities 之后，链路 0 也需要后台 token 了。
+# 后台口令来自种子账号（README 公示的 dev 口令）。登录口有每 IP 限速（默认 10 次/分钟，
+# 含成功尝试），全脚本一共 4 次登录（admin / 不存在的账号 / viewer / operator）；
+# 连跑两次冒烟之间隔 60s 以上，否则这里会先撞 42900。
+ADMIN_TOKEN=$(curl -s -m 25 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
+  -d '{"username":"admin","password":"rootdev123"}' \
+  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+[ -n "$ADMIN_TOKEN" ] && ok "后台登录成功并拿到 token" || bad "后台登录失败" ""
+AAUTH="$ADM $ADMIN_TOKEN"
+
+head2 "链路 0：活动中心（状态机 → 灰度 → 预算）：写走后台路径，读走 C 端"
 # 每次用全新活动编号，创建→流转→预算全程自给自足，不依赖也不消耗共享种子数据
 ACT_NO="ACT-SMOKE-$(date +%s)-$RANDOM"
 TS_START=$(date -v-1H +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '-1 hour' +%Y-%m-%dT%H:%M:%S)
 TS_END=$(date -v+2d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '+2 days' +%Y-%m-%dT%H:%M:%S)
-R=$(curl -s -X POST "$GW/api/activity" -H "$AUTH" -H "$JSON" \
+# ③：创建/流转是配置类写，只存在于 /api/admin/activities（owning 进程发布，网关转给 activity）
+R=$(curl -s -m 15 -X POST -H "$AAUTH" -H "$JSON" "$GW/api/admin/activities" \
   -d "{\"activityNo\":\"$ACT_NO\",\"name\":\"冒烟活动\",\"startTime\":\"$TS_START\",\"endTime\":\"$TS_END\",\"budgetAmount\":100.00}")
 expect "创建草稿活动（$ACT_NO）" '"status":"DRAFT"' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
 expect "草稿态不可参与" '"data":false' "$R"
-R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=APPROVE" -H "$AUTH")
+R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=APPROVE")
 expect "DRAFT 直接 APPROVE 被状态机拒绝（41001）" '"code":41001' "$R"
-R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=SUBMIT" -H "$AUTH")
+R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=SUBMIT")
 expect "SUBMIT → AUDITING" '"status":"AUDITING"' "$R"
-R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=APPROVE" -H "$AUTH")
+R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=APPROVE")
 expect "APPROVE → GRAY" '"status":"GRAY"' "$R"
-R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=PROMOTE" -H "$AUTH")
+R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=PROMOTE")
 expect "PROMOTE → ONLINE" '"status":"ONLINE"' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
 expect "上线后可参与" '"data":true' "$R"
@@ -128,10 +142,10 @@ R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSO
 expect "第二笔 bizKey 扣减 20 元成功" '"code":0' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain")
 expect "两笔扣减后余额精确递减到 5000 分" '"data":5000' "$R"
-R=$(curl -s -X POST "$GW/api/activity" -H "$AUTH" -H "$JSON" \
+R=$(curl -s -m 15 -X POST -H "$AAUTH" -H "$JSON" "$GW/api/admin/activities" \
   -d "{\"activityNo\":\"$ACT_NO\",\"name\":\"重复\",\"startTime\":\"$TS_START\",\"endTime\":\"$TS_END\",\"budgetAmount\":1.00}")
 expect "重复活动编号被拒" '"code":41000' "$R"
-R=$(curl -s -X PUT "$GW/api/activity/$ACT_NO/transition?event=FINISH" -H "$AUTH")
+R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=FINISH")
 expect "FINISH 进入终态" '"status":"FINISHED"' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
 expect "终态后不可参与" '"data":false' "$R"
@@ -273,15 +287,6 @@ else
 fi
 
 head2 "链路 4：管理后台（两套凭证不互通 → 角色 → 分页 → 重预热生效 → 留痕）"
-ADM="Authorization: Bearer"
-# 后台口令来自种子账号（README 公示的 dev 口令）。登录口有每 IP 限速（默认 10 次/分钟，
-# 含成功尝试），本链路一共 4 次；连跑两次冒烟之间隔 60s 以上，否则这里会先撞 42900。
-ADMIN_TOKEN=$(curl -s -m 25 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
-  -d '{"username":"admin","password":"rootdev123"}' \
-  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-[ -n "$ADMIN_TOKEN" ] && ok "后台登录成功并拿到 token" || bad "后台登录失败" ""
-AAUTH="$ADM $ADMIN_TOKEN"
-
 # 账号不存在与口令错必须同码同文，否则登录口就是用户名枚举接口
 R_GHOST=$(curl -s -m 15 -X POST "$GW/api/admin/auth/login" -H "$JSON" \
   -d '{"username":"no-such-admin","password":"whatever123"}')
