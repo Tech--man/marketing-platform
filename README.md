@@ -82,6 +82,9 @@ GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结�
 (cd docker && docker compose -f docker-compose.prod.yml up -d)   # 想连带 nacos/prometheus 才需要
                                       # 注册中心控制台 http://localhost:8848/nacos，监控 :9091
 ./scripts/stop-all.sh && (cd docker && docker compose -f docker-compose.prod.yml down)
+                                      # prod.yml 只管 nacos/prometheus 与中间件，**不含应用容器**：
+                                      # 应用容器在 full-app.yml（项目名 mkt-full），漏拆它 8090 一直被占，
+                                      # 下一档（dev / LITE）的网关会因端口冲突起不来
 
 # FULL 扩容档 · 容器化形态（一容器一服务，可 --scale 多副本）
 export ADMIN_JWT_SECRET=$(openssl rand -base64 32)   # 容器形态必须显式导出（gateway 与 admin 同值），
@@ -504,8 +507,9 @@ Connection prematurely closed BEFORE response` → 该请求 500。机制：上�
 Nacos 客户端有概率在 STARTING 阶段注册失败导致该 JVM 退出（`restart: unless-stopped` 会拉起），
 遇到单个服务反复重启先看这个。
 
-**同源现象⑤（实测）**：`deploy-full.sh` 的重启动作会把 broker 也重建（`SKIP_BUILD=1` 复跑后 34 秒
-broker 重新 boot），此时立刻跑冒烟会吃到一次"消息投出去但 2 分钟没人消费"——链路 3 停在
+**同源现象⑤（实测）**：`deploy-full.sh` **每次**跑都会 `--force-recreate` broker（bind 挂载钉 inode，
+只改 conf 不重建就不生效），所以部署完立刻跑冒烟，天然踩在"生产者/消费者重注册"的窗口上——实测会吃到
+一次"消息投出去但 2 分钟没人消费"——链路 3 停在
 `ACCEPTED`、40s 轮询超时，最后由 `local_message` 补偿扫描把它兜住（下单成功，只是慢）。
 这不是②/⑤的回归，但它是**托底链路第一次被实测证明有效**：MQ 通道失联时消息不丢，代价是延迟从
 秒级变成补偿周期级。要干净复跑，等 broker 起来一分钟后跑第二次；别把这一轮的红灯当成异步链路坏了。
@@ -542,9 +546,9 @@ operator 越权改阈值 40300、给另一档写 199999 **不污染**本档、�
 | 形态 | 最近一次 | 通道证据 |
 |---|---|---|
 | LITE 服役档（容器） | **72/72**（2026-09-23，含链路 5 在线配置） | Redis Stream 键 + XDEL 生效（跑完 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零 |
-| dev 开发档（本机 2 JVM） | **52/52**（2026-09-22） | 同上 |
+| dev 开发档（本机 2 JVM） | **72/72**（2026-09-23） | 同上；`ownForm=DEV` |
 | FULL · 本机进程形态 | **72/72**（2026-09-23，含链路 5；紧接 LITE 那轮之后**不做任何 SQL 清理**原地切换） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零 |
-| FULL · 本机进程 · 每服务一库隔离档 | **52/52**（2026-09-22） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`，见上文引注 |
+| FULL · 本机进程 · 每服务一库隔离档 | **72/72**（2026-09-23） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`（本轮 12 条审计），与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`，见上文引注。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）|
 | FULL · 容器化 1 副本 | **72/72**（2026-09-23） | 同上 + 后台走 `lb://marketing-admin` 服务发现 |
 | FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 52 复跑） | 第三节的多副本三条证据 |
 

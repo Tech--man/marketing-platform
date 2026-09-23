@@ -109,7 +109,7 @@
   - `ConfigKeys.GLOBAL`、`ConfigKeys.FORMS`、`ConfigKeys.SEQUENCE`、`ConfigKeys.snapshot(form)`、`ConfigKeys.version(form)`、`ConfigKeys.schema(service)`
   - `ConfigForm.resolve(String raw)`、`ConfigForm.unrecognized(String raw)`
 
-- [ ] **Step 1: 写失败测试 —— 类型与边界校验**
+- [x] **Step 1: 写失败测试 —— 类型与边界校验**
 
 `ConfigDefinitionTest.java`：
 
@@ -172,12 +172,12 @@ class ConfigDefinitionTest {
 
 补 import：`import static org.junit.jupiter.api.Assertions.assertEquals;` 与 `import static org.junit.jupiter.api.Assertions.assertThrows;`。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigDefinitionTest`
 Expected: 编译失败 `找不到符号 ConfigDefinition`
 
-- [ ] **Step 3: 实现 `ConfigType` 与 `ConfigDefinition`**
+- [x] **Step 3: 实现 `ConfigType` 与 `ConfigDefinition`**
 
 `ConfigType.java`：
 
@@ -269,12 +269,12 @@ public record ConfigDefinition(String key, ConfigType type, long min, long max,
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigDefinitionTest`
 Expected: PASS（4 个用例）
 
-- [ ] **Step 5: 写失败测试 —— 形态解析优先级（两档共库的唯一安全阀）**
+- [x] **Step 5: 写失败测试 —— 形态解析优先级（两档共库的唯一安全阀）**
 
 `ConfigMergeTest.java`：
 
@@ -331,12 +331,12 @@ class ConfigMergeTest {
 }
 ```
 
-- [ ] **Step 6: 跑测试确认失败**
+- [x] **Step 6: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigMergeTest`
 Expected: 编译失败 `找不到符号 ConfigMerge`
 
-- [ ] **Step 7: 实现 `ConfigKeys`、`ConfigForm`、`ConfigMerge`**
+- [x] **Step 7: 实现 `ConfigKeys`、`ConfigForm`、`ConfigMerge`**
 
 `ConfigKeys.java`：
 
@@ -454,7 +454,7 @@ public final class ConfigMerge {
 
 > `merge(" full ", ROWS)` 会命中 FULL 行、同时 GLOBAL 行也在结果里，所以那条断言只取 `.get("k.full")`——不要把整张 map 与单键比较。
 
-- [ ] **Step 8: 写并跑 `ConfigFormTest`**
+- [x] **Step 8: 写并跑 `ConfigFormTest`**
 
 ```java
 package com.example.marketing.common.config;
@@ -492,7 +492,7 @@ class ConfigFormTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest='ConfigMergeTest,ConfigFormTest'`
 Expected: PASS（5 个用例）
 
-- [ ] **Step 9: 写失败测试 —— 快照编解码与读取侧生效值**
+- [x] **Step 9: 写失败测试 —— 快照编解码与读取侧生效值**
 
 `ConfigSnapshotCodecTest.java`：
 
@@ -646,12 +646,12 @@ class ConfigValuesTest {
 }
 ```
 
-- [ ] **Step 10: 跑测试确认失败**
+- [x] **Step 10: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest='ConfigSnapshotCodecTest,ConfigValuesTest'`
 Expected: 编译失败 `找不到符号 ConfigSnapshot`
 
-- [ ] **Step 11: 实现 SPI、registry、快照、编解码与 `ConfigValues`**
+- [x] **Step 11: 实现 SPI、registry、快照、编解码与 `ConfigValues`**
 
 `ConfigDefinitionProvider.java`：
 
@@ -929,12 +929,12 @@ public class ConfigValues {
 }
 ```
 
-- [ ] **Step 12: 跑测试确认通过**
+- [x] **Step 12: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest='ConfigSnapshotCodecTest,ConfigValuesTest'`
 Expected: PASS（3+5 = 8 个用例）
 
-- [ ] **Step 13: 写并跑 registry 测试**
+- [x] **Step 13: 写并跑 registry 测试**
 
 `ConfigSchemaRegistryTest.java`：
 
@@ -1000,7 +1000,7 @@ class ConfigSchemaRegistryTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigSchemaRegistryTest`
 Expected: PASS（2 个用例）
 
-- [ ] **Step 14: 变异检查（证明断言真的咬人）**
+- [x] **Step 14: 变异检查（证明断言真的咬人）**
 
 逐条临时改动，每次都要看到指名的测试变红，改回后再全绿：
 
@@ -1011,7 +1011,7 @@ Expected: PASS（2 个用例）
 
 Run（每轮）: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest='ConfigMergeTest,ConfigValuesTest,ConfigSchemaRegistryTest,ConfigDefinitionTest'`
 
-- [ ] **Step 15: 提交**
+- [x] **Step 15: 提交**
 
 ```bash
 git add marketing-common/src/main/java/com/example/marketing/common/config \
@@ -1042,7 +1042,7 @@ git commit -m "feat(config): 在线配置的契约与生效值核心（形态合
   - Bean：`configSchemaRegistry`、`configValues`、`configSnapshotPoller`（第三个仅当存在 `StringRedisTemplate`）
   - 属性：`marketing.config.form`（默认空）、`marketing.config.poll-seconds`（默认 5）
 
-- [ ] **Step 1: 实现 schema 载荷与编解码**
+- [x] **Step 1: 实现 schema 载荷与编解码**
 
 `ConfigSchemaPayload.java`：
 
@@ -1097,7 +1097,7 @@ public final class ConfigSchemaCodec {
 }
 ```
 
-- [ ] **Step 2: 写失败测试 —— 轮询器的四条路径**
+- [x] **Step 2: 写失败测试 —— 轮询器的四条路径**
 
 `ConfigSnapshotPollerTest.java`。四条各自钉住一个"会静默出事"的分支：版本没变不该取快照、变了必须取并应用、Redis 异常必须**保住现值**（一次网络抖动不能把阈值打回出厂）、快照键被删必须退回出厂（链路 5 的验收路径）。
 
@@ -1228,12 +1228,12 @@ class ConfigSnapshotPollerTest {
 }
 ```
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigSnapshotPollerTest`
 Expected: 编译失败 `找不到符号 ConfigSnapshotPoller`
 
-- [ ] **Step 4: 实现 `ConfigSnapshotPoller`**
+- [x] **Step 4: 实现 `ConfigSnapshotPoller`**
 
 ```java
 package com.example.marketing.common.config;
@@ -1377,12 +1377,12 @@ public class ConfigSnapshotPoller {
 }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigSnapshotPollerTest`
 Expected: PASS（4 个用例）
 
-- [ ] **Step 6: 写失败测试 —— 装配条件矩阵**
+- [x] **Step 6: 写失败测试 —— 装配条件矩阵**
 
 `ConfigCommonAutoConfigurationTest.java`。这里钉的是母版事实 #8：网关没有 DataSource，装配必须照样成立，否则在线限流恰好在那个最需要它的进程里不生效。
 
@@ -1496,12 +1496,12 @@ class ConfigCommonAutoConfigurationTest {
 }
 ```
 
-- [ ] **Step 7: 跑测试确认失败**
+- [x] **Step 7: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test -Dtest=ConfigCommonAutoConfigurationTest`
 Expected: 编译失败 `找不到符号 ConfigCommonAutoConfiguration`
 
-- [ ] **Step 8: 实现 `ConfigCommonAutoConfiguration` 并登记 imports**
+- [x] **Step 8: 实现 `ConfigCommonAutoConfiguration` 并登记 imports**
 
 ```java
 package com.example.marketing.common.config;
@@ -1566,19 +1566,19 @@ com.example.marketing.common.config.MarketingCommonAutoConfiguration
 com.example.marketing.common.config.ConfigCommonAutoConfiguration
 ```
 
-- [ ] **Step 9: 跑测试确认通过 + common 全量回归**
+- [x] **Step 9: 跑测试确认通过 + common 全量回归**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test`
 Expected: 全绿。common 从 6 个测试类涨到 9 个（+`ConfigDefinition/ConfigMerge/ConfigForm/ConfigSnapshotCodec/ConfigValues/ConfigSchemaRegistry/ConfigSnapshotPoller/ConfigCommonAutoConfiguration` 中的前 8 项分布；按实际文件数计），且不出现任何既有测试变红。
 
-- [ ] **Step 10: 变异检查**
+- [x] **Step 10: 变异检查**
 
 1. 摘掉 `@ConditionalOnBean(StringRedisTemplate.class)` → `wiresWithoutDataSource` 最后一句必须红。
 2. `refreshOnce()` 里删掉"版本未变就返回"那个分支 → `fetchesSnapshotOnlyWhenVersionChanged` 的 `times(1)` 必须红。
 3. `catch (Exception e)` 改成"应用空快照" → `redisFailureKeepsLastApplied` 必须红。
 4. `publishSchema()` 的键从 `ConfigKeys.schema(service)` 改成硬编码 `"mkt:cfg:schema"` → `publishesOwnSchema` 必须红。
 
-- [ ] **Step 11: 提交**
+- [x] **Step 11: 提交**
 
 ```bash
 git add marketing-common/src/main/java/com/example/marketing/common/config \
@@ -1600,7 +1600,7 @@ git commit -m "feat(config): 不带 DataSource 条件的配置装配 + 阻塞侧
 - Consumes: 无
 - Produces: 表 `admin_config(cfg_key, form, cfg_value, version, updated_by, remark)`（列名与 Task 5 的 SQL 逐字一致）、列 `activity.gray_percent` / `activity.gray_whitelist`（与 Task 6 的实体字段对应）、种子 `ACT2026001.gray_percent = 100`
 
-- [ ] **Step 1: 两份 init DDL 各加两列**
+- [x] **Step 1: 两份 init DDL 各加两列**
 
 在 `activity` 建表语句里，`remark` 之后、`version` 之前插入（**init 与 init-lite 两份逐字相同**）：
 
@@ -1609,7 +1609,7 @@ git commit -m "feat(config): 不带 DataSource 条件的配置装配 + 阻塞侧
     gray_whitelist VARCHAR(255) NULL COMMENT '灰度白名单 userId CSV；NULL 或空=无白名单',
 ```
 
-- [ ] **Step 2: 两份 init DDL 各加 `admin_config`**
+- [x] **Step 2: 两份 init DDL 各加 `admin_config`**
 
 在 `admin_audit_log` 建表语句之后追加（init 版此时在 `marketing_admin` 库、init-lite 版在单库 `marketing` 内，所以两份内容一致、位置各一份）：
 
@@ -1632,7 +1632,7 @@ CREATE TABLE IF NOT EXISTS admin_config (
 ) ENGINE = InnoDB COMMENT '在线配置真值（删行即恢复出厂）';
 ```
 
-- [ ] **Step 3: 种子带上灰度值**
+- [x] **Step 3: 种子带上灰度值**
 
 两份文件里把 `INSERT INTO activity (...)` 的列清单与值各扩一项（**这是链路 0 第 63-64 行断言在 Task 6 之后的唯一支撑**）：
 
@@ -1643,7 +1643,7 @@ SELECT 'ACT2026001', '2026 秋季大促', 'ONLINE', NOW() - INTERVAL 7 DAY, NOW(
 WHERE NOT EXISTS (SELECT 1 FROM activity WHERE activity_no = 'ACT2026001');
 ```
 
-- [ ] **Step 4: 写迁移脚本（给已建好的卷，必须能独立执行）**
+- [x] **Step 4: 写迁移脚本（给已建好的卷，必须能独立执行）**
 
 `docker/mysql/migrate/2026-09-23-admin-config.sql` 全文：
 
@@ -1705,7 +1705,7 @@ SELECT COUNT(*) AS admin_config_exists FROM information_schema.tables
 SELECT activity_no, gray_percent FROM activity WHERE activity_no = 'ACT2026001';
 ```
 
-- [ ] **Step 5: 在常驻库上真实执行迁移（不是只看语法）**
+- [x] **Step 5: 在常驻库上真实执行迁移（不是只看语法）**
 
 ```bash
 docker compose -f docker/docker-compose.data.yml up -d --wait
@@ -1732,7 +1732,7 @@ docker exec -i mkt-mysql mysql -umarketing -pmarketing123 marketing_admin \
   < docker/mysql/migrate/2026-09-23-admin-config.sql
 ```
 
-- [ ] **Step 6: 字符集回归检查（latin1 坑的专项）**
+- [x] **Step 6: 字符集回归检查（latin1 坑的专项）**
 
 ```bash
 docker exec mkt-mysql mysql -umarketing -pmarketing123 -e \
@@ -1741,7 +1741,7 @@ docker exec mkt-mysql mysql -umarketing -pmarketing123 -e \
 ```
 Expected: 读回来是"灰度放量百分比 0-100；NULL=未配灰度=全量放行"，不是 `åº¦æ...` 这类双重编码。
 
-- [ ] **Step 7: 验证新卷走 init 路径**
+- [x] **Step 7: 验证新卷走 init 路径**
 
 用一次性容器验证两份 init 脚本能整份执行，**不碰常驻卷**（常驻卷里有本轮全部测试数据，删卷不在本计划的授权范围内）：
 
@@ -1757,7 +1757,7 @@ docker run --rm --name mkt-ddl-check \
 ```
 Expected: 建库与建表全部成功，无 `Unknown column` / syntax 报错。若 `awk` 取镜像名失败，直接写 `docker-compose.data.yml` 里那个 mysql 镜像标签。init-lite 那份把挂载目录换成 `docker/mysql/init-lite`、目标库换成 `marketing`，同法跑一次。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add docker/mysql/init/01-schema.sql docker/mysql/init-lite/01-schema-lite.sql \
@@ -1787,7 +1787,7 @@ git commit -m "feat(config): admin_config 真值表与 activity 灰度两列（i
   - `RateRuleResolver.resolve(String routeId, GatewayProperties.RateRule ymlRule, ConfigValues values)` → `RateRuleResolver.Outcome(GatewayProperties.RateRule rule, boolean fromSnapshot, boolean ignored)`
   - `GatewayConfigSyncer`（`@PostConstruct` 起 reactive 轮询、`void syncOnce()` 包内可见）
 
-- [ ] **Step 1: 写失败测试 —— 阈值的四种来源**
+- [x] **Step 1: 写失败测试 —— 阈值的四种来源**
 
 ```java
 package com.example.marketing.gateway.config;
@@ -1872,12 +1872,12 @@ class RateRuleResolverTest {
 
 > `valuesWith` 直接以 `List.of(new GatewayConfigDefinitions())` 建 registry：网关的声明清单本身就是被测对象的一部分，用真实 provider 而不是再造一个匿名桩。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=RateRuleResolverTest`
 Expected: 编译失败 `找不到符号 RateRuleResolver`
 
-- [ ] **Step 3: 实现声明与解析器**
+- [x] **Step 3: 实现声明与解析器**
 
 `GatewayConfigDefinitions.java`：
 
@@ -1965,12 +1965,12 @@ public class RateRuleResolver {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=RateRuleResolverTest`
 Expected: PASS（4 个用例）
 
-- [ ] **Step 5: 写并跑"声明与 yml 必须一一对应"的守卫测试**
+- [x] **Step 5: 写并跑"声明与 yml 必须一一对应"的守卫测试**
 
 防的是"改了 yml 忘了改声明"：yml 有路由而声明没有 → 后台改不动它（运营以为改了就没救了）；声明有而 yml 没这条路由 → 一个不存在的桶挂在清单里。
 
@@ -2031,7 +2031,7 @@ class GatewayConfigDefinitionsTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=GatewayConfigDefinitionsTest`
 Expected: PASS（2 个用例）
 
-- [ ] **Step 6: 写并跑"两套 profile 的路由表必须同步"的守卫测试**
+- [x] **Step 6: 写并跑"两套 profile 的路由表必须同步"的守卫测试**
 
 ①② 那条教训（漏 nacos profile 的一条路由 = 只在升档后才 404）的机器化版本，也是 ③⑥ 会反复用到的护栏。
 
@@ -2115,7 +2115,7 @@ class GatewayRouteTableTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=GatewayRouteTableTest`
 Expected: PASS。若第二条红，说明 yml 真有条目缺失——**照红字补 yml，不许放宽测试**。
 
-- [ ] **Step 7: 写失败测试 —— reactive 同步器喂到 `ConfigValues`**
+- [x] **Step 7: 写失败测试 —— reactive 同步器喂到 `ConfigValues`**
 
 `GatewayConfigSyncerTest.java`（Mockito 打桩 reactive 模板，与 `AdminAuthFilterTest` 同手法）：
 
@@ -2207,12 +2207,12 @@ class GatewayConfigSyncerTest {
 }
 ```
 
-- [ ] **Step 8: 跑测试确认失败**
+- [x] **Step 8: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=GatewayConfigSyncerTest`
 Expected: 编译失败 `找不到符号 GatewayConfigSyncer`
 
-- [ ] **Step 9: 实现 `GatewayConfigSyncer`**
+- [x] **Step 9: 实现 `GatewayConfigSyncer`**
 
 ```java
 package com.example.marketing.gateway.config;
@@ -2351,12 +2351,12 @@ public class GatewayConfigSyncer {
 }
 ```
 
-- [ ] **Step 10: 跑测试确认通过**
+- [x] **Step 10: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test -Dtest=GatewayConfigSyncerTest`
 Expected: PASS（3 个用例）。注意 `syncOnce()` 里用的是 `.subscribe()`，测试要能立刻看到结果——若断言偶发失败，把 `syncOnce()` 改成返回 `Mono<Void>`（内部 `...subscribe()` 改成 `return chain.then()`），测试里 `.block(Duration.ofSeconds(5))`；**这是形态问题不是时序魔法，不许用 sleep 掩盖**。
 
-- [ ] **Step 11: 改 `RateLimitFilter` 接线**
+- [x] **Step 11: 改 `RateLimitFilter` 接线**
 
 字段与构造器（替换 `:35-47`）：
 
@@ -2399,7 +2399,7 @@ Expected: PASS（3 个用例）。注意 `syncOnce()` 里用的是 `.subscribe()
 
 补 import `com.example.marketing.common.config.ConfigValues;` 与 `com.example.marketing.gateway.config.RateRuleResolver;`，并把类 Javadoc 的第一段改为一句事实陈述：阈值来源优先级"在线快照 &gt; 本进程 yml（`RL_*`）"，越界与未声明逐条退回出厂值；`window-seconds` 恒取 yml。
 
-- [ ] **Step 12: yml 加两行属性**
+- [x] **Step 12: yml 加两行属性**
 
 `marketing-gateway/src/main/resources/application.yml`，在 `marketing:` 块内与 `gateway:` 同级：
 
@@ -2410,14 +2410,14 @@ Expected: PASS（3 个用例）。注意 `syncOnce()` 里用的是 `.subscribe()
     poll-seconds: ${CONFIG_POLL_SECONDS:5}
 ```
 
-- [ ] **Step 13: 网关全模块回归 + 变异检查**
+- [x] **Step 13: 网关全模块回归 + 变异检查**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway -am test`
 Expected: 全绿（含 ①② 的 `AdminAuthFilterTest` 10 条、`AuthFilterTest` 4 条不受影响）
 
 变异：① 把 `resolve` 里 `if (ymlRule == null)` 的分支改成返回 `limit=0` 的规则 → `unknownRouteStillUnlimited` 必须红；② 删掉 `merged.setWindowSeconds(...)` → `snapshotWinsOnLimitOnly` 必须红；③ 把 `syncOnce` 的 `defaultIfEmpty("")` 去掉（版本键缺失即 NPE 路径）→ `missingVersionKeyClearsOverrides` 必须红。
 
-- [ ] **Step 14: 提交**
+- [x] **Step 14: 提交**
 
 ```bash
 git add marketing-gateway/src
@@ -2449,7 +2449,7 @@ git commit -m "feat(config): 网关限流阈值在线化（自包含快照 + rea
   - HTTP：`GET /api/admin/config`、`PUT /api/admin/config`、`DELETE /api/admin/config?cfgKey=&form=`、`POST /api/admin/config/rebroadcast`
   - 错误码：`41008`、`41009`、`41010`
 
-- [ ] **Step 1: 加三个错误码**
+- [x] **Step 1: 加三个错误码**
 
 `ErrorCode.java` 在 `ACTIVITY_NOT_ONLINE(41007, "活动未上线或已结束"),` 之后插入：
 
@@ -2465,7 +2465,7 @@ git commit -m "feat(config): 网关限流阈值在线化（自包含快照 + rea
 Run: `source scripts/common.sh && mvn -q -pl marketing-common -am test`
 Expected: 全绿（枚举加值不动任何断言）
 
-- [ ] **Step 2: 写失败测试 —— store 的 SQL 语义（H2 `MODE=MySQL`）**
+- [x] **Step 2: 写失败测试 —— store 的 SQL 语义（H2 `MODE=MySQL`）**
 
 `AdminConfigStoreTest.java`。为什么 store 用 `JdbcTemplate` 而不是 MyBatis-Plus mapper：这里需要的只是一条 upsert 与两个整体读，`JdbcTemplate` 能被真 SQL 测到（mapper 桩测不到 SQL 语义），与 `IdempotentExecutor` / `LocalMessageService` 同手法。
 
@@ -2546,12 +2546,12 @@ class AdminConfigStoreTest {
 }
 ```
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin -am test -Dtest=AdminConfigStoreTest`
 Expected: 编译失败 `找不到符号 AdminConfigStore`
 
-- [ ] **Step 4: 实现 `AdminConfigStore`**
+- [x] **Step 4: 实现 `AdminConfigStore`**
 
 ```java
 package com.example.marketing.admin.config;
@@ -2625,12 +2625,12 @@ public class AdminConfigStore {
 }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin -am test -Dtest=AdminConfigStoreTest`
 Expected: PASS（3 个用例）
 
-- [ ] **Step 6: 实现 `ConfigSchemaReader` 与 `ConfigSnapshotPublisher`**
+- [x] **Step 6: 实现 `ConfigSchemaReader` 与 `ConfigSnapshotPublisher`**
 
 `ConfigSchemaReader.java`：
 
@@ -2851,7 +2851,7 @@ public class ConfigSnapshotPublisher {
 }
 ```
 
-- [ ] **Step 7: 写失败测试 —— 写路径的裁决**
+- [x] **Step 7: 写失败测试 —— 写路径的裁决**
 
 `AdminConfigServiceTest.java`。每条都对应一个现实后果：未声明键写了没人消费（静默按钮）、越界值进了 DB（下次大促炸）、广播失败被当成功（静默不一致）、删行不生效（恢复出厂是假的）。
 
@@ -3020,12 +3020,12 @@ class AdminConfigServiceTest {
 }
 ```
 
-- [ ] **Step 8: 跑测试确认失败**
+- [x] **Step 8: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin -am test -Dtest=AdminConfigServiceTest`
 Expected: 编译失败 `找不到符号 AdminConfigService`
 
-- [ ] **Step 9: 实现五个 DTO**
+- [x] **Step 9: 实现五个 DTO**
 
 ```java
 package com.example.marketing.admin.dto;
@@ -3088,7 +3088,7 @@ public record ConfigOverviewView(String ownForm, long appliedVersion, List<Confi
 }
 ```
 
-- [ ] **Step 10: 实现 `AdminConfigService`**
+- [x] **Step 10: 实现 `AdminConfigService`**
 
 ```java
 package com.example.marketing.admin.config;
@@ -3287,7 +3287,7 @@ public class AdminConfigService {
 
 > `overview()` 里对 `source` 的 FORM/GLOBAL 判定读的是 `store.rows()` 的重复遍历，参数多时是 O(n²)。落地时先按 form 建索引再判定（一次 `Map<String,String> formValueByKey` + 一次 `merged`），别把二次遍历留在真值路径上——这条不需要测试，但必须做。
 
-- [ ] **Step 11: 实现 controller 并跑通测试**
+- [x] **Step 11: 实现 controller 并跑通测试**
 
 ```java
 package com.example.marketing.admin.controller;
@@ -3356,7 +3356,7 @@ public class AdminConfigController {
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin -am test`
 Expected: 全绿（含既有 `RequestSummaryTest` 5、`LoginPolicyTest` 6、`LoginGuardTest` 2）
 
-- [ ] **Step 12: admin 的 yml 加两行**
+- [x] **Step 12: admin 的 yml 加两行**
 
 `marketing-admin/src/main/resources/application.yml` 的 `marketing:` 块内加：
 
@@ -3367,7 +3367,7 @@ Expected: 全绿（含既有 `RequestSummaryTest` 5、`LoginPolicyTest` 6、`Log
     poll-seconds: ${CONFIG_POLL_SECONDS:5}
 ```
 
-- [ ] **Step 13: 变异检查**
+- [x] **Step 13: 变异检查**
 
 1. 去掉 `schemaReader.find(key).orElseThrow(...)`（改成"未声明也照写"）→ `undeclaredKeyRejected` 必须红。
 2. 把 `!def.accepts(value)` 的拒绝改成 log + 继续 → `outOfRangeRejectedBeforeTouchingAnything` 必须红。
@@ -3375,7 +3375,7 @@ Expected: 全绿（含既有 `RequestSummaryTest` 5、`LoginPolicyTest` 6、`Log
 4. 把 `publishAll` 的空合并分支从 `redis.delete(...)` 改成 `continue` → `deleteIsRestoreToFactory` 的 `verify(ops).delete(...)` 必须红。
 5. 把 `store.delete(...) == 0` 的判定去掉 → 同一条测试的第二半（未命中抛异常）必须红。
 
-- [ ] **Step 14: 提交**
+- [x] **Step 14: 提交**
 
 ```bash
 git add marketing-common/src/main/java/com/example/marketing/common/api/ErrorCode.java \
@@ -3401,7 +3401,7 @@ git commit -m "feat(config): 后台配置写路径（未声明拒写、快照广
 - Consumes: Task 3 的 `activity.gray_percent` / `gray_whitelist` 列；`JdbcTemplate`（activity 模块已装配，`BudgetService` 就在用）
 - Produces: `GrayRuleCache.Rule(int percent, Set<Long> whitelist)`、`Optional<Rule> GrayRuleCache.rule(String activityNo)`、`void refreshNow()`、`GrayService.hit(String,Long)` 语义不变（**未配灰度 = 全量放行**，链路 0 的两条断言依赖它）
 
-- [ ] **Step 1: 实体加两个字段**
+- [x] **Step 1: 实体加两个字段**
 
 `ActivityEntity.java` 在 `remark` 之后插入：
 
@@ -3412,7 +3412,7 @@ git commit -m "feat(config): 后台配置写路径（未声明拒写、快照广
     private String grayWhitelist;
 ```
 
-- [ ] **Step 2: 写失败测试（回源、钳位、CSV、异常保持现值）**
+- [x] **Step 2: 写失败测试（回源、钳位、CSV、异常保持现值）**
 
 `GrayRuleCacheTest.java`：
 
@@ -3505,12 +3505,12 @@ class GrayRuleCacheTest {
 }
 ```
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-activity -am test -Dtest=GrayRuleCacheTest`
 Expected: 编译失败 `找不到符号 GrayRuleCache`
 
-- [ ] **Step 4: 实现 `GrayRuleCache`**
+- [x] **Step 4: 实现 `GrayRuleCache`**
 
 ```java
 package com.example.marketing.activity.service;
@@ -3631,7 +3631,7 @@ public class GrayRuleCache {
 
 `jdbc.query(String, RowCallbackHandler)` 返回 void，所以 `refreshNow()` 里不需要任何 `.getClass()` 之类的收尾；`clamp` 只管数值区间，"这一行算不算配了灰度"由 SQL 的 `IS NOT NULL` 决定。
 
-- [ ] **Step 5: 替换 `GrayService` 并跑测试**
+- [x] **Step 5: 替换 `GrayService` 并跑测试**
 
 ```java
 package com.example.marketing.activity.service;
@@ -3680,7 +3680,7 @@ public class GrayService {
 Run: `grep -rn "GrayProperties\|marketing\.gray" --include=*.java --include=*.yml marketing-* docker scripts 2>/dev/null; echo "exit=$?"`
 Expected: 只剩 `marketing.gray.refresh-seconds`（新属性）这一处命中；`GrayProperties` 零命中。
 
-- [ ] **Step 6: 写并跑 `GrayServiceTest`**
+- [x] **Step 6: 写并跑 `GrayServiceTest`**
 
 ```java
 package com.example.marketing.activity.service;
@@ -3745,7 +3745,7 @@ class GrayServiceTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-activity -am test -Dtest='GrayRuleCacheTest,GrayServiceTest'`
 Expected: PASS（4+4）
 
-- [ ] **Step 7: 删两处 yml 的灰度块**
+- [x] **Step 7: 删两处 yml 的灰度块**
 
 `marketing-activity/src/main/resources/application.yml` 删掉整段（含上面那行注释）：
 
@@ -3768,14 +3768,14 @@ marketing:
     type: ${MQ_TYPE:redis-stream}
 ```
 
-- [ ] **Step 8: 变异检查 + 全模块回归**
+- [x] **Step 8: 变异检查 + 全模块回归**
 
 变异：① 把 `GrayService.hit` 的"无规则返回 true"改成 false → `noRuleMeansFullTraffic` 与 `zeroPercentBlocksEveryoneButWhitelist` 必须红（这条改了会直接掀链路 0）；② 把 `clamp` 的 `> 100` 分支删掉 → `percentIsClamped` 必须红；③ 把 `refreshNow` 的 catch 改成 `rules = Map.of()` → `refreshFailureKeepsPreviousRules` 必须红。
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-activity,marketing-standalone -am test`
 Expected: 全绿（`StandaloneComponentScanTest` 不受影响；`ActivityServiceTest` 2 条不受影响）
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add marketing-activity marketing-standalone
@@ -3807,7 +3807,7 @@ git commit -m "feat(config): 灰度真值落 activity 列并按 5s 回源，删�
   - `SeckillRuntimeConfig.tokenTtlSeconds() / payTimeoutSeconds() / boughtMarkTtlSeconds() : long`
   - 键：`discount.calc-timeout-ms`、`discount.max-rules-per-order`、`seckill.token-ttl-seconds`、`seckill.pay-timeout-seconds`、`seckill.bought-mark-ttl-seconds`
 
-- [ ] **Step 1: 写失败测试（在线值优先、缺省回 properties）**
+- [x] **Step 1: 写失败测试（在线值优先、缺省回 properties）**
 
 `SeckillRuntimeConfigTest.java`：
 
@@ -3921,12 +3921,12 @@ class DiscountRuntimeConfigTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-seckill,marketing-discount -am test -Dtest='SeckillRuntimeConfigTest,DiscountRuntimeConfigTest'`
 Expected: 编译失败 `找不到符号 SeckillRuntimeConfig`
 
-- [ ] **Step 3: 实现两组声明与包装**
+- [x] **Step 3: 实现两组声明与包装**
 
 ```java
 package com.example.marketing.seckill.config;
@@ -4057,12 +4057,12 @@ public class DiscountRuntimeConfig {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-seckill,marketing-discount -am test -Dtest='SeckillRuntimeConfigTest,DiscountRuntimeConfigTest'`
 Expected: PASS（3+3）
 
-- [ ] **Step 5: 改道调用点**
+- [x] **Step 5: 改道调用点**
 
 `SeckillStockService`：把字段 `private final SeckillProperties properties;` 换成 `private final SeckillRuntimeConfig runtime;`，5 处 `properties.getTokenTtlSeconds()` / `properties.getBoughtMarkTtlSeconds()` 分别换成 `runtime.tokenTtlSeconds()` / `runtime.boughtMarkTtlSeconds()`（`:64,86,105,152,165`），import 换成 `com.example.marketing.seckill.config.SeckillRuntimeConfig`。
 
@@ -4072,7 +4072,7 @@ Expected: PASS（3+3）
 
 `PromoEngine:46`：`properties.getMaxRulesPerOrder()` → `runtime.maxRulesPerOrder()`，新增字段（该类若是 `@RequiredArgsConstructor` 就加一个 final 字段；若是手写构造器，参数追加在 `DiscountProperties` 之后）。
 
-- [ ] **Step 6: 修两处既有测试的构造调用**
+- [x] **Step 6: 修两处既有测试的构造调用**
 
 `SeckillStockServiceTest:16`：
 
@@ -4089,14 +4089,14 @@ Expected: PASS（3+3）
 
 取值口径在本任务里是定死的：`PromoEngine` 与 `DiscountCalcService` 各自只读一个参数，所以注入 `ConfigValues` 而不是 `DiscountRuntimeConfig`；`DiscountRuntimeConfig` 只服务于"一处要读多个参数"的调用点（seckill 的三个 TTL 在同一个类里都被读）。判断标准一句话：**读一个参数直接问 `ConfigValues`，读两个以上才包一层 RuntimeConfig**——包早了是多一个类，包晚了就是漏改一处。因此 Step 5 里 `PromoEngine` 的新字段是 `ConfigValues values`，`DiscountCalcService` 同理；`SeckillStockService`/`SeckillTimeoutJob` 用 `SeckillRuntimeConfig`。
 
-- [ ] **Step 7: 变异检查 + 两模块回归**
+- [x] **Step 7: 变异检查 + 两模块回归**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-seckill,marketing-discount -am test`
 Expected: 全绿（含既有 `SeckillWarmUpServiceTest` 2、`SeckillStockServiceTest`、`AllocatorTest`、`CombinationSelectorTest`、`RuleCacheManagerTest`）
 
 变异：① 把 `SeckillRuntimeConfig.tokenTtlSeconds()` 改回 `properties.getTokenTtlSeconds()` → `onlineValueWinsAndOutOfRangeFallsBack` 第一条必须红；② 把 `SeckillStockService` 里 5 处中的 1 处漏改（保留 `properties`）→ 编译不过（字段已删），说明包装层是唯一的取值口，这正是设计意图；③ 把 `DiscountRuntimeConfig.maxRulesPerOrder()` 的下界从 1 改成 0 → `zeroRulesPerOrderRejected` 必须红。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add marketing-discount marketing-seckill
@@ -4118,7 +4118,7 @@ git commit -m "feat(config): 优惠与秒杀的 5 个参数接进在线值（每
 - Consumes: `marketing.config.form`（Task 2/4/5 的属性名）
 - Produces: 环境变量 `DEPLOY_FORM ∈ {LITE, FULL, DEV}` 与 `CONFIG_POLL_SECONDS`（可选，默认 5）
 
-- [ ] **Step 1: LITE 容器档两个服务加 `DEPLOY_FORM: LITE`**
+- [x] **Step 1: LITE 容器档两个服务加 `DEPLOY_FORM: LITE`**
 
 `docker-compose.preview.yml`：`standalone.environment` 里 `MQ_TYPE: redis-stream` 之后加：
 
@@ -4130,7 +4130,7 @@ git commit -m "feat(config): 优惠与秒杀的 5 个参数接进在线值（每
 
 `gateway.environment` 里 `RL_DISCOUNT: "500"` 之后加同一行 `DEPLOY_FORM: LITE`（带注释"网关与业务进程必须同一形态标识，否则两档阈值会互相看不见"）。
 
-- [ ] **Step 2: FULL 容器档在锚点加一次**
+- [x] **Step 2: FULL 容器档在锚点加一次**
 
 `docker-compose.full-app.yml` 的 `&app-env` 里、`SPRING_PROFILES_ACTIVE: nacos` 之后加：
 
@@ -4139,7 +4139,7 @@ git commit -m "feat(config): 优惠与秒杀的 5 个参数接进在线值（每
     DEPLOY_FORM: FULL
 ```
 
-- [ ] **Step 3: 两套本机脚本导出**
+- [x] **Step 3: 两套本机脚本导出**
 
 `scripts/start-all.sh` 在 `ADMIN_JWT_SECRET` 那两行之后加：
 
@@ -4155,7 +4155,7 @@ export DEPLOY_FORM="${DEPLOY_FORM:-FULL}"
 export DEPLOY_FORM="${DEPLOY_FORM:-DEV}"
 ```
 
-- [ ] **Step 4: 静态验证**
+- [x] **Step 4: 静态验证**
 
 ```bash
 bash -n scripts/start-all.sh scripts/start-dev.sh
@@ -4164,7 +4164,7 @@ docker compose -f docker/docker-compose.full-app.yml config | grep -c "DEPLOY_FO
 ```
 Expected: `bash -n` 无输出；preview 至少 **2** 次命中；full-app 至少 **6** 次命中（锚点展开到 5 个服务 + 锚点自身，按实际输出判读，**只要少于 5 就说明锚点没继承到某个服务**）。
 
-- [ ] **Step 5: 实跑一次 LITE 并确认 form 落地**
+- [x] **Step 5: 实跑一次 LITE 并确认 form 落地**
 
 ```bash
 ./scripts/deploy-preview.sh
@@ -4174,7 +4174,7 @@ docker exec mkt-redis redis-cli KEYS 'mkt:cfg:schema:*'
 ```
 Expected: 两条日志都显示 `form=LITE`；Redis 里出现 `mkt:cfg:schema:marketing-standalone` 与 `mkt:cfg:schema:marketing-gateway` 两个自述键（业务模块的参数自述在 LITE 下挂在 standalone 上，这是预期）。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add docker/docker-compose.preview.yml docker/docker-compose.full-app.yml scripts/start-all.sh scripts/start-dev.sh
@@ -4194,7 +4194,7 @@ git commit -m "feat(config): DEPLOY_FORM 落到五套入口（LITE/FULL 容器�
 - Consumes: `ErrorCode.FORM_NOT_APPLICABLE`（Task 5 加的）
 - Produces: FULL 分进程下 `POST /api/admin/cache/reheat` 返回 `41010`；错误文案点名"③ 的跨进程回执"
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `AdminCacheControllerTest.java`（用 `Proxy` 打桩 `CacheReheatRegistry`，与 `ActivityServiceTest` 同手法；不起 Spring）：
 
@@ -4285,7 +4285,7 @@ class AdminCacheControllerTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin -am test -Dtest=AdminCacheControllerTest`
 Expected: 编译期或断言失败（当前抛的是 41000，且 `Proxy` 出来的 `registryWith(List.of())` 让既有代码走 `isEmpty()` 分支 → 第二条断言 `FORM_NOT_APPLICABLE` 红）
 
-- [ ] **Step 2: 改 controller**
+- [x] **Step 2: 改 controller**
 
 `AdminCacheController.java`：
 
@@ -4302,12 +4302,12 @@ Expected: 编译期或断言失败（当前抛的是 41000，且 `Proxy` 出来�
                             + "请在 owning 服务上执行，或等 ③ 的跨进程重预热回执");
 ```
 
-- [ ] **Step 3: 跑测试确认通过**
+- [x] **Step 3: 跑测试确认通过**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin -am test -Dtest=AdminCacheControllerTest`
 Expected: PASS（2 个用例）
 
-- [ ] **Step 4: 改 smoke 链路 4 的两条 FULL 分支断言**
+- [x] **Step 4: 改 smoke 链路 4 的两条 FULL 分支断言**
 
 `scripts/smoke-test.sh:290-291`：
 
@@ -4316,12 +4316,12 @@ Expected: PASS（2 个用例）
     expect "报错里点名 owning 服务与待办形态" '③' "$R"
 ```
 
-- [ ] **Step 5: 确认 `41000` 在 smoke 里剩下的都是真业务错误**
+- [x] **Step 5: 确认 `41000` 在 smoke 里剩下的都是真业务错误**
 
 Run: `grep -n "41000\|41010" scripts/smoke-test.sh`
 Expected: `41000` 只剩链路 0 的"重复活动编号被拒"（`:97`）一条；`41010` 两处都在链路 4。若还有别处 `41000`，逐个判读它是不是真业务冲突，不许顺手改码。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add marketing-admin scripts/smoke-test.sh
@@ -4339,7 +4339,7 @@ git commit -m "refactor(admin): 本形态不适用的能力改用 41010，41000 
 - Consumes: 链路 4 的 `$AAUTH` / `$VIEWER_TOKEN`、Task 4 的在线限流、Task 5 的 `/api/admin/config`、Task 6 的灰度列、Task 8 的 `DEPLOY_FORM`
 - Produces: 基线断言数从 52 涨到 64（本段结束时 README 记这个数）
 
-- [ ] **Step 1: 把链路 4 末尾的登出挪到全脚本最后**
+- [x] **Step 1: 把链路 4 末尾的登出挪到全脚本最后**
 
 删除 `scripts/smoke-test.sh` 的 `:306-308`（"登出后同一枚 token 立即失效"那三行），并在链路 5 之后（脚本 `echo` 汇总之前）原样贴回：
 
@@ -4351,7 +4351,7 @@ expect "登出后会话立即失效" '"code":40102' "$(curl -s -m 10 -H "$AAUTH"
 
 理由必须写进注释：链路 5 复用同一枚 token，再登录会撞 `LoginGuard` 的每 IP 10 次/分钟（母版事实 #4），而"因为限速所以测不了"是最坏的一种红。
 
-- [ ] **Step 2: 加清理 trap 与两个 helper**
+- [x] **Step 2: 加清理 trap 与两个 helper**
 
 在 `audit_max_id()` 定义之后加：
 
@@ -4387,7 +4387,7 @@ redis_admin() { docker exec mkt-redis redis-cli "$@"; }
 trap 'rm -rf "$TMP"; config_cleanup' EXIT
 ```
 
-- [ ] **Step 3: 写链路 5（12 条断言）**
+- [x] **Step 3: 写链路 5（12 条断言）**
 
 在链路 4 之后、收尾登出之前插入：
 
@@ -4495,7 +4495,7 @@ docker exec mkt-mysql mysql -umarketing -pmarketing123 -e \
   "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=NULL WHERE activity_no='$ACT_NO'" >/dev/null 2>&1
 ```
 
-- [ ] **Step 4: 数一遍断言总数并跑脚本静态检查**
+- [x] **Step 4: 数一遍断言总数并跑脚本静态检查**
 
 ```bash
 bash -n scripts/smoke-test.sh
@@ -4503,7 +4503,7 @@ grep -c "^ *expect \|^ *&& ok \|^ *ok \"" scripts/smoke-test.sh
 ```
 Expected: `bash -n` 无输出；粗数条数应比改动前多 12（`grep -n` 只作参考，真实数以实跑汇总行为准）。
 
-- [ ] **Step 5: 在当前已就绪的 LITE 栈上实跑**
+- [x] **Step 5: 在当前已就绪的 LITE 栈上实跑**
 
 ```bash
 ./scripts/smoke-test.sh 2>&1 | tee /tmp/smoke-5.log | tail -30
@@ -4512,7 +4512,7 @@ Expected: 汇总行 `通过 64 / 失败 0`（基线 52 条含链路 0-4，加链
 
 失败时**保留全量日志**再排查（本仓库的规矩：不吞日志）：`docker logs mkt-preview-standalone`、`docker logs mkt-preview-gateway`、`docker exec mkt-redis redis-cli KEYS 'mkt:cfg:*'`。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add scripts/smoke-test.sh
@@ -4527,7 +4527,7 @@ git commit -m "test(smoke): 链路 5 在线配置下发 12 条断言，登出移
 - Modify: `README.md`（环境变量表、API 表、"四条核心链路"计数、覆盖矩阵、新增一节"在线配置下发"）
 - Modify: `docs/superpowers/specs/2026-09-23-admin-console-business-ops-ui-design.md`（把段内 spec 确认的四条偏离回写成"实施偏离"小节）
 
-- [ ] **Step 1: 环境变量表加两行**
+- [x] **Step 1: 环境变量表加两行**
 
 在 `ADMIN_JWT_SECRET` / `RL_*` 所在的表里加：
 
@@ -4536,7 +4536,7 @@ git commit -m "test(smoke): 链路 5 在线配置下发 12 条断言，登出移
 | `CONFIG_POLL_SECONDS` | `5` | 各进程比对配置版本的节拍；改阈值生效延迟上限 |
 ```
 
-- [ ] **Step 2: 新增一节"在线配置下发（第 5 条链路）"**
+- [x] **Step 2: 新增一节"在线配置下发（第 5 条链路）"**
 
 放在"四条核心链路"小节之后，并把该小节标题改为 **五条核心链路**（README:397 附近的计数与 `docs/superpowers/specs/` 链接列表同步）。内容按这四块写，不许只写"支持在线改配置"：
 
@@ -4545,11 +4545,11 @@ git commit -m "test(smoke): 链路 5 在线配置下发 12 条断言，登出移
 3. **形态隔离**：`DEPLOY_FORM` 决定读哪一份；未设置时只认 `GLOBAL`，**不部署新 env 就等于没有这套机制**。
 4. **失败语义**：越界与未声明在写侧被 `40000` 拒；读侧逐条忽略退回 yml（记 `marketing.config.entry.ignored`）；落库未广播是 `41009` 并有"重新广播"动作。灰度不依赖 Redis。
 
-- [ ] **Step 3: 更新 API 表**
+- [x] **Step 3: 更新 API 表**
 
 `/api/admin/**` 那一段加四行（GET 配置总览 / PUT 写值 / DELETE 恢复出厂 / POST 重广播），并注明"写只有 `admin` 角色；`operator` 读得到但改不动阈值"。
 
-- [ ] **Step 4: 刷新测试计数与覆盖矩阵**
+- [x] **Step 4: 刷新测试计数与覆盖矩阵**
 
 ```bash
 source scripts/common.sh
@@ -4558,7 +4558,7 @@ echo "@Test 数: $(grep -rh "@Test" --include=*Test.java . | wc -l | tr -d ' ')"
 ```
 Expected: 类数从 25 涨到 35（新增 10 个测试类），`@Test` 数从 106 涨到 ≈140（以实数为准写进 README，不许写约数）。覆盖矩阵新增 ⑤ 一行：`在线配置下发 | 链路 5（12 断言）+ 单测 10 类 | LITE/FULL进程/FULL容器/dev/每服务一库 | 已跑通`。
 
-- [ ] **Step 5: 五形态复跑（每档都要 64/64，且 form 判读正确）**
+- [x] **Step 5: 五形态复跑（每档都要 64/64，且 form 判读正确）**
 
 按下面顺序跑，每档记录汇总行与 `ownForm`：
 
@@ -4593,7 +4593,7 @@ docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' | grep mkt-preview
 ```
 Expected: `mkt-preview-standalone` 在 529-599 MiB 区间附近；显著上涨就要说明是哪个件带来的（本段新增了 1 个 daemon 线程 + 一个小 map，预期增幅 < 5 MiB）。
 
-- [ ] **Step 6: 把偏离回写进母版 spec**
+- [x] **Step 6: 把偏离回写进母版 spec**
 
 `docs/superpowers/specs/2026-09-23-admin-console-business-ops-ui-design.md` 末尾（§12 之后）加：
 
@@ -4606,7 +4606,7 @@ Expected: `mkt-preview-standalone` 在 529-599 MiB 区间附近；显著上涨�
 4. §5.5 "各服务把自述写进 `mkt:cfg:schema:{service}`" 的 `{service}` 取 `spring.application.name`（进程名），而 `ConfigDefinitionProvider.service()` 是模块名——LITE 下模块自述挂在 `marketing-standalone` 上，载荷里额外带 `owner` 字段供后台显示归属。
 ```
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add README.md docs/superpowers/specs/2026-09-23-admin-console-business-ops-ui-design.md \
@@ -4645,3 +4645,30 @@ git commit -m "docs(readme): ⑤ 在线配置下发口径（真值来源/形态�
 **3. 类型一致性**：`ConfigSnapshot.Entry(String,ConfigType,long)` 在 Task 1/4/5/7 的构造处一致；`ConfigValues.longOr(String,long)/intOr(String,int)` 在 Task 4（int）与 Task 7（seckill 用 long、discount 的 timeout 用 long、rules 用 int）一致；`publishAll(long)`、`nextSequence()` 与 `AdminConfigService` 内部调用一致；`ConfigDefinition.ofLong` 的出厂值参数在 Task 7 用 `600` 而 `SeckillProperties.tokenTtlSeconds` 默认也是 600（一致）；`ConfigSchemaRegistry.empty()`（Task 2 Step 8 要求补）在 Task 5/7 的测试里使用，务必先补该静态方法。
 
 ---
+
+---
+
+## 执行记录（2026-09-23，Task 1-11 全部落地）
+
+分支 `feat/online-config-delivery`。计划步骤 104 条全部勾完，落地过程中对计划的 15 条修正见开头
+"落地时对计划的修正"（其中 12-15 是这轮复跑发现的可观测性/脚本缺陷）。
+
+**单测**：`mvn install` → **182 用例 / 45 类，失败 0**。⑤ 新增 12 个测试类；变异检查累计 22 处
+（原 20 + 这轮 `primed` 两侧各 1），全部咬人。
+
+**五形态复跑**（同一份最终产物，每档都跑完整 `smoke-test.sh`，72 条断言）：
+
+| # | 形态 | 结果 | ownForm | 备注 |
+|---|---|---|---|---|
+| A | LITE 服役档（容器） | 72/72 | `LITE` | 内存 526.5 MiB / 网关 343.1 MiB，未触 `mem_limit` 阈值 640 |
+| B | FULL · 本机进程 | 72/72 | `FULL` | 紧接 A **不做任何 SQL 清理**原地切换；分形态不串（给 LITE 写 199999 不动本档） |
+| C | FULL · 容器化 1 副本 | 72/72 | `FULL` | 第一轮 70/72：deploy-full 每次 force-recreate broker，冒烟踩在 MQ 重注册窗口，订单由 `local_message` 补偿兜住（托底链路首次被实测证明有效）；等 broker 稳定后复跑全绿 |
+| D | dev 开发档（本机 2 JVM） | 72/72 | `DEV` | — |
+| E | FULL · 每服务一库 | 72/72 | `FULL` | 需 `MYSQL_DB=marketing_activity` 传给冒烟，否则链路 5 的灰度两条改到另一套布局的表上 |
+
+三条硬判据都成立：五档全绿、A=`LITE` / B、C、E=`FULL` / D=`DEV`、A→B 之间零 SQL 清理连续跑通。
+每档收尾都断言 `admin_config` 真值行归零（不留 3/s 或 199999 给下一档）。
+
+**这轮顺带修掉的四件事**（都不在计划里，是全形态实跑才暴露的）：共享快照里"别人的键"不再算降级；
+schema 自述带 180s TTL；没写过在线配置时轮询静默（`primed`）；冒烟脚本 `poll` 针与断言针必须一致且
+拒绝空针（那条链路 1 的"假红"）。另修 `deploy-full.sh` 券路由探针的漂移路径。
