@@ -1629,6 +1629,179 @@ Controller 形状照 Task 3。
 
 ---
 
+### Task 7: 审计跨进程 —— 业务侧投递，admin 侧 drain
+
+**Files:**
+- Create: `marketing-common/.../audit/AuditOutbox.java`（T1 文件表里已列，本任务补实现与测试）
+- Create: `marketing-admin/.../audit/AuditOutboxDrainer.java`
+- Modify: `marketing-admin/.../audit/AuditService.java`（抽出一个 `recordEntity(AdminAuditLogEntity)` 入口给 drainer 复用）
+- Test: `marketing-common/.../audit/AuditOutboxTest.java`、`marketing-admin/.../audit/AuditOutboxDrainerTest.java`
+
+**已核实的现状**：`AuditService implements AuditSink`，`record(...)` 里 `try/catch RuntimeException`
+后只 warn（"落库失败不影响动作结果"）；`toEntity` 逐字段 `cut(...)` 截断到列宽；
+`createTime` 由 DB 默认值给。drain 的记录**必须带业务侧时刻**，否则"改预算的时间"会变成"被搬运的时间"。
+
+- [ ] **Step 1: 写失败测试 —— 投递侧**
+
+`AuditOutboxTest.java`（mock `StringRedisTemplate` + `StreamOperations`）四条：
+
+```java
+    @Test
+    @DisplayName("XADD 必须带 MAXLEN 上限：admin 长时间不消费不能把 Redis 撑大")
+    void addCapsStreamLength();
+
+    @Test
+    @DisplayName("没有 TTL：TTL 淘汰=静默丢审计（这是选 Stream 不选 LPUSH+LTRIM+TTL 的全部理由）")
+    void neverSetsExpire();
+
+    @Test
+    @DisplayName("Redis 抛异常时只 warn + 计数，不把业务写回滚")
+    void redisFailureDoesNotPropagate();
+
+    @Test
+    @DisplayName("字段名固定 payload：admin 侧按同一个名字读，拼错=审计静默消失")
+    void writesSinglePayloadField();
+```
+
+实现要点（`AuditOutbox`）：
+
+```java
+    public void record(AuditPayload payload) {
+        try {
+            redis.opsForStream().add(StreamRecords.newRecord()
+                    .ofMap(Map.of(AuditPayloadCodec.FIELD, AuditPayloadCodec.write(payload)))
+                    .withStreamKey(StreamKeys.auditPending()));
+            redis.opsForStream().trim(StreamKeys.auditPending(), StreamKeys.MAX_LEN);
+        } catch (RuntimeException e) {
+            meters.counter("marketing.audit.outbox.error").increment();
+            log.warn("[audit] 投递失败（该条审计丢失，但业务动作已完成）action={}, resource={}#{}, cause={}",
+                    payload.action(), payload.resourceType(), payload.resourceId(), e.toString());
+        }
+    }
+```
+
+> `opsForStream()` 的 `add/trim` 具体签名以本仓库 Spring Data Redis 版本为准
+> （`XADD` 的 maxlen 也可以直接 `XADD ... MAXLEN ~ n`，若 `add` 不带 maxlen 参数，
+> 就把 `trim` 那行留着并断言它被调用）。**不要**为了少一次调用把 `trim` 省掉。
+
+- [ ] **Step 2: 写失败测试 —— drain 侧**
+
+`AuditOutboxDrainerTest.java` 三条：
+
+```java
+    @Test
+    @DisplayName("读到就落表并 XACK：不 ACK 的条目会永远留在 PEL 里")
+    void acksAfterPersisting();
+
+    @Test
+    @DisplayName("业务时刻写进 create_time：审计时间线必须是动作发生的时间，不是搬运时间")
+    void preservesBusinessTimestamp();
+
+    @Test
+    @DisplayName("坏载荷跳过并计数，不能卡住整批（一条脏数据让审计停摆是最坏的后果）")
+    void skipsUndecodableRecord();
+```
+
+实现要点：`@Scheduled(fixedDelayString = "${marketing.audit.drain-ms:${CONFIG_POLL_SECONDS:5}000}")`
++ `XREADGROUP group=StreamKeys.ADMIN_DRAIN_GROUP`（首次 `createGroup` 幂等，捕获
+`BusyException`），每批 ≤500，逐条 `AuditPayloadCodec.read` → 成功则
+`auditService.recordEntity(toEntity(p))`，失败则 `counter("marketing.audit.drain.skipped")` + warn，
+两种情况都 `XACK`。
+
+> standalone 的 `@EnableScheduling` 已存在（`MarketingStandaloneApplication`），
+> 但 FULL 进程形态的 admin 是独立 JVM —— 落地时确认 `marketing-admin` 的启动类也带
+> `@EnableScheduling`；若没有，就在这里用一个 daemon `ScheduledExecutorService`
+> （与 ⑤ 的 `ConfigSnapshotPoller` 同一手法，理由也相同：漏加开关的表现是"审计永远不落表"）。
+
+- [ ] **Step 3: LITE 与 FULL 同一条路径**
+
+LITE 下 standalone 里既有 outbox 又有 drainer，审计照样绕一圈 Redis。
+**不做"同进程就直落"的捷径**：两条路径意味着 LITE 测不到 drain，而 drain 恰恰是 ③ 里
+唯一会静默丢数据的组件。绕一圈的代价是 ≤5s 延迟与一次 Redis 往返，值得。
+
+- [ ] **Step 4: 冒烟断言 + 收尾**
+
+`smoke-test.sh` 加一条（放在链路 4 的"本轮动作写入审计"旁边，同一把 `audit_max_id` 前后差值口径）：
+后台改一次预算 → 等 `drain-ms` → `GET /api/admin/audits?action=activity.budget.set` 必须有本轮新行，
+且 `create_time` 早于本轮的清理动作时刻。跑完 `XLEN mkt:audit:pending` 必须归 0
+（与 LITE MQ 那条"跑完 XLEN 恒 0"同形）。
+
+```bash
+source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
+./scripts/deploy-preview.sh && ./scripts/smoke-test.sh    # 期望 73/73（本任务加 1 条）
+```
+
+提交：`feat(audit): ③ 业务侧审计经 Redis Stream 投递、admin drain 落表（保留业务时刻）`
+
+---
+
+### Task 8: 重预热回执 —— 把 `41010 本形态不适用` 变成真路径
+
+**Files:**
+- Create: `marketing-common/.../reheat/ReheatRequest.java` + `ReheatAck.java`（载荷与编解码，形状照 Audit 那两个）
+- Create: `marketing-common/.../reheat/ReheatDispatcher.java`（业务侧轮询执行器：`XREADGROUP mkt:reheat:pending` → `CacheReheatRegistry.reheat(type,key,force)` → `XADD mkt:reheat:ack`）
+- Modify: `marketing-admin/.../controller/AdminCacheController.java`（本进程有该 type → 同步返回，现状不变；没有 → 投递 + `status=DISPATCHED`）
+- Test: 三个（dispatcher 的"执行后必写 ack"、"失败也要写 ack（FAILED + error）"、controller 的分岔）
+
+**关键取舍**：`41010` 不删 —— 它继续表示"这个能力在本进程没有"，只是多了一条**可执行**的替代路径。
+`GET /api/admin/cache/reheat/ack?id=` 读回执；`id` 由 admin 生成（`INCR mkt:reheat:seq`），
+回执载荷带 `{id, type, key, status: DONE|FAILED, before, after, error, at}`。
+
+- [ ] **Step 1**: 写失败测试（三条，见 Files）
+- [ ] **Step 2**: 实现 `ReheatDispatcher`（daemon 线程 + `ConfigSyncer` 让位标记与 ⑤ 完全同构：
+  网关没有 reheater，也就永远不需要这条链；**别在网关里装它**）
+- [ ] **Step 3**: 实现 controller 分岔 + ack 端点；审计照 T7 投 `cache.reheat.dispatch`
+- [ ] **Step 4**: 冒烟两条：LITE 仍同步 `after` 有值（现有 `smoke-test.sh:324` 那条不动）；
+  FULL 分进程下 `POST reheat?type=budget` 返回 `DISPATCHED` → 轮询 ack 直到 `DONE` 且
+  `after` 等于新口径 → 再断 C 端余额。**这才第一次真正端到端验证了跨进程重预热**
+  ①② 里那句"跨进程转发留给后面一段"的账。期望 75/75。
+
+提交：`feat(reheat): ③ FULL 分进程的重预热走 pending/ack 两跳，回执可读`
+
+---
+
+### Task 9: 脚本冲击面 —— `reset-demo-data.sh` 改走后台端点
+
+搬家本身已在 T3-T6 各自任务里做完（含删 C 端旧路径）。本任务只剩三件事：
+
+- [ ] **Step 1: `reset-demo-data.sh` 换成"登录 + 改库存"**
+  删掉 `:29-91` 的三条形态分支（探测容器 → restart seckill 容器 → 重启宿主机进程）与
+  `docker exec redis-cli ... DEL/MGET` 那几段；改成：
+  `POST /api/admin/auth/login` 换 token → `PUT /api/admin/seckill/SK2026001/stock` →
+  分桶由 owning 服务在同一事务里重建。**冷栈守卫保留**（现状那一段"栈是冷的就非零退出"
+  是最有价值的部分，别在改写时弄丢）。脚本因此需要 `ADMIN_JWT_SECRET` 可达的登录路径，
+  dev/LITE/FULL 三套都要实测一遍。
+- [ ] **Step 2: 新链路 6（母版 §9）**
+  四条断言：① C 端 token 打 `POST /api/activity`（已搬走）必 `404`；
+  ② admin token 打 C 端交易路径（`/api/coupon/grant`）仍通；
+  ③ 只有裸 `X-Admin-Role: admin` 头、直连业务端口（不经网关）打 `PUT /api/admin/activities/.../budget`
+  必 `40100` —— 这条是 §3.2 的部署级回归锚，**必须绕过网关**打服务端口；
+  ④ `XLEN mkt:audit:pending` 跑完归 0。
+- [ ] **Step 3: `load-probe.sh:18` 的提示语**（"必要时 reset-demo-data.sh"这句仍成立，
+  只需补一句"需要后台账号"）；跑一次 `bash -n` 三条脚本。
+
+提交：`test(smoke): ③ 链路 6 四条边界断言（含直连端口的裸头 40100）；reset-demo-data 改走后台端点`
+
+---
+
+### Task 10: 五形态复跑 + README 收口
+
+与 ⑤ 的 T11 同构：
+
+- [ ] Step 1 `mvn -q install` 全绿（记录用例/类数，README 两处计数刷新）
+- [ ] Step 2 A LITE 容器 → 冒烟（期望 75/75 或 T8/T9 之后的实际条数），`docker stats` 复核内存
+- [ ] Step 3 B FULL 进程 → 冒烟，**中间不做任何 SQL 清理**（原地切换的第二条证据）
+- [ ] Step 4 C FULL 容器 → 冒烟（deploy-full 后等 broker 稳定一分钟再跑，见 README 同源现象⑤）
+- [ ] Step 5 D dev → 冒烟；Step 6 E 每服务一库 → 冒烟（带 `MYSQL_DB=marketing_activity`）
+- [ ] Step 7 README：API 表增删、新增"写入口矩阵"一节（哪个路径 · 哪个进程 · 哪个角色 · 是否审计）、
+  覆盖矩阵五格刷新到本段条数、"测试与验证"计数刷新
+- [ ] Step 8 母版 §13 追加 ③ 的实施偏离（至少三条：身份凭证改验签、审计走 Stream 而非 LPUSH+TTL、
+  LITE 不做"同进程直落"捷径）
+
+提交：`docs: ③ 口径收口（写入口矩阵 + 五形态复跑记录）`
+
+---
+
 ## 编写进度
 
 Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
@@ -1641,6 +1814,6 @@ Task 3（activity）同上颗粒度。
 Task 4-6（discount / coupon / seckill）同上，且只写与 Task 3 的差异 —— 三处形状完全一致的部分
 （身份、乐观锁、审计）用引用而不是复制代码。
 
-**Task 7-10 待写**：T7 审计 Stream 投递与 admin drain、T8 重预热回执（41010 → DISPATCHED/ack）、
-T9 脚本冲击面（`reset-demo-data.sh` 改写 + 新链路 6 + `load-probe.sh`；搬家本身已分散在 T3-T6 内做完）、
-T10 五形态复跑与 README 收口。
+Task 7-10 同上：T7 审计投递与 drain、T8 重预热回执、T9 脚本冲击面、T10 五形态复跑与 README。
+T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
+—— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。
