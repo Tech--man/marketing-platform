@@ -1749,11 +1749,11 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 `GET /api/admin/cache/reheat/ack?id=` 读回执；`id` 由 admin 生成（`INCR mkt:reheat:seq`），
 回执载荷带 `{id, type, key, status: DONE|FAILED, before, after, error, at}`。
 
-- [ ] **Step 1**: 写失败测试（三条，见 Files）
-- [ ] **Step 2**: 实现 `ReheatDispatcher`（daemon 线程 + `ConfigSyncer` 让位标记与 ⑤ 完全同构：
+- [x] **Step 1**: 写失败测试（三条，见 Files）
+- [x] **Step 2**: 实现 `ReheatDispatcher`（daemon 线程 + `ConfigSyncer` 让位标记与 ⑤ 完全同构：
   网关没有 reheater，也就永远不需要这条链；**别在网关里装它**）
-- [ ] **Step 3**: 实现 controller 分岔 + ack 端点；审计照 T7 投 `cache.reheat.dispatch`
-- [ ] **Step 4**: 冒烟两条：LITE 仍同步 `after` 有值（现有 `smoke-test.sh:324` 那条不动）；
+- [x] **Step 3**: 实现 controller 分岔 + ack 端点；审计照 T7 投 `cache.reheat.dispatch`
+- [x] **Step 4**: 冒烟两条：LITE 仍同步 `after` 有值（现有 `smoke-test.sh:324` 那条不动）；
   FULL 分进程下 `POST reheat?type=budget` 返回 `DISPATCHED` → 轮询 ack 直到 `DONE` 且
   `after` 等于新口径 → 再断 C 端余额。**这才第一次真正端到端验证了跨进程重预热**
   ①② 里那句"跨进程转发留给后面一段"的账。期望 75/75。
@@ -1779,6 +1779,9 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
   ③ 只有裸 `X-Admin-Role: admin` 头、直连业务端口（不经网关）打 `PUT /api/admin/activities/.../budget`
   必 `40100` —— 这条是 §3.2 的部署级回归锚，**必须绕过网关**打服务端口；
   ④ `XLEN mkt:audit:pending` 跑完归 0。
+  ⑤（T8 落地时补上的缺口）`GET /api/admin/discount/rules` 带 admin token 必 `"code":0` ——
+  T4 把这条路径改到了后台前缀，但冒烟里一次都没打过它（实测证据来自当时的手工活验），
+  于是 `deploy-full.sh` 的就绪探针替它跑了一次就红了。边界断言不能只靠部署脚本兜。
 - [ ] **Step 3: `load-probe.sh:18` 的提示语**（"必要时 reset-demo-data.sh"这句仍成立，
   只需补一句"需要后台账号"）；跑一次 `bash -n` 三条脚本。
 
@@ -1916,6 +1919,29 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
     规矩：脚本改文档后要 `grep` 一次新内容；改动的断言/数字必须来自命令输出而不是脑子。
 27. 同一次自查还抓到我写进文档的**估数**："263 用例 / 59 类"是脑补的，实测 258 / 58。
 
+28. **T8 的 Files 里"一条共用 `mkt:reheat:pending` 流 + `XADD mkt:reheat:ack`"不能照抄**，落地时改成
+    按 type 分键（`mkt:reheat:{type}:pending` / `:ack:{id}` / `:sent:{id}`）：共用一条流 + 共用一个消费组时，
+    Redis 把消息投给组里**任意**一个消费者 —— "budget" 的请求可能落到 seckill 进程手里，它没有这个
+    reheater，只能失败或空 ACK，真正的 owner 永远看不到它。分键之后"谁能消费"是结构决定的，不靠约定。
+    回执也从"再开一条 Stream"改成 String + 10 分钟 TTL：它是一次性问答，Stream 那侧只能靠 MAXLEN
+    挤掉别人的条目来表达过期，不合适。顺带把"已投递"标记的**值**存成当初的 key，
+    查询端点因此能回显 key、也省一次 `EXISTS` 往返。
+29. **`41010` 的触发条件变了**（计划只说"不删"，没说它该在什么时候还响）：不再是"本进程没有 reheater"，
+    而是"集群里连消费组都没有"（`XINFO GROUPS`，键不存在时抛错 = 等同无人认领）。
+    理由是母版那条纪律的原话：可以显式报错，但不能静默成功 —— 投给一条没人读的流正是静默成功。
+30. T7 的两条教训在 T8 各自复用了一次，且都补了断言：建组必须 `ReadOffset.from("0")`
+    （否则"先投递、后启动 owning 服务"永远不被读，而那恰恰是最常见的情形）、
+    以及"标记先于 XADD"的顺序（反过来有一段 UNKNOWN 窗口，等于把"还在排队"报成"没这回事"）。
+    计划 Step 2/3 没写这两条，实施时补进去了。
+31. **`deploy-full.sh` 的探测顺序在 T8 复跑时红了，而且是脚本的错不是产品的错**：
+    T4 把优惠探针改到 `/api/admin/discount/rules` 后，它需要一枚 admin token，而 token 是在
+    四条路由探测之前一次性登录拿的 —— 那道一次性登录没有等待重试，`marketing-admin` 冷启动慢半拍时
+    它拿到空串，于是"优惠路由 120s 不可服务"其实是"探针没凭证"。修法：后台路由探测提到最前面并自带
+    登录重试（拿到 token 才算就绪），`wait_route_admin` 在半路遇到 40100 时补登、最多三次
+    （再多会撞 LoginGuard 的每分钟十次，把探测变成限速测试）。
+    顺带暴露一个更该记的账：**冒烟里从来没有打过 `/api/admin/discount/rules`**，
+    T4 那条"实测证据"来自当时的手工验证，所以这个红只能被部署探针抓到 —— 已补进 T9 链路 6 的第 ⑤ 条。
+
 ## 编写进度
 
 Task 1-3 已写到"照抄即可跑"的颗粒度（每个代码片段都对着 `2026-09-23` 的最终产物核过签名：
@@ -1946,9 +1972,11 @@ Task 2 已落地（`feat(gateway): ③ 四条后台前缀路由…`）：四条�
 | T5 | `/api/admin/coupon/templates` 列表/新建/改库存/上下线（净新增能力）；`requireVersion` 三处收进 `VersionGuard` | 8 | 100000→100100 使 remain 92841→92949（已还原）；低于已发数 40000；operator 40300 |
 | T6 | `/api/admin/seckill/activities` 列表/新建/库存/上下线；`stock` 不存在改 40400；桶数写死的 16 收进 `SeckillRuntimeConfig.buckets()` | 11 | 新建 OFFLINE 时分桶 0 键，改库存仍 0 键（不开闸），上线后 16 键合计 800；探针已删净 |
 | T7 | `AuditOutboxDrainer`（消费组 + ACK + XDEL + 脏载荷跳过）与 `AuditService.recordPayload`；冒烟基线 72→74 | 6 | 54 条积压全部入表（business 动作 59 行、`XLEN` 归 0）；新两条断言在 LITE 真栈 74/74 |
+| T8 | `ReheatDispatcher`（按 type 订阅、从 0 建组、失败也写回执）+ `AdminCacheController` 三分岔（同步 DONE / DISPATCHED / 无人认领才 41010）+ `GET /cache/reheat/ack`；`StreamKeys` 重预热键改 per-type + TTL；冒烟 FULL 分支 74→75 | 14 | FULL 容器真栈：`DISPATCHED` → 轮询 ack 得 `DONE` 且 `after=5100` → C 端余额 5100 分；`type=nosuchtype` → 41010，而 `mkt:reheat:budget:pending` 的组实测由 activity 建起（2 consumers、pending 0）；`id=999999` → UNKNOWN；LITE 仍同步返回、74/74 |
 
 变异检查逐批做：T1 五、T2 四、T4 两处（去 `@NotNull`、去乐观锁）、T5 一处（`overwrite`→`warmIfAbsent`）、
-T7 三处（建组改 `latest()`、去 XDEL、去 XACK —— 单条逐个跑，全部 CAUGHT）。
-当前实测总数：**258 用例 / 58 类**，全绿；LITE 冒烟 74/74。
+T7 三处（建组改 `latest()`、去 XDEL、去 XACK —— 单条逐个跑，全部 CAUGHT）、
+T8 五处（去掉同步分支、先 XADD 后写标记、不查消费组、执行失败不写回执、建组回到默认最新位置 —— 全部 CAUGHT）。
+当前实测总数：**272 用例 / 59 类**，全绿；LITE 冒烟 74/74、FULL 容器冒烟 75/75（多的那条是回执轮询）。
 T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
 —— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。

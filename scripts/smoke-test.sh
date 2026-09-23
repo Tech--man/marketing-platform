@@ -312,9 +312,11 @@ expect "分页响应带 total" '"total":' "$R"
   && ok "当页条数未超请求的 size" || bad "分页未生效（返回超过 size 条）" "$R"
 
 # 地雷 A 的回归锚：改 DB 不重预热就必须看不见，重预热后才生效。
-# 生效路径分形态（这是本轮明确划出的边界，不是漏测）：
-#   LITE  —— reheater 与后台同进程，能真的刷；
-#   FULL  —— admin 进程里没有 reheater，必须"显式报错"而不是静默返回成功。
+# 生效路径分形态（母版 §6.3）：
+#   LITE  —— reheater 与后台同进程，同步刷完直接带回 after；
+#   FULL  —— admin 进程里没有 reheater，③ T8 起改为投给 owning 服务并取回执。
+#   投递本身不等于成功，所以必须把回执轮询到 DONE、再回 C 端核对余额才算数；
+#   只有"集群里连消费组都没有"才允许回 41010（那才是真的没人能做）。
 # 判据用 /cache/types（本 JVM 注册了哪些 reheater），不猜环境变量。
 REMAIN0=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
 AUDIT_BEFORE=$(audit_max_id)
@@ -329,12 +331,22 @@ if docker exec mkt-mysql mysql -umarketing -pmarketing123 -e \
   R=$(curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/cache/reheat?type=budget&key=$ACT_NO&force=true")
   if [ "$HAS_BUDGET_REHEATER" -ge 1 ]; then
     expect "重预热按公式抬到新口径" "\"after\":$RAISED" "$R"
-    NOW=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
-    [ "$NOW" = "$RAISED" ] && ok "重预热后 C 端余额等于新口径（$RAISED 分）" || bad "重预热未生效" "$NOW"
   else
-    expect "FULL 分进程下重预热显式报错（不静默返回成功）" '"code":41010' "$R"
-    expect "报错里点名 owning 服务与待办形态" '③' "$R"
+    expect "FULL 分进程下重预热被投递给 owning 服务" '"status":"DISPATCHED"' "$R"
   fi
+  if [ "$HAS_BUDGET_REHEATER" -lt 1 ]; then
+    RID=$(echo "$R" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+    ACK=""
+    for _ in $(seq 1 15); do
+      ACK=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/cache/reheat/ack?type=budget&id=$RID")
+      echo "$ACK" | grep -q '"status":"DONE"' && break
+      sleep 2
+    done
+    # 只认 DONE：DISPATCHED 停在半路（owning 服务没起来）在这里就是红的
+    expect "owning 服务执行完并把 after 写回回执" "\"after\":$RAISED" "$ACK"
+  fi
+  NOW=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
+  [ "$NOW" = "$RAISED" ] && ok "重预热后 C 端余额等于新口径（$RAISED 分）" || bad "重预热未生效" "$NOW"
 else
   bad "无法直连 mkt-mysql 抬预算（重预热断言没跑）" "docker exec 失败"
 fi

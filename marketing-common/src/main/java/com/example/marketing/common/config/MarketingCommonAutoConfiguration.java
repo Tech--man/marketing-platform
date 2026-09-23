@@ -70,6 +70,24 @@ public class MarketingCommonAutoConfiguration {
     }
 
     /**
+     * 跨进程重预热的执行侧（③ T8）：admin 把"刷这个键"投进
+     * {@code mkt:reheat:{type}:pending}，拥有该 type 的进程取走执行并写回执。
+     *
+     * <p>注册表为空的进程（admin、网关）{@code start()} 会直接返回，不起线程 ——
+     * 比"起了但每轮都什么都不做"好：后者会让"为什么没人执行"变成一次线程排查。</p>
+     */
+    @Bean(initMethod = "start", destroyMethod = "stop")
+    @ConditionalOnBean(StringRedisTemplate.class)
+    @ConditionalOnMissingBean
+    public com.example.marketing.common.reheat.ReheatDispatcher reheatDispatcher(
+            StringRedisTemplate stringRedisTemplate, CacheReheatRegistry registry, MeterRegistry meterRegistry,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${marketing.reheat.poll-seconds:${CONFIG_POLL_SECONDS:5}}") long pollSeconds) {
+        return new com.example.marketing.common.reheat.ReheatDispatcher(
+                stringRedisTemplate, registry, meterRegistry, pollSeconds);
+    }
+
+    /**
      * 周期任务去重锁：一个调度周期内只让一个实例执行补偿/回补/过期扫描。
      * 正确性仍由业务侧幂等与状态 CAS 兜底，这把锁只负责不重复干活、不重复投消息。
      */
