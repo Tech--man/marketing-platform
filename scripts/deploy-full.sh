@@ -83,24 +83,58 @@ wait_route() { # url desc 期望片段
   return 1
 }
 # ③：业务后台前缀要带 admin token（C 端 demo token 打 /api/admin/** 必 40100）
-ADMIN_BOOT_TOKEN=$(curl -s -m 25 -X POST http://127.0.0.1:8090/api/admin/auth/login \
-  -H "Content-Type: application/json" -d '{"username":"admin","password":"rootdev123"}' \
-  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+# 登录响应原样回显给调用方判读，只回 token 不够："服务还没起来"和"口令错/被限速"
+# 都是空串，而前者该等、后者该停 —— 后者继续重试会烧掉 LoginGuard 每分钟十次的额度，
+# 把紧接着跑的冒烟变成限速测试（它自己要登四次）。
+admin_login() {
+  curl -s -m 25 -X POST http://127.0.0.1:8090/api/admin/auth/login \
+    -H "Content-Type: application/json" -d '{"username":"admin","password":"rootdev123"}'
+}
+token_of() { echo "$1" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'; }
+
+ADMIN_BOOT_TOKEN=""
+relogin_left=3
 wait_route_admin() { # url desc 期望片段
-  local url=$1 desc=$2 want=$3
+  local url=$1 desc=$2 want=$3 body=""
   for _ in $(seq 1 60); do
     body=$(curl -s -m 5 -H "Authorization: Bearer ${ADMIN_BOOT_TOKEN}" "http://127.0.0.1:8090$url")
     if echo "$body" | grep -q "$want"; then
       echo "    $desc 可服务"
       return 0
     fi
+    # 凭证半路失效（token 过期，或补登时 admin 才刚起来）时再登一次，最多三次
+    if echo "$body" | grep -q '"code":40100' && [ "$relogin_left" -gt 0 ]; then
+      relogin_left=$((relogin_left - 1))
+      ADMIN_BOOT_TOKEN=$(token_of "$(admin_login)")
+    fi
     sleep 2
   done
   echo "!! $desc 在 120s 内没有返回预期响应（$url），末次响应: $(echo "$body" | head -c 160)" >&2
+  echo "   若末次仍是 40100：先查 gateway 与 marketing-admin 两侧的 ADMIN_JWT_SECRET 是否同值" >&2
   return 1
 }
 
 rc=0
+# 后台路由先探：它同时验到 lb://marketing-admin → DB → BCrypt 这条完整链，
+# 而下面 discount 的探测要复用它签出的 token —— 顺序反了就会出现
+# "拿空 token 探优惠路由"这种指向错地方的红。它是第一道探测，所以自带等待：
+# admin 冷启动比业务服务慢半拍，服务发现没订阅到时网关回 503（空响应体）。
+LOGIN_RESP=""
+for _ in $(seq 1 30); do
+  LOGIN_RESP=$(admin_login)
+  ADMIN_BOOT_TOKEN=$(token_of "$LOGIN_RESP")
+  [ -n "$ADMIN_BOOT_TOKEN" ] && break
+  # 明确被拒（凭证不对 / 已被限速）就不再等：等到超时也不会变好
+  echo "$LOGIN_RESP" | grep -qE '"code":(40100|40101|42900)' && break
+  sleep 2
+done
+if [ -n "$ADMIN_BOOT_TOKEN" ]; then
+  echo "    后台路由可服务"
+else
+  echo "!! 后台路由没有返回登录成功，末次响应: $(echo "$LOGIN_RESP" | head -c 160)" >&2
+  echo "   查 ADMIN_JWT_SECRET 两侧是否同值 / LoginGuard 是否已被前面几次失败尝试锁住" >&2
+  rc=1
+fi
 wait_route "/api/activity/ACT2026001" "活动路由" '"code":0' || rc=1
 wait_route "/api/coupon/stock/CT2026001" "券路由" '"code":0' || rc=1
 # ③ 之后 discount 没有 C 端 GET 了（规则读写搬进 /api/admin/discount/rules，
@@ -108,14 +142,6 @@ wait_route "/api/coupon/stock/CT2026001" "券路由" '"code":0' || rc=1
 # 它同时验到 lb://marketing-discount → DB → MyBatis 这条链，比原来的 C 路径更有代表性。
 wait_route_admin "/api/admin/discount/rules" "优惠路由" '"code":0' || rc=1
 wait_route "/api/seckill/activities" "秒杀路由" '"code":0' || rc=1
-# 后台路由用登录探：它同时验到 lb://marketing-admin → DB → BCrypt 这条完整链
-if curl -s -m 10 -X POST http://127.0.0.1:8090/api/admin/auth/login -H "Content-Type: application/json" \
-     -d '{"username":"admin","password":"rootdev123"}' | grep -q '"code":0'; then
-  echo "    后台路由可服务"
-else
-  echo "!! 后台路由在预期时间内没有返回登录成功（检查 ADMIN_JWT_SECRET 两侧是否同值）" >&2
-  rc=1
-fi
 [ $rc -ne 0 ] && exit 1
 
 echo "==> FULL 应用栈就绪"
