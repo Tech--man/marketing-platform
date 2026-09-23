@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# 四条核心链路冒烟测试（全部经网关 8090；链路 0-3 用 C 端演示 token，链路 4 用后台账号）
+# 五条核心链路冒烟测试（全部经网关 8090；链路 0-3 用 C 端演示 token，链路 4-5 用后台账号）
 # 前置：./scripts/start-all.sh 已就绪；种子数据已由 docker init.sql 写入
 # 用法：GATEWAY_TOKEN=xxx ./scripts/smoke-test.sh
 # ============================================================
@@ -22,6 +22,39 @@ audit_max_id() {
   curl -s -m 10 -H "$ADM $ADMIN_TOKEN" "$GW/api/admin/audits?page=1&size=1" \
     | sed -n 's/.*"records":\[{"id":\([0-9]*\).*/\1/p'
 }
+
+# 链路 5 会改在线配置与灰度列。跑挂了也不许把 3/s 的阈值留给下一轮形态——
+# 那会让下一次冒烟在链路 3 上莫名其妙地红，而排查方向被指向异步链路。
+# 清理必须在登出**之前**做：EXIT trap 触发时 token 往往已经被吊销，删除会静默 40102，
+# 留下一行没人读的极端阈值（实测这样漏过一次 FULL=199999）。所以正常路径由收尾段显式
+# 调用本函数，trap 只兜"中途退出"这条异常路径，CLEANED 标记保证不重复跑。
+CFG_WRITES=()
+CLEANED=0
+config_cleanup() {
+  [ "$CLEANED" = "1" ] && return 0
+  CLEANED=1
+  for w in "${CFG_WRITES[@]:-}"; do
+    [ -z "$w" ] && continue
+    curl -s -m 10 -X DELETE -H "$ADM $ADMIN_TOKEN" \
+      "$GW/api/admin/config?cfgKey=${w%%|*}&form=${w##*|}" >/dev/null
+  done
+  # 删完再重广播一次：库里没了但快照还留着旧值，就是"恢复出厂不生效"的那个洞
+  curl -s -m 10 -X POST -H "$ADM $ADMIN_TOKEN" "$GW/api/admin/config/rebroadcast" >/dev/null
+}
+# 连发 n 发秒杀查询，返回被限流（429）的次数
+throttle_hits() {
+  local n=$1 hits=0 code
+  for _ in $(seq 1 "$n"); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "$AUTH" "$GW/api/seckill/activities")
+    [ "$code" = "429" ] && hits=$((hits+1))
+  done
+  echo "$hits"
+}
+# 在线配置收敛上限：轮询默认 5s，这里给到 8 秒
+wait_cfg() { sleep 8; }
+redis_admin() { docker exec mkt-redis redis-cli "$@"; }
+mysql_admin() { docker exec -i mkt-mysql mysql --default-character-set=utf8mb4 \
+  -umarketing -pmarketing123 "$@"; }
 
 # 断言响应包含指定片段
 expect() { # desc needle body
@@ -171,7 +204,7 @@ else
   [ "$CONC" -gt 0 ] && ok "库存基线可读（total=$TOTAL sold=$SOLD0 余量=$REMAIN0，本轮并发 $CONC）" \
     || bad "余量为 0，无法做并发防超卖验证；先执行 ./scripts/reset-demo-data.sh" "remain=$REMAIN0"
 fi
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"; config_cleanup' EXIT
 for i in $(seq 1 "$CONC"); do
   ( curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
       -d "{\"activityNo\":\"SK2026001\",\"userId\":$((SK_BASE + 100 + i))}" > "$TMP/$i.resp" ) &
@@ -303,7 +336,117 @@ else
   bad "审计未新增（重预热被拒时也应有拒绝痕迹？当前设计只在成功后落）" "before=$AUDIT_BEFORE after=$AUDIT_AFTER"
 fi
 
-# 登出后同一枚 token 立即失效（会话吊销走 Redis，不等自然过期）
+# 登出不在这里做：链路 5 要复用同一枚 token。登录口有每 IP 10 次/分钟（含成功尝试），
+# 再登一次就会把"因为限速所以测不了"变成最坏的一种红。收尾段统一登出。
+
+head2 "链路 5：在线配置下发（不重启改阈值 → 快照丢失退 yml → 灰度真值在 DB）"
+SECKILL_LIMIT="gateway.ratelimit.seckill-route.limit"
+CFGJSON="Content-Type: application/json"
+
+# 0) 本进程解析到的形态：两档共用同一份 MySQL 时，它是唯一可信的"我在哪一档"
+CFG_JSON=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/config")
+OWN_FORM=$(echo "$CFG_JSON" | sed -n 's/.*"ownForm":"\([^"]*\)".*/\1/p')
+OTHER_FORM="LITE"; [ "$OWN_FORM" = "LITE" ] && OTHER_FORM="FULL"
+[ -n "$OWN_FORM" ] && ok "配置页报出自己的形态 form=$OWN_FORM" \
+  || bad "ownForm 缺失（DEPLOY_FORM 没落到这一档？）" "$CFG_JSON"
+
+# 1) 改限流阈值不重启：GLOBAL 收到 3/s，连发 6 发必须看到 429
+#    body 一律用单引号：escaped-double-quote 的 JSON 嵌在 "$(...)" 里会被外壳把引号吃掉，
+#    实测这样发出去的 body 会变成裸字符串，服务端回 50000 看着像"接口坏了"。
+R=$(curl -s -m 15 -X PUT -H "$AAUTH" -H "$CFGJSON" "$GW/api/admin/config" \
+  -d '{"cfgKey":"gateway.ratelimit.seckill-route.limit","form":"GLOBAL","value":"3","remark":"smoke"}')
+expect "写 GLOBAL 阈值成功且生效值=3" '"effectiveValue":"3"' "$R"
+CFG_WRITES+=("$SECKILL_LIMIT|GLOBAL")
+wait_cfg; sleep 2
+HITS=$(throttle_hits 6)
+[ "$HITS" -ge 1 ] && ok "阈值 3/s 不重启生效（6 发中 $HITS 发 429）" \
+  || bad "阈值未生效（期望至少 1 发 429）" "hits=$HITS"
+
+# 2) 非法输入在写侧就被拒，库里与 Redis 都不许被碰
+#    断言同时看 code 与 message：只看 40000 会让"请求体没解析成功"蒙混过关
+R=$(curl -s -m 10 -X PUT -H "$AAUTH" -H "$CFGJSON" "$GW/api/admin/config" \
+  -d '{"cfgKey":"gateway.ratelimit.seckill-route.limit","form":"GLOBAL","value":"0"}')
+expect "越界值被拒（40000）" '"code":40000' "$R"
+expect "越界值的报错点出允许区间" '允许区间' "$R"
+R=$(curl -s -m 10 -X PUT -H "$AAUTH" -H "$CFGJSON" "$GW/api/admin/config" \
+  -d '{"cfgKey":"nope.key","form":"GLOBAL","value":"1"}')
+expect "未声明的键被拒（40000）" '"code":40000' "$R"
+expect "未声明键的报错说明为什么不能改" '未被任何在线服务声明' "$R"
+# operator 在网关是"可写运维角色"，但阈值不是运维动作：这条钉的是 endpoint 级细筛
+OP_TOKEN=$(curl -s -m 25 -X POST "$GW/api/admin/auth/login" -H "$CFGJSON" \
+  -d '{"username":"operator","password":"demo123"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+R=$(curl -s -m 10 -X PUT -H "Authorization: Bearer $OP_TOKEN" -H "$CFGJSON" "$GW/api/admin/config" \
+  -d '{"cfgKey":"gateway.ratelimit.seckill-route.limit","form":"GLOBAL","value":"9"}')
+expect "operator 改阈值被拒（40300）" '"code":40300' "$R"
+expect "被拒的报错点名需要的角色" '需要角色' "$R"
+
+# 3) 分形态不串：给另一档写一个极端值，本档生效值必须不动
+curl -s -m 15 -X PUT -H "$AAUTH" -H "$CFGJSON" "$GW/api/admin/config" \
+  -d '{"cfgKey":"gateway.ratelimit.seckill-route.limit","form":"'"$OTHER_FORM"'","value":"199999"}' >/dev/null
+CFG_WRITES+=("$SECKILL_LIMIT|$OTHER_FORM")
+wait_cfg
+EFFECTIVE=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/config" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print([x['effectiveValue'] for x in d['entries'] if x['key']=='$SECKILL_LIMIT'][0])" \
+  2>/dev/null || echo "?")
+[ "$EFFECTIVE" = "3" ] && ok "另一档（$OTHER_FORM）写 199999 不污染本档 form=$OWN_FORM" \
+  || bad "跨形态覆盖串了：本档生效值=$EFFECTIVE（期望 3）" "other=$OTHER_FORM"
+
+# 4) 快照丢失 → 退回本进程 yml 出厂值，网关继续服务（既不过限也不拒绝服务）
+redis_admin DEL mkt:cfg:snapshot:GLOBAL mkt:cfg:version:GLOBAL \
+  mkt:cfg:snapshot:LITE mkt:cfg:version:LITE \
+  mkt:cfg:snapshot:FULL mkt:cfg:version:FULL \
+  mkt:cfg:snapshot:DEV mkt:cfg:version:DEV >/dev/null
+wait_cfg; sleep 2
+HITS=$(throttle_hits 6)
+[ "$HITS" = "0" ] && ok "快照被删后退回 yml 出厂值（6 发全通过）" \
+  || bad "快照丢失后仍在限流或已不可服务" "hits=$HITS"
+
+# 5) "重新广播"修好已落库未广播的窗口
+expect "重新广播返回成功码" '"code":0' \
+  "$(curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/config/rebroadcast")"
+wait_cfg; sleep 2
+HITS=$(throttle_hits 6)
+[ "$HITS" -ge 1 ] && ok "重广播后在线值重新生效（$HITS 发 429）" \
+  || bad "重广播没有恢复在线阈值" "hits=$HITS"
+
+# 6) 恢复出厂 = 删行（不是写回原值）
+expect "删除覆盖返回成功" '"code":0' "$(curl -s -m 10 -X DELETE -H "$AAUTH" \
+  "$GW/api/admin/config?cfgKey=$SECKILL_LIMIT&form=GLOBAL")"
+wait_cfg; sleep 2
+HITS=$(throttle_hits 6)
+[ "$HITS" = "0" ] && ok "删行后回到本档出厂阈值" \
+  || bad "删行没有恢复出厂" "hits=$HITS"
+
+# 7) 灰度：真值在 DB 列，改 5% 后 ≤8s 生效；删光 Redis 键也不会变成意外全量
+if mysql_admin -e "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=5 \
+     WHERE activity_no='$ACT_NO'" >/dev/null 2>&1; then
+  wait_cfg
+  expect "灰度 5% 时尾号命中的用户放行" '"data":true' \
+    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70001")"
+  expect "灰度 5% 时尾号不命中的用户被拒" '"data":false' \
+    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70050")"
+  redis_admin DEL mkt:cfg:snapshot:$OWN_FORM mkt:cfg:version:$OWN_FORM \
+    mkt:cfg:snapshot:GLOBAL mkt:cfg:version:GLOBAL >/dev/null
+  wait_cfg
+  expect "删光 Redis 键后灰度仍是 5%（不是全量放行）" '"data":false' \
+    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70050")"
+  mysql_admin -e "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=NULL \
+    WHERE activity_no='$ACT_NO'" >/dev/null 2>&1
+else
+  bad "无法直连 mkt-mysql 改灰度（链路 5 的灰度断言没跑）" "docker exec 失败"
+fi
+# ACT2026001 的种子灰度必须还在：链路 0 那两条断言靠的是 DB 列而不是 yml
+expect "种子活动 ACT2026001 的灰度仍是 100%" '"data":true' \
+  "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit?userId=70001")"
+
+head2 "收尾：清理在线配置、登出与会话吊销（链路 5 之后才做，全脚本只登录这几次）"
+# 清理放在登出之前：登出之后 ADMIN_TOKEN 就作废了，trap 里再删只会静默失败
+config_cleanup
+LEFT=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/config" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print(sum(len(e['rows']) for e in d['entries']))" \
+  2>/dev/null || echo "?")
+[ "$LEFT" = "0" ] && ok "本轮写过的真值行已全部清掉（不留 3/s 或 199999 给下一档）" \
+  || bad "admin_config 里还留着 $LEFT 行本轮写的覆盖" "left=$LEFT"
 curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/auth/logout" >/dev/null
 expect "登出后会话立即失效" '"code":40102' "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/users")"
 
