@@ -1,7 +1,10 @@
 package com.example.marketing.seckill.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.api.Result;
+import com.example.marketing.common.exception.BizException;
+import com.example.marketing.seckill.config.SeckillRuntimeConfig;
 import com.example.marketing.seckill.dto.GrabRequest;
 import com.example.marketing.seckill.dto.GrabTicket;
 import com.example.marketing.seckill.infrastructure.entity.SeckillActivityEntity;
@@ -34,6 +37,7 @@ public class SeckillController {
     private final SeckillOrderService orderService;
     private final SeckillActivityMapper activityMapper;
     private final SeckillStockService stockService;
+    private final SeckillRuntimeConfig runtimeConfig;
 
     /** 抢购：占名额成功即返回排队 token，订单结果异步产生 */
     @PostMapping("/grab")
@@ -63,9 +67,10 @@ public class SeckillController {
                 new LambdaQueryWrapper<SeckillActivityEntity>()
                         .eq(SeckillActivityEntity::getActivityNo, activityNo));
         if (activity == null) {
-            return Result.ok(List.of());
+            // ①② spec §10 的漏网：不存在返回空数组，调用方分不清"没这个活动"与"活动在售但售罄"
+            throw new BizException(ErrorCode.NOT_FOUND, "秒杀活动不存在: " + activityNo);
         }
-        int buckets = activity.getBuckets() == null ? 16 : activity.getBuckets();
+        int buckets = activity.getBuckets() == null ? runtimeConfig.buckets() : activity.getBuckets();
         return Result.ok(stockService.currentBucketStocks(activityNo, buckets));
     }
 

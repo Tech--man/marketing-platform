@@ -1569,7 +1569,7 @@ source scripts/common.sh && mvn -q -pl marketing-coupon -am test && ./scripts/sm
 已经分得很干净 —— 改库存的正确动作就是"按新 total 重新算桶 + 覆写桶键"，**这段逻辑只能留在 owning 服务**。
 桶数 `seckill.buckets` 是**刻意不做成在线参数**的（母版 §10），所以库存编辑要读 properties 的桶数。
 
-- [ ] **Step 1: 写失败测试（四条）**
+- [x] **Step 1: 写失败测试（四条）**
 
 ```java
     @Test
@@ -1617,7 +1617,7 @@ source scripts/common.sh && mvn -q -pl marketing-coupon -am test && ./scripts/sm
 第四条会改 `GET /api/seckill/stock/{no}` 的行为 —— 先确认没有断言依赖空数组：
 `grep -n "seckill/stock" scripts/*.sh` 与 `grep -rn "stock(" marketing-seckill/src/test` 都要看。
 
-- [ ] **Step 2-4: service / controller / 冒烟**
+- [x] **Step 2-4: service / controller / 冒烟**
 
 `updateStock(activityNo, totalStock, expectedVersion)`：校验 → 写库 →
 `warmUp(activity, allocateBuckets(total, properties.getBuckets()))` 同事务。
@@ -1885,6 +1885,17 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
     就是键里真正的值。测试不用改（`verify(stockService).overwrite(...)` 断言的是外部效果）。
 20. 顺带把三处 `requireVersion` 收进 `common/exception/VersionGuard`
     （activity、discount、coupon 各有一份同码同文案的判断，第三份出现时就该收口）。
+
+21. **`SeckillController.stock` 里写死的 `16` 是个真缺陷**，不只是 404 归一那件事：
+    预热走 `SeckillProperties.buckets`（可被 `SECKILL_BUCKETS` 改），余量查询却固定读 16 个键。
+    桶数不是 16 时，对账会看到"少了几桶"。现在两边都取 `SeckillRuntimeConfig.buckets()`（唯一出处）。
+22. 秒杀这组端点最要紧的是三条"不许顺手开闸"，各自都有断言：
+    新建一律 OFFLINE 且不预热；**OFFLINE 改库存只写 DB 不 force 重建**（否则等于绕过上下线
+    把已售进度冲掉）；上线用 `force=false` 只补缺（在途进度不许被动）。
+    `reheat` 的"仅 ONLINE 且未过结束时间"守卫交给 `SeckillWarmUpService` 一份，本模块不复制判定。
+23. 在 shell 里嵌 python heredoc 时，**终止符必须独占一行**、后面不能再跟 shell 命令：
+    我把 `echo "dto done"` 写进了 `PY` 块内，python 报 SyntaxError 而整段文件一个都没落成，
+    看起来却像"写完了"。凡是批量写文件，写完立刻 `grep` 验一次落点。
 
 ## 编写进度
 
