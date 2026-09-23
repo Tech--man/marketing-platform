@@ -315,7 +315,7 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏
 `cannot find symbol: log / setXxx`。
 
-## 四、五条核心链路
+## 四、五条核心链路（第六条"写入口收口"是横切边界，见第五节的写入口矩阵）
 
 ### 1. 领券（削峰 + 最终一致）
 
@@ -339,7 +339,9 @@ POST /api/discount/calculate（购物车 → 命中规则 + 行级分摊）
   → 专用线程池 orTimeout(50ms)，任何异常/超时降级返回原价(degraded=true)
 ```
 - 规则三级缓存：本地快照 → Redis 版本号(`discount:rule:version`) → DB 重建（synchronized + double check）
-- `POST /api/discount/rules` upsert 规则后 bump 版本号，全实例秒级生效
+- `POST /api/admin/discount/rules` upsert 规则后 bump 版本号，全实例秒级生效
+  （③ 之前这条在 C 前缀下，任何拿到共享 demo token 的人都能改规则 DSL —— 已收进后台前缀，
+  GET 也一并收，因为规则列表本身就是可反推定价策略的资产）
 - 基准（1 万规则 / 20 行购物车，开发机）：剪枝后候选 400 条，单次计算均值 **≈0.4ms**
 
 ### 3. 秒杀（50 万 QPS 设计口径）
@@ -372,12 +374,26 @@ POST /api/admin/auth/login（账号口令，dev 种子见下）
 - 口令校验用 BCrypt；账号不存在时也跑一次 dummy hash，否则登录口就是掐表式用户名枚举接口
 - dev 种子账号（README 公示，正式部署第一件事就是改掉）：`admin/rootdev123`（admin）、
   `operator/demo123`（operator）、`viewer/demo123`（read-only）
-- **`POST /api/admin/cache/reheat` 只在 LITE 聚合形态可用**：重预热公式由各业务模块实现并注册成
-  Bean（预算在 activity、券在 coupon、桶在 seckill），FULL 分进程时 admin 进程里一个都没有，
-  端点显式回 `41010 本形态不适用` 并点名 owning 服务，不静默返回"刷新成功"。
-  （`41010` 与业务失败 `41000` 分开：前者该换个地方执行，后者该找业务方。跨进程**回执**属于第③段）
-- 已知边界：绕过网关直连服务端口时，后台靠"身份头缺失则本地验签"回退兜住；而四个 C 端服务
-  本来就不校验 token（鉴权在网关），所以**任何形态下都不该把业务服务端口暴露到不可信网络**
+- **`POST /api/admin/cache/reheat` 有两条执行路径**：重预热公式由各业务模块实现并注册成 Bean
+  （预算在 activity、券在 coupon、桶在 seckill），端点只做分发。
+  · 本进程有该 type（LITE 聚合、dev）→ 同步执行并带回 `before/after`；
+  · 本进程没有（FULL 分进程的 admin）→ 投进 `mkt:reheat:{type}:pending`，返回
+    `DISPATCHED` + 一个 id；owning 服务执行后把 `DONE`/`FAILED` 写进带 10 分钟 TTL 的
+    `mkt:reheat:{type}:ack:{id}`，用 `GET /api/admin/cache/reheat/ack?type=&id=` 查。
+    执行侧抛了也一定有 `FAILED` 回执 —— 没有它后台就只能把"没回音"猜成"还在排队"。
+  只有"该 type 在集群里连消费组都没有"（owning 服务没起来）才回 `41010 本形态不适用`：
+  投给一条没人读的流正是"看起来提交了但永远没动静"那种最贵的静默。
+  （`41010` 与业务失败 `41000` 分开：前者该换个地方执行或把服务起起来，后者该找业务方）
+  键按 type 分而不共用一条流：共用消费组时 Redis 会把 `budget` 的请求投给任意一个消费者，
+  没有该 reheater 的进程只能失败或空 ACK，真正的 owner 永远看不到它。
+- **配置类写自 ③ 起只存在于 `/api/admin/**`**（详见下面的"写入口矩阵"）：`POST /api/activity`、
+  `PUT /api/activity/{no}/budget`、`POST /api/discount/rules`、`POST /api/coupon/templates` 等
+  C 端旧路径已删除且**不留转发别名**，命中就是 `40400`。
+- 已知边界：业务服务端口绑 `*:808x`（FULL 进程形态）、standalone 的 8085 也发布了（LITE），
+  所以后台身份**不认裸 `X-Admin-*` 头** —— 网关验签后注入的是 `X-Admin-Token`，服务侧用同一枚
+  HS256 密钥再验一次签名；绕过网关只带裸头直连必然 `40100`（链路 6 同时钉"带合法 token 时
+  身份放行"，否则 `40100` 也可能只是"端口不通"的另一种写法）。四个 C 端**交易**路径本来就不
+  校验 token（鉴权在网关），所以**任何形态下都不该把业务服务端口暴露到不可信网络**
 
 ### 5. 在线配置下发（改阈值与灰度不重启）
 
@@ -416,33 +432,68 @@ INFO——区分"从没取过"与"取过且为空"，否则六个进程各 12 �
 
 | Method | Path | 说明 |
 |---|---|---|
-| POST | /api/activity | 创建活动（DRAFT） |
-| PUT | /api/activity/{no}/transition?event= | 状态机流转（SUBMIT/APPROVE/REJECT/PROMOTE/OFFLINE/RE_ONLINE/FINISH） |
 | GET | /api/activity/{no}/participatable · /gray-hit?userId= | 可参与校验 · 灰度命中判断 |
 | POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减 / 实时余额。幂等键作用域是 **(活动, bizKey)**，同一 bizKey 用在两个活动上是两次真扣；`data` 返回 `DEDUCTED`（本次扣了钱）或 `REPLAYED`（重复请求回放，没再扣） |
 | POST | /api/coupon/grant · /consume | 领券受理 · 核销 |
 | GET | /api/coupon/grant/result/{requestId} · /usable?userId= · /stock/{templateNo} | 轮询 / 可用券 / 模板余量 |
-| POST | /api/discount/calculate · /rules | 优惠计算 · 规则 upsert（触发快照刷新） |
+| POST | /api/discount/calculate | 优惠计算（购物车 → 命中规则 + 行级分摊）。规则读写自 ③ 起只在后台前缀 |
 | POST | /api/seckill/grab · /pay/{orderNo} | 抢购 · 模拟支付回调 |
 | GET | /api/seckill/grab/result/{token} · /activities · /stock/{activityNo} | 轮询 / 活动列表 / 分桶余量 |
 | POST | /api/admin/auth/login · /logout · /password · GET /me | 后台登录 / 登出 / 改自己口令（成功后全会话作废）/ 当前身份。**用 admin token，不是 C 端 demo token** |
 | GET | /api/admin/users · /sessions · /audits | 账号 / 在线会话 / 审计，统一 `PageResult`（含 total）；`?mine=true` 只看自己的会话 |
 | PUT | /api/admin/users/{id}/status?status= | 启停账号（仅 admin；停用同时作废其全部会话） |
 | DELETE | /api/admin/sessions/{jti} | 强制下线单个会话（仅 admin） |
-| GET/POST | /api/admin/cache/types · /cache/reheat?type=&key=&force= | 可刷新的缓存类型 · 重预热（admin+operator；FULL 分进程下显式回 41010，见第四节链路 4） |
+| GET/POST | /api/admin/cache/types · /cache/reheat?type=&key=&force= · GET /cache/reheat/ack?type=&id= | 可刷新的缓存类型 · 重预热（admin+operator）：本进程有该 type 就同步带回 `DONE`，没有则投给 owning 服务、返回 `DISPATCHED`+id，用 ack 查回执（见第四节链路 4） |
 | GET | /api/admin/config | 在线配置总览：本档形态、当前生效值与来源（FORM/GLOBAL/DEFAULT）、每个形态的行、ORPHAN 与未上报服务、本进程被忽略的键 |
 | PUT/DELETE | /api/admin/config（body `cfgKey`+`form`+`value`+`remark` / `?cfgKey=&form=`） | 写在线覆盖 · 删行=恢复出厂。**只有 `admin` 角色**（operator 在网关可写运维，但改不动阈值），未声明的键与越界值一律 40000 |
 | POST | /api/admin/config/rebroadcast | 按 DB 现状重发快照（幂等）：修 `41009 配置已落库但未广播` 的那个窗口 |
+| GET/POST | /api/admin/activities · POST /api/admin/activities/{no}/transition?event= | 活动列表 / 创建（DRAFT）/ 状态机流转（仅 `admin`）。乐观锁 `version` 不匹配回 `41008` |
+| PUT | /api/admin/activities/{no}/budget · /gray | 改预算（同事务重预热，立刻反映到 C 端余额）· 改灰度（只写 DB，由每 5s 回源生效，不刷缓存） |
+| GET/POST | /api/admin/discount/rules | 规则列表 / upsert（仅 `admin`；启停也走这条，body 里带 `status`）。写与快照 bump 在同一事务，规则版本号变了 C 端计算秒级跟随 |
+| GET/POST/PUT | /api/admin/coupon/templates · PUT /templates/{no}/stock · /status | 券模板列表 / 新建 / 改库存（同事务重预热）/ 上下线。改小低于已发数回 40000 |
+| GET/POST/PUT | /api/admin/seckill/activities · PUT /activities/{no}/stock · /status | 秒杀活动列表 / 新建 / 改总库存（同事务重建分桶）/ 上下线。`status != ONLINE` 时改库存不重建桶（不许顺手开闸） |
+
+
+### 写入口矩阵（③ 的收口：谁在听这个写、要什么角色、留不留痕）
+
+配置类写与交易类写不是一回事：前者改的是"规则"（改一次影响所有用户，且大多需要重算缓存），
+后者是用户行为（幂等键 + 削峰）。③ 之后这条界线是**结构**上的，不靠约定：
+
+| 写动作 | 路径 | 监听进程 | 角色 | 审计 | 同事务里的后续动作 |
+|---|---|---|---|---|---|
+| 建活动 / 流转 | `POST /api/admin/activities[/{no}/transition]` | marketing-activity | admin | ✅ | — |
+| 改预算 | `PUT /api/admin/activities/{no}/budget` | marketing-activity | admin | ✅ | `reheat(force=true)` 重算预扣缓存（地雷 A） |
+| 改灰度 | `PUT /api/admin/activities/{no}/gray` | marketing-activity | admin | ✅ | 只写 DB，由 `GrayRuleCache` 每 5s 回源（不刷缓存） |
+| 规则 upsert | `POST /api/admin/discount/rules` | marketing-discount | admin | ✅ | bump 规则版本号 → 全实例快照刷新 |
+| 券模板新建 / 改库存 | `POST·PUT /api/admin/coupon/templates[/{no}/stock]` | marketing-coupon | admin | ✅ | 改库存后 `reheat(force=true)`；低于已发数 40000 |
+| 券模板上下线 | `PUT /api/admin/coupon/templates/{no}/status` | marketing-coupon | admin | ✅ | 上线只 `warmIfAbsent`（不把已发的券收回来） |
+| 秒杀新建 / 改库存 / 上下线 | `POST·PUT /api/admin/seckill/activities[/{no}/{stock\|status}]` | marketing-seckill | admin | ✅ | ONLINE 时同事务按 `total-sold` 重建 16 桶；非 ONLINE 不开闸 |
+| 领券 / 核销 / 抢购 / 支付 / 预算扣减 | `/api/{coupon,seckill,activity}/**` 交易路径 | 各 owning 进程 | C 端 token（网关侧） | ❌（交易不进后台审计） | 幂等键、库存扣减、异步消息 |
+| 改在线配置阈值 | `PUT·DELETE /api/admin/config` | marketing-admin | admin | ✅ | 写 DB → INCR → 快照 → 版本键（失败 `41009`） |
+| 重预热 | `POST /api/admin/cache/reheat` | marketing-admin（分发方） | admin+operator | ✅（含被拒的） | 本进程执行或投给 owning 服务 |
+| 账号 / 会话 / 口令 | `/api/admin/users·sessions·auth/password` | marketing-admin | admin（改自己口令除外） | ✅ | 抬 `pwd_version` → 全会话作废 |
+
+三点值得单独说的：
+
+- **审计在哪个进程落**：admin 自己的动作直写 `admin_audit_log`；四个业务进程**不连这张表**，
+  它们把 `AuditPayload` 投进 `mkt:audit:pending`（Stream，`MAXLEN 100000`，**不设 TTL**），
+  由 admin 每 5s drain 落表并 `XACK`+`XDEL`。为什么不用 ⑤ 候选的 `LPUSH+LTRIM+TTL`：
+  TTL 淘汰等于**静默丢审计**。建组从 `0` 开始（默认的最新位置会让"先投递后建组"那批永远不被读）。
+- **乐观锁无处不在**：所有改配置的行都带 `version`，撞了回 `41008 已被他人修改`（附带你看到的
+  与当前的两个数），而不是后写覆盖先写 —— 后台是多人的，运营 A 看到的页面可能已经过时十分钟。
+- **C 端旧写路径直接删**，不留 301/转发别名：留着就等于"收口"只是加了一层前缀，
+  而共享的 demo token 依然能改预算。命中 `40400` 是这件事的唯一可测证据，链路 6 钉的就是它。
 
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 182 个单测 / 45 个类：见下
-./scripts/smoke-test.sh  # 端到端 72 条断言（五条链路，三套形态通用，需服务已启动）
-./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000）
+mvn test                 # 272 个单测 / 59 个类：见下
+./scripts/smoke-test.sh  # 端到端 81 条断言（LITE/dev）/ 82 条（FULL 两种形态与每服务一库），
+                         # 六条链路，需服务已启动；差的正是跨进程重预热回执那条
+./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（182 用例 / 45 类）**分六族：
+**单测（272 用例 / 59 类）**分七族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
@@ -464,6 +515,14 @@ mvn test                 # 182 个单测 / 45 个类：见下
   `PromoEngineOnlineLimitTest`（在线把叠加数压到 1，引擎真的只应用一条）。
   变异检查做了 20 处，全部咬人：例如把 `ConfigMerge` 改成"不区分别人的 form"，两条隔离断言立即红；
   把 `resolve` 的"路由不在 map 里=不限流"改成 `limit=0`，那条暗道断言就红。
+- **业务管理面（③）**：四个 owning 进程各自的后台端点（列表/创建/改值/上下线 + 乐观锁），
+  身份只认**验过签名的** `X-Admin-Token`（缺 40100、过期 40101、篡改 40100、角色不匹配 40300），
+  审计载荷的编解码（读侧永不抛）、`AuditOutbox` 投递与 admin 侧 drain（ACK→XDEL、脏载荷跳过、
+  Redis 抛异常不崩线程、建组 offset 必须是 `0`）、跨进程重预热的三分岔（本进程同步 `DONE` /
+  投出去 `DISPATCHED` 且"标记先于 XADD" / 无人认领才 `41010`）与执行侧回执（失败也必须写
+  `FAILED`，否则后台只能把没回音猜成排队中）。T1-T8 逐批做了 20 处变异检查，全部咬人 ——
+  其中三处专门用来防止"看起来实现了其实没实现"：去掉 controller 的同步分支、把投递顺序反过来、
+  把建组 offset 改回默认最新位置。
 - **装配层回归**：聚合形态扫描边界 + common 条件装配矩阵（含重预热注册表），
   用 ApplicationContextRunner + H2 + `127.0.0.1:1` 永不连接的 Lettuce 满足类型条件，
   不依赖中间件。这族把"预览栈起不来"这类装配 bug 从 2-3 分钟的构建+部署排查压到秒级。
@@ -514,15 +573,18 @@ Nacos 客户端有概率在 STARTING 阶段注册失败导致该 JVM 退出（`r
 这不是②/⑤的回归，但它是**托底链路第一次被实测证明有效**：MQ 通道失联时消息不丢，代价是延迟从
 秒级变成补偿周期级。要干净复跑，等 broker 起来一分钟后跑第二次；别把这一轮的红灯当成异步链路坏了。
 
-**冒烟（72 条，五链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+**冒烟（81 条断言 / FULL 分进程 82 条，六条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、超预算 41003、灰度命中、可参与位切换）+ **预算算术守卫**：
 被拒扣减不留痕、重复扣减在 `data` 里标 `REPLAYED`、同 bizKey 换活动仍真扣 `DEDUCTED`；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖；
 **链路 4 管理后台**（登录、账号不存在与口令错同码、无凭证 401、**C 端 token 打后台被拒**、
 只读角色写 403 而读放行、分页带 total 且不超 size、**地雷 A 的回归锚**：改 DB 后缓存不动 →
-`reheat` 后 C 端余额等于新口径；被拒的重预热也显式报错并留审计、登出后同一 token 立即 40102）。
-链路 4 的两条重预热断言按形态分岔判据（读 `/cache/types` 而不是猜环境变量）：
-LITE 验"刷成功"，FULL 分进程验"显式 `41010 本形态不适用` 且文案点名 owning 服务"——两边都是真断言，没有跳过。
+`reheat` 后 C 端余额等于新口径；被拒的重预热也留审计、登出后同一 token 立即 40102、
+业务侧的写动作跑完必须从 `mkt:audit:pending` 全部 drain 落表（`XLEN` 归 0 且本轮那条活动在表里查得到））。
+链路 4 的重预热按形态分岔判据（读 `/cache/types` 而不是猜环境变量）：
+LITE/dev 验"本进程同步刷成功"，FULL 分进程验"投给 owning 服务 → 轮询回执到 `DONE` →
+C 端余额等于新口径"。**多的那一条断言就是这个回执轮询，所以两档的总数不同（81 / 82）**，
+两边都是真断言，没有跳过。
 
 **链路 5 在线配置下发**：本档形态自证（`ownForm=LITE`）、写 GLOBAL 阈值 3/s **不重启**就吃 429、
 越界与未声明的键在写侧就 40000（并同时断言报错文案，否则"body 没解析成功"能冒充"校验通过"）、
@@ -530,6 +592,14 @@ operator 越权改阈值 40300、给另一档写 199999 **不污染**本档、�
 出厂值且网关继续服务、"重新广播"把在线值找回来、删行=恢复出厂、灰度按 DB 列改 5% 后 ≤8s
 生效且**删光 Redis 键也不会变成全量放行**、种子灰度仍在、收尾断言 `admin_config` 归零
 （跑挂了也不给下一档留一行极端阈值）。
+
+**链路 6 写入口收口（③）**：`POST /api/activity` 与 `PUT /api/activity/{no}/budget` 命中 `40400`
+（旧路径真的删了，不是转发）；C 端交易路径**没被误伤**（领券仍受理，用户段每轮随机 —— 券模板
+`per_user_limit=1` 是跨轮持久的状态，写死 userId 会让第二轮起恒吃 41000）；后台 token 打 C 端
+交易路径被拒（两套凭证不互通是**双向**的）；**只带裸 `X-Admin-*` 头绕过网关直连业务端口 → 40100**，
+且同一发请求换成正牌 `X-Admin-Token` 时身份放行（`version` 故意写错停在 41008，不改共享种子）——
+少了配对的那条，`40100` 也可能只是"端口不通"的另一种写法。直连地址按形态自适应：LITE/FULL 进程形态
+打宿主 `:8081`/`:8085`，FULL 容器形态不发布应用端口，就 `docker exec` 进容器打它自己的 8081。
 
 **脚本两条不变式**（都是踩过才写下的）：① `poll` 的针必须与紧随其后的断言针一致——轮询超时照样把
 最后一次响应打出来，只查 `"couponCode"` 这个键名会让 `PROCESSING`（`"couponCode":null`）蒙过断言，
@@ -539,18 +609,19 @@ operator 越权改阈值 40300、给另一档写 199999 **不污染**本档、�
 并发段的库存基线**从接口读、不写死**，并断言恒等式 `分桶余量 + DB 已售 == 总库存`
 （对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测连跑 3 轮全绿。
 
-**三套形态的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
-断言集在长（S2 加了 5 条预算/消息守卫，后台那批加了链路 4 的 13 条，⑤ 又加了链路 5 的 20 条），
+**五套形态入口的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
+断言集在长（S2 加了 5 条预算/消息守卫，后台那批加了链路 4 的 13 条，⑤ 又加了链路 5 的 20 条，
+③ 加了 drain 落表 2 条 + 链路 6 的 7 条，FULL 分进程再多 1 条跨进程重预热回执），
 所以标了跑时的断言数——**低于当前基数的格子只代表"当时那一版全绿"，不等于已在新断言下复跑过**。
 
 | 形态 | 最近一次 | 通道证据 |
 |---|---|---|
-| LITE 服役档（容器） | **72/72**（2026-09-23，含链路 5 在线配置） | Redis Stream 键 + XDEL 生效（跑完 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零 |
-| dev 开发档（本机 2 JVM） | **72/72**（2026-09-23） | 同上；`ownForm=DEV` |
-| FULL · 本机进程形态 | **72/72**（2026-09-23，含链路 5；紧接 LITE 那轮之后**不做任何 SQL 清理**原地切换） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零 |
-| FULL · 本机进程 · 每服务一库隔离档 | **72/72**（2026-09-23） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`（本轮 12 条审计），与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`，见上文引注。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）|
-| FULL · 容器化 1 副本 | **72/72**（2026-09-23） | 同上 + 后台走 `lb://marketing-admin` 服务发现 |
-| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 52 复跑） | 第三节的多副本三条证据 |
+| LITE 服役档（容器） | **81/81**（2026-09-24，含链路 5 在线配置与链路 6 收口） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 532.5MiB/768MiB |
+| dev 开发档（本机 2 JVM） | **81/81**（2026-09-24） | 同上；`ownForm=DEV`；`reset-demo-data.sh` 在这一档实测（复位后恒等式 `分桶余量+已售==总库存` 自洽） |
+| FULL · 本机进程形态 | **82/82**（2026-09-24，含链路 6；紧接 LITE 那轮之后**不做任何 SQL 清理**原地切换） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支；裸头直连 `:8081` 被拒而带 token 放行（这一档端口真的绑 `*`，是最需要这条的形态） |
+| FULL · 本机进程 · 每服务一库隔离档 | **82/82**（2026-09-24） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`（这一档实测：`marketing_seckill` 里 `sold=0` → 复位后分桶合计 5000 自洽）。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）|
+| FULL · 容器化 1 副本 | **82/82**（2026-09-24） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 `mkt-full-marketing-activity-1` 写回（消费组 `owning-exec` 实测 2 consumers、pending 0）；链路 6 的直连探测走 `docker exec` 进容器这条路 |
+| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 81 复跑） | 第三节的多副本三条证据 |
 
 ## 七、扩展点（占位 → 生产的升级路径）
 

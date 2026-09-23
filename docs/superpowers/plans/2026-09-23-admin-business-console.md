@@ -1793,15 +1793,20 @@ source scripts/common.sh && mvn -q -pl marketing-common,marketing-admin -am test
 
 与 ⑤ 的 T11 同构：
 
-- [ ] Step 1 `mvn -q install` 全绿（记录用例/类数，README 两处计数刷新）
-- [ ] Step 2 A LITE 容器 → 冒烟（期望 75/75 或 T8/T9 之后的实际条数），`docker stats` 复核内存
-- [ ] Step 3 B FULL 进程 → 冒烟，**中间不做任何 SQL 清理**（原地切换的第二条证据）
-- [ ] Step 4 C FULL 容器 → 冒烟（deploy-full 后等 broker 稳定一分钟再跑，见 README 同源现象⑤）
-- [ ] Step 5 D dev → 冒烟；Step 6 E 每服务一库 → 冒烟（带 `MYSQL_DB=marketing_activity`）
-- [ ] Step 7 README：API 表增删、新增"写入口矩阵"一节（哪个路径 · 哪个进程 · 哪个角色 · 是否审计）、
-  覆盖矩阵五格刷新到本段条数、"测试与验证"计数刷新
-- [ ] Step 8 母版 §13 追加 ③ 的实施偏离（至少三条：身份凭证改验签、审计走 Stream 而非 LPUSH+TTL、
-  LITE 不做"同进程直落"捷径）
+- [x] Step 1 `mvn -o test` 全绿（实测 **272 用例 / 59 类**；README 两处计数已刷）
+- [x] Step 2 A LITE 容器 → 冒烟 **81/81**（2026-09-24 实测；`ownForm=LITE`、重预热走同步分支、
+  跑完 `admin_config` 0 行、`mkt:audit:pending` XLEN 0、standalone 常驻 532.5MiB/768MiB）
+- [x] Step 3 B FULL 进程 → 冒烟 **82/82**，**A 之后没做任何 SQL 清理**（原地切换第二条证据）
+- [x] Step 4 C FULL 容器 → 冒烟 **82/82**（deploy-full 后等 broker 稳定一分钟再跑，见 README 同源现象⑤）
+- [x] Step 5 D dev → 冒烟 **81/81**（`ownForm=DEV`，`reset-demo-data.sh` 同档实测）；
+  Step 6 E 每服务一库 → 冒烟 **82/82**（带 `MYSQL_DB=marketing_activity`，
+  复位实测 `marketing_seckill` 里 `sold=0` → 分桶合计 5000 自洽）
+- [x] Step 7 README：API 表增删（C 端四条写删除、后台业务面五条新增、重预热补 ack）、
+  新增"写入口矩阵"一节（哪个路径 · 哪个进程 · 哪个角色 · 是否审计 · 同事务后续动作）、
+  覆盖矩阵五格刷新到本段条数、"测试与验证"计数与六族→七族、链路 6 一段
+- [x] Step 8 母版 §13 追加 ③ 的实施偏离（七条：验签式身份、审计走 Stream 而非 LPUSH+TTL、
+  LITE 不做"同进程直落"捷径、回执键按 type 分、写入口硬切不留别名、乐观锁 41008、复位脚本改走端点）；
+  并回改了 §11 风险 #4 与 §12 的"已出"行里已被 ③ 超越的表述
 
 提交：`docs: ③ 口径收口（写入口矩阵 + 五形态复跑记录）`
 
@@ -1986,11 +1991,12 @@ Task 2 已落地（`feat(gateway): ③ 四条后台前缀路由…`）：四条�
 | T7 | `AuditOutboxDrainer`（消费组 + ACK + XDEL + 脏载荷跳过）与 `AuditService.recordPayload`；冒烟基线 72→74 | 6 | 54 条积压全部入表（business 动作 59 行、`XLEN` 归 0）；新两条断言在 LITE 真栈 74/74 |
 | T8 | `ReheatDispatcher`（按 type 订阅、从 0 建组、失败也写回执）+ `AdminCacheController` 三分岔（同步 DONE / DISPATCHED / 无人认领才 41010）+ `GET /cache/reheat/ack`；`StreamKeys` 重预热键改 per-type + TTL；冒烟 FULL 分支 74→75 | 14 | FULL 容器真栈：`DISPATCHED` → 轮询 ack 得 `DONE` 且 `after=5100` → C 端余额 5100 分；`type=nosuchtype` → 41010，而 `mkt:reheat:budget:pending` 的组实测由 activity 建起（2 consumers、pending 0）；`id=999999` → UNKNOWN；LITE 仍同步返回、74/74 |
 | T9 | `reset-demo-data.sh` 重写成"登录 → `PUT /api/admin/seckill/activities/SK2026001/stock` → 按恒等式复查"（三条形态分支与 `docker exec redis-cli` 全删，冷栈守卫换成"网关不可达 / 登录失败 / 恒等式不成立"三处非零退出）；冒烟新增链路 6 七条；`load-probe.sh` 提示语补"需要后台账号" | 0（Java 不变） | FULL 容器实测：`total=6000 sold=924 version=1 → 5000`，复位后分桶合计 4076、`4076+924==5000`；再跑一次幂等（sold 涨到 1107 后合计 3893 仍自洽）；链路 6 七条全绿，FULL 冒烟 82/82 |
+| T10 | 五形态复跑 + README 收口（写入口矩阵一节、API 表增删、六族→七族、覆盖矩阵五格、计数）+ 母版 §13 追加 ③ 七条偏离并回改 §11 风险 #4/§12 | 0 | A LITE **81/81**（532.5MiB/768MiB）→ B FULL 进程 **82/82**（中间不清 SQL，原地切换）→ C FULL 容器 **82/82** → D dev **81/81** → E 每服务一库 **82/82**；每格都验 `ownForm`、`admin_config` 归零、`mkt:audit:pending` XLEN 0 |
 
 变异检查逐批做：T1 五、T2 四、T4 两处（去 `@NotNull`、去乐观锁）、T5 一处（`overwrite`→`warmIfAbsent`）、
 T7 三处（建组改 `latest()`、去 XDEL、去 XACK —— 单条逐个跑，全部 CAUGHT）、
 T8 五处（去掉同步分支、先 XADD 后写标记、不查消费组、执行失败不写回执、建组回到默认最新位置 —— 全部 CAUGHT）。
-当前实测总数：**272 用例 / 59 类**，全绿；冒烟基线（T9 之后）LITE 81、FULL 82
-（多的那条是跨进程回执轮询），五形态复跑留给 T10。
+当前实测总数：**272 用例 / 59 类**，全绿；冒烟基线 LITE/dev 81、FULL 三种入口 82
+（多的那条是跨进程重预热回执轮询）。**五形态已于 2026-09-24 全部按新基数复跑通过**（见上表 T10）。
 T7/T8/T10 的部分测试条目仍用一行式描述（`void xxx();` 那种），**实施时必须写成可编译的完整用例**
 —— 那是"该断言什么"的清单，不是代码。T1-T6 的测试都已给全码，照它们的夹具写法补即可。
