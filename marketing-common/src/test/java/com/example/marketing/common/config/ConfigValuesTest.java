@@ -67,12 +67,25 @@ class ConfigValuesTest {
     }
 
     @Test
-    @DisplayName("未声明的键忽略，取值走不到它")
-    void undeclaredKeyIgnored() {
+    @DisplayName("别的进程声明的键：取值走不到它，也不算本进程降级（共享快照里这是常态）")
+    void foreignKeyIsIgnoredSilently() {
         ConfigValues v = values();
+        // discount.nope 由 discount 进程声明，券/网关进程读快照时都不认识它
         v.apply(one("discount.nope", "5"));
-        assertEquals(List.of("discount.nope"), v.degradedKeys());
         assertEquals(9, v.intOr("discount.nope", 9));
+        assertTrue(v.degradedKeys().isEmpty(),
+                "把别人的键算成降级会让每个健康进程每 5 秒刷一条 WARN，真降级就埋了（FULL 实测）");
+    }
+
+    @Test
+    @DisplayName("类型不符的键仍然算降级（不能把'我该采纳却采纳不了'也吞掉）")
+    void declaredButWrongTypeIsDegraded() {
+        ConfigValues v = values();
+        // TTL 声明是 LONG，快照里给了个非数字
+        v.apply(new ConfigSnapshot(1L, "now",
+                Map.of(TTL.key(), new ConfigSnapshot.Entry("abc", ConfigType.LONG, 0L))));
+        assertEquals(List.of(TTL.key()), v.degradedKeys());
+        assertEquals(600L, v.longOr(TTL.key(), 600L));
     }
 
     @Test

@@ -42,11 +42,19 @@ public class ConfigValues {
 
     public void apply(ConfigSnapshot next) {
         Map<String, String> accepted = new LinkedHashMap<>();
-        List<String> ignored = new ArrayList<>();
+        List<String> invalid = new ArrayList<>();
+        List<String> foreign = new ArrayList<>();
         for (Map.Entry<String, ConfigSnapshot.Entry> entry : next.entries().entrySet()) {
             Optional<ConfigDefinition> def = registry.find(entry.getKey());
-            if (def.isEmpty() || !def.get().accepts(entry.getValue().value())) {
-                ignored.add(entry.getKey());
+            if (def.isEmpty()) {
+                // 这份快照是全形态共享的，里面有别的进程声明的键是**正常状态**：
+                // 网关的阈值键到了券服务这里，券服务不认识它。把它算成"降级"会让每个
+                // 健康进程每 5 秒刷一条 WARN，真正的降级信号就被噪音埋了（FULL 分进程实测）。
+                foreign.add(entry.getKey());
+                continue;
+            }
+            if (!def.get().accepts(entry.getValue().value())) {
+                invalid.add(entry.getKey());
                 Counter.builder("marketing.config.entry.ignored")
                         .tag("key", entry.getKey())
                         .register(meters)
@@ -56,7 +64,8 @@ public class ConfigValues {
             accepted.put(entry.getKey(), entry.getValue().value().trim());
         }
         effective.set(Map.copyOf(accepted));
-        degraded.set(List.copyOf(ignored));
+        degraded.set(List.copyOf(invalid));
+        meters.gauge("marketing.config.entries.foreign", foreign.size(), v -> (double) v);
         snapshot.set(next);
     }
 
@@ -88,7 +97,11 @@ public class ConfigValues {
         return snapshot.get().version();
     }
 
-    /** 最近一次 apply 里被忽略的键：④ 的 degraded 展示与冒烟断言都读它 */
+    /**
+     * 最近一次 apply 里**本该由本进程采纳却没采纳**的键（类型不符或越界）。
+     *
+     * <p>不含"本进程没声明的键"——那在共享快照里是常态，混进来会让每个健康进程都持续报降级。</p>
+     */
     public List<String> degradedKeys() {
         return degraded.get();
     }

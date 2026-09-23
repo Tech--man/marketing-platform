@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,7 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -49,11 +52,12 @@ class ConfigSnapshotPollerTest {
             }
             return store.get(inv.<String>getArgument(0));
         });
-        // ValueOperations.set(K,V) 返回 void，只能用 doAnswer 桩，不能用 when()
+        // ValueOperations.set(K,V,Duration) 返回 Boolean 但 set(K,V) 是 void：统一桩三参版本，
+        // 自述键带 TTL（进程下线后清单要自己消失，不留幽灵参数）
         org.mockito.Mockito.doAnswer(inv -> {
             store.put(inv.getArgument(0), inv.getArgument(1));
-            return null;
-        }).when(ops).set(anyString(), anyString());
+            return Boolean.TRUE;
+        }).when(ops).set(anyString(), anyString(), any(Duration.class));
         ConfigSchemaRegistry registry = new ConfigSchemaRegistry(List.of(new ConfigDefinitionProvider() {
             @Override
             public String service() {
@@ -126,5 +130,6 @@ class ConfigSnapshotPollerTest {
         assertTrue(json.contains(KEY), "自述里要能看到自己声明的键: " + json);
         assertTrue(json.contains("200000"), "自述里要带上边界，否则 admin 无法校验: " + json);
         assertTrue(json.contains("\"owner\":\"marketing-gateway\""), "自述要带模块名: " + json);
+        verify(ops).set(eq(ConfigKeys.schema("marketing-gateway")), anyString(), eq(Duration.ofSeconds(180)));
     }
 }

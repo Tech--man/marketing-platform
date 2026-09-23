@@ -42,6 +42,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public class GatewayConfigSyncer implements ConfigSyncer {
 
     private static final long SCHEMA_REPUBLISH_SECONDS = 60L;
+    /** 自述键必须带 TTL：进程下线后它那份"可改参数清单"要自己消失，而不是永久挂在后台上 */
+    private static final Duration SCHEMA_TTL = Duration.ofSeconds(180);
 
     private final ReactiveRedisTemplate<String, String> redis;
     private final ConfigValues values;
@@ -124,7 +126,7 @@ public class GatewayConfigSyncer implements ConfigSyncer {
             defs.add(one);
         }
         return redis.opsForValue().set(ConfigKeys.schema(service), ConfigSchemaCodec.write(
-                        new ConfigSchemaPayload(Instant.now().getEpochSecond(), service, defs)))
+                        new ConfigSchemaPayload(Instant.now().getEpochSecond(), service, defs)), SCHEMA_TTL)
                 .doOnError(e -> log.warn("[config] 网关 schema 自述写入失败: {}", e.toString()))
                 .onErrorComplete()
                 .then();

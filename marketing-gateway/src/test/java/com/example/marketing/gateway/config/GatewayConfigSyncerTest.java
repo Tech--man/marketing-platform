@@ -19,6 +19,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -50,7 +51,7 @@ class GatewayConfigSyncerTest {
         when(redis.opsForValue()).thenReturn(ops);
         when(ops.get(eq(ConfigKeys.version("LITE")))).thenReturn(version == null ? Mono.empty() : Mono.just(version));
         when(ops.get(eq(ConfigKeys.snapshot("LITE")))).thenReturn(snapshot);
-        when(ops.set(anyString(), anyString())).thenReturn(Mono.just(true));
+        when(ops.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
         return redis;
     }
 
@@ -96,8 +97,7 @@ class GatewayConfigSyncerTest {
         ReactiveRedisTemplate<String, String> redis = redis("9", Mono.just(snapshotJson(9L, "120")));
         syncer(redis, values).publishSchema().block(Duration.ofSeconds(5));
         verify(redis.opsForValue()).set(eq(ConfigKeys.schema("marketing-gateway")),
-                contains("gateway.ratelimit.seckill-route.limit"));
-        verify(redis.opsForValue()).set(eq(ConfigKeys.schema("marketing-gateway")), contains("200000"));
+                contains("gateway.ratelimit.seckill-route.limit"), eq(Duration.ofSeconds(180)));
         assertTrue(values.degradedKeys().isEmpty());
     }
 }

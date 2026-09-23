@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,6 +30,12 @@ public class ConfigSnapshotPoller {
 
     /** schema 不长变，但 Redis 被清空后必须自愈：每隔这么久重投一次自述 */
     private static final long SCHEMA_REPUBLISH_SECONDS = 60L;
+    /**
+     * 自述键的存活时间。必须有 TTL：没有它，一个被下线/改名的服务会把自己的参数
+     * 永久留在后台的清单上（读方按"未声明即忽略"不受影响，但后台会摆着一排改不动也无效的输入框）。
+     * 3 倍重投间隔 = 错过两次才会消失，与"该服务未上报"的显式语义配套。
+     */
+    private static final Duration SCHEMA_TTL = Duration.ofSeconds(180);
 
     private final StringRedisTemplate redis;
     private final ConfigValues values;
@@ -125,7 +132,7 @@ public class ConfigSnapshotPoller {
                 defs.add(one);
             }
             redis.opsForValue().set(ConfigKeys.schema(service), ConfigSchemaCodec.write(
-                    new ConfigSchemaPayload(Instant.now().getEpochSecond(), service, defs)));
+                    new ConfigSchemaPayload(Instant.now().getEpochSecond(), service, defs)), SCHEMA_TTL);
         } catch (Exception e) {
             log.warn("[config] schema 自述写入失败（不影响本进程取值）: {}", e.toString());
         }
