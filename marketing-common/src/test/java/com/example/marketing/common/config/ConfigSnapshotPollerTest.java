@@ -122,6 +122,17 @@ class ConfigSnapshotPollerTest {
     }
 
     @Test
+    @DisplayName("从没人用过在线配置（两个键都不在）时，稳态不逐轮重取空快照")
+    void steadyStateWithoutKeysStopsRefetching() {
+        poller.refreshOnce();
+        poller.refreshOnce();
+        poller.refreshOnce();
+        // 第一次必须取（冷启动要拿到出厂之外的任何覆盖），之后版本=0 且已应用过 0 就该静默
+        verify(ops, times(1)).get(ConfigKeys.snapshot("LITE"));
+        assertEquals(0L, values.appliedVersion());
+    }
+
+    @Test
     @DisplayName("schema 自述写进本进程自己的键，内容含键、边界与 owner 模块名")
     void publishesOwnSchema() {
         poller.publishSchema();

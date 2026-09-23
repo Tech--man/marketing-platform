@@ -6,6 +6,7 @@ import com.example.marketing.common.config.ConfigKeys;
 import com.example.marketing.common.config.ConfigSchemaCodec;
 import com.example.marketing.common.config.ConfigSchemaPayload;
 import com.example.marketing.common.config.ConfigSchemaRegistry;
+import com.example.marketing.common.config.ConfigSnapshot;
 import com.example.marketing.common.config.ConfigSnapshotCodec;
 import com.example.marketing.common.config.ConfigSyncer;
 import com.example.marketing.common.config.ConfigValues;
@@ -53,6 +54,8 @@ public class GatewayConfigSyncer implements ConfigSyncer {
     private final long pollSeconds;
     private final MeterRegistry meters;
     private final AtomicLong tick = new AtomicLong();
+    /** 见 ConfigSnapshotPoller.primed：区分"还没取过"与"已经应用过空快照"，否则稳态每 5s 刷一条 INFO */
+    private volatile boolean primed;
 
     public GatewayConfigSyncer(ReactiveRedisTemplate<String, String> redis, ConfigValues values,
                                ConfigSchemaRegistry registry,
@@ -92,7 +95,7 @@ public class GatewayConfigSyncer implements ConfigSyncer {
                 .defaultIfEmpty("")
                 .map(raw -> raw.trim().isEmpty() ? 0L : Long.parseLong(raw.trim()))
                 .flatMap(current -> {
-                    if (current == expected && current != 0L) {
+                    if (primed && current == expected) {
                         return Mono.<String>empty();
                     }
                     return redis.opsForValue().get(ConfigKeys.snapshot(ownForm)).defaultIfEmpty("");
@@ -133,14 +136,15 @@ public class GatewayConfigSyncer implements ConfigSyncer {
     }
 
     private void apply(String json) {
-        values.apply(ConfigSnapshotCodec.read(json));
+        ConfigSnapshot snapshot = ConfigSnapshotCodec.read(json);
+        values.apply(snapshot);
+        primed = true;
         List<String> degraded = values.degradedKeys();
         if (!degraded.isEmpty()) {
             log.warn("[config] 网关 form={} 有 {} 个条目未采纳，退回 yml 出厂值: {}",
                     ownForm, degraded.size(), degraded);
         }
         log.info("[config] 网关 form={} version={} entries={} degraded={}",
-                ownForm, values.appliedVersion(), ConfigSnapshotCodec.read(json).entries().size(),
-                degraded.size());
+                ownForm, values.appliedVersion(), snapshot.entries().size(), degraded.size());
     }
 }

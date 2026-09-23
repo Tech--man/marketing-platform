@@ -45,6 +45,12 @@ public class ConfigSnapshotPoller {
     private final long pollSeconds;
     private final MeterRegistry meters;
     private final AtomicLong tick = new AtomicLong();
+    /**
+     * 是否已应用过至少一次快照。缺了它，"版本键不存在"（没人用过在线配置，或真值行被删干净）
+     * 与"版本=0"就没法区分，于是每个进程每 5 秒重取一次空快照、再刷一条 INFO —— 而这恰恰是
+     * 这套机制最常见的稳态（FULL 分进程实测：六个进程各 12 条/分钟）。
+     */
+    private volatile boolean primed;
     private volatile ScheduledExecutorService scheduler;
 
     public ConfigSnapshotPoller(StringRedisTemplate redis, ConfigValues values,
@@ -88,13 +94,14 @@ public class ConfigSnapshotPoller {
         try {
             String raw = redis.opsForValue().get(ConfigKeys.version(ownForm));
             long current = raw == null ? 0L : Long.parseLong(raw.trim());
-            if (current == values.appliedVersion() && current != 0L) {
+            if (primed && current == values.appliedVersion()) {
                 maybeRepublishSchema();
                 return;
             }
             ConfigSnapshot snapshot = ConfigSnapshotCodec.read(
                     redis.opsForValue().get(ConfigKeys.snapshot(ownForm)));
             values.apply(snapshot);
+            primed = true;
             List<String> degraded = values.degradedKeys();
             if (!degraded.isEmpty()) {
                 log.warn("[config] form={} 快照中 {} 个条目未被采纳（未声明或越界），已退回出厂值: {}",

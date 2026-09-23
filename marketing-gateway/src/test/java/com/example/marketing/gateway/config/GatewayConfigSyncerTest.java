@@ -100,4 +100,24 @@ class GatewayConfigSyncerTest {
                 contains("gateway.ratelimit.seckill-route.limit"), eq(Duration.ofSeconds(180)));
         assertTrue(values.degradedKeys().isEmpty());
     }
+
+    @Test
+    @DisplayName("没有版本键也不是冷启动 → 不逐轮重取空快照（稳态零日志）")
+    @SuppressWarnings("unchecked")
+    void steadyStateWithoutKeysStopsRefetching() {
+        ConfigValues values = new ConfigValues(registry(), new SimpleMeterRegistry());
+        ReactiveRedisTemplate<String, String> redis = mock(ReactiveRedisTemplate.class);
+        ReactiveValueOperations<String, String> ops = mock(ReactiveValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        when(ops.get(eq(ConfigKeys.version("LITE")))).thenReturn(Mono.empty());
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        when(ops.get(eq(ConfigKeys.snapshot("LITE")))).thenAnswer(inv ->
+                Mono.<String>empty().doOnSubscribe(s -> reads.incrementAndGet()));
+        GatewayConfigSyncer syncer = new GatewayConfigSyncer(redis, values, registry(), "LITE",
+                "marketing-gateway", 5, new SimpleMeterRegistry());
+        syncer.syncOnce().block(Duration.ofSeconds(5));
+        syncer.syncOnce().block(Duration.ofSeconds(5));
+        syncer.syncOnce().block(Duration.ofSeconds(5));
+        assertEquals(1, reads.get(), "后台一次都没写过时，网关不该每 5 秒重取并刷一条 INFO");
+    }
 }
