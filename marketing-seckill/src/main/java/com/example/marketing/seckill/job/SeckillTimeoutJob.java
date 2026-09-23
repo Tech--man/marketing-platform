@@ -3,6 +3,7 @@ package com.example.marketing.seckill.job;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.marketing.common.schedule.RedisLeaseLock;
 import com.example.marketing.seckill.config.SeckillProperties;
+import com.example.marketing.seckill.config.SeckillRuntimeConfig;
 import com.example.marketing.seckill.domain.SeckillOrderStatus;
 import com.example.marketing.seckill.infrastructure.entity.SeckillActivityEntity;
 import com.example.marketing.seckill.infrastructure.entity.SeckillOrderEntity;
@@ -38,6 +39,8 @@ public class SeckillTimeoutJob {
     private final SeckillActivityMapper activityMapper;
     private final SeckillOrderService orderService;
     private final SeckillProperties properties;
+    /** 支付超时走在线可调口径；buckets 仍读 properties（它是列值的地基，不在线化） */
+    private final SeckillRuntimeConfig runtime;
     private final MeterRegistry meterRegistry;
     private final RedisLeaseLock leaseLock;
 
@@ -47,7 +50,7 @@ public class SeckillTimeoutJob {
     }
 
     private void doCancelTimeoutOrders() {
-        LocalDateTime deadline = LocalDateTime.now().minusSeconds(properties.getPayTimeoutSeconds());
+        LocalDateTime deadline = LocalDateTime.now().minusSeconds(runtime.payTimeoutSeconds());
         List<SeckillOrderEntity> timeoutOrders = orderMapper.selectList(
                 new LambdaQueryWrapper<SeckillOrderEntity>()
                         .eq(SeckillOrderEntity::getStatus, SeckillOrderStatus.CREATED.name())

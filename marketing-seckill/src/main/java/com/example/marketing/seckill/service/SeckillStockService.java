@@ -3,7 +3,7 @@ package com.example.marketing.seckill.service;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.redis.LuaScripts;
-import com.example.marketing.seckill.config.SeckillProperties;
+import com.example.marketing.seckill.config.SeckillRuntimeConfig;
 import com.example.marketing.seckill.infrastructure.entity.SeckillActivityEntity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +30,8 @@ import java.util.List;
 public class SeckillStockService {
 
     private final StringRedisTemplate redisTemplate;
-    private final SeckillProperties properties;
+    /** 三个 TTL 的唯一取值出口（在线值 > yml）；本类不再直接读 SeckillProperties */
+    private final SeckillRuntimeConfig runtime;
 
     public String stockKey(String activityNo, int bucket) {
         return "seckill:stock:" + activityNo + ":" + bucket;
@@ -61,7 +62,7 @@ public class SeckillStockService {
      * @return 实际初始化的桶数
      */
     public int warmUp(SeckillActivityEntity activity, List<Integer> bucketStocks) {
-        Duration ttl = Duration.ofSeconds(properties.getBoughtMarkTtlSeconds());
+        Duration ttl = Duration.ofSeconds(runtime.boughtMarkTtlSeconds());
         int initialized = 0;
         for (int i = 0; i < bucketStocks.size(); i++) {
             Boolean ok = redisTemplate.opsForValue()
@@ -83,7 +84,7 @@ public class SeckillStockService {
      * 所以调用方必须先确认活动仍在 ONLINE 窗口内（见 SeckillWarmUpService 的守卫）。</p>
      */
     public int resetBuckets(String activityNo, List<Integer> bucketStocks) {
-        Duration ttl = Duration.ofSeconds(properties.getBoughtMarkTtlSeconds());
+        Duration ttl = Duration.ofSeconds(runtime.boughtMarkTtlSeconds());
         for (int i = 0; i < bucketStocks.size(); i++) {
             String key = stockKey(activityNo, i + 1);
             redisTemplate.delete(key);
@@ -102,7 +103,7 @@ public class SeckillStockService {
     public int grab(String activityNo, Long userId, int buckets) {
         String bought = boughtKey(activityNo, userId);
         Boolean first = redisTemplate.opsForValue()
-                .setIfAbsent(bought, "1", Duration.ofSeconds(properties.getBoughtMarkTtlSeconds()));
+                .setIfAbsent(bought, "1", Duration.ofSeconds(runtime.boughtMarkTtlSeconds()));
         if (!Boolean.TRUE.equals(first)) {
             throw BizException.of(ErrorCode.BIZ_ERROR, "您已参与过该场秒杀");
         }
@@ -149,7 +150,7 @@ public class SeckillStockService {
     /** 写入抢购结果（前端轮询用） */
     public void saveResult(String token, String value) {
         redisTemplate.opsForValue().set(resultKey(token), value,
-                Duration.ofSeconds(properties.getTokenTtlSeconds()));
+                Duration.ofSeconds(runtime.tokenTtlSeconds()));
     }
 
     /**
@@ -162,7 +163,7 @@ public class SeckillStockService {
      */
     public void markAccepted(String token) {
         redisTemplate.opsForValue().setIfAbsent(resultKey(token), "ACCEPTED",
-                Duration.ofSeconds(properties.getTokenTtlSeconds()));
+                Duration.ofSeconds(runtime.tokenTtlSeconds()));
     }
 
     public String getResult(String token) {

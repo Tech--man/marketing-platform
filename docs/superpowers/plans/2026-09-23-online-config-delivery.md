@@ -65,6 +65,9 @@
 5. **`ValueOperations.set(K,V)` 返回 void**，桩它必须用 `doAnswer` / `doThrow`，`when(ops.set(...))` 编不过。
 6. **迁移脚本自带"本库有没有这张表"的前置判断**（计划里只写了 `CREATE TABLE IF NOT EXISTS`）：否则对 `marketing_activity` 执行会建出一张没人读的 `admin_config`，等于给"admin 连错库"留了个静默陷阱。实测三种库（单库 / 只有 activity / 只有 admin_user）判读都正确。
 7. **DDL 探针要带 `MYSQL_USER`/`MYSQL_PASSWORD`**：MySQL 8 不允许用 GRANT 顺带建用户，探针少给这两个变量会在 `01-schema.sql:20` 就 `ERROR 1410` 退出，看起来像 DDL 坏了其实是用探针的人错了。
+8. **`marketing.config.form` 用嵌套占位读，不进任何 application.yml**：写成 `@Value("${marketing.config.form:${DEPLOY_FORM:}}")`（poller、网关同步器、admin 三处），节拍同理 `${CONFIG_POLL_SECONDS:5}`，灰度回源频率 `${GRAY_REFRESH_SECONDS:5}`。计划原本要在 7 个 yml 里各加一段 `marketing.config`——那正是本仓库 Task #11 专门消灭过的 `marketing.*` 等值副本，一份定义只留一处。
+9. **不建 `DiscountRuntimeConfig`**：discount 的两个参数分别落在 `PromoEngine` 与 `DiscountCalcService`，各自只读一个，所以两处直接注入 `ConfigValues`（`values.intOr/values.longOr`）；`SeckillRuntimeConfig` 保留，因为 `SeckillStockService` 一处就要读两个 TTL。判断标准见 Task 7 Step 6。
+10. **`PromoEngine` 多了一个构造参数**：`new PromoEngine(DiscountProperties, ConfigValues)`，既有基准测试改传 `ConfigValues.empty()`；`SeckillStockService` 的第二参数从 `SeckillProperties` 变成 `SeckillRuntimeConfig`。新增 `PromoEngineOnlineLimitTest` 用三条非互斥规则证明"在线把上限压到 1，引擎真的只应用一条"——这是"声明必须被消费"的可执行版本。
 
 ---
 

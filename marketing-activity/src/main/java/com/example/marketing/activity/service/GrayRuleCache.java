@@ -39,7 +39,7 @@ public class GrayRuleCache {
     private volatile ScheduledExecutorService scheduler;
 
     public GrayRuleCache(JdbcTemplate jdbc,
-                         @Value("${marketing.gray.refresh-seconds:5}") long refreshSeconds) {
+                         @Value("${marketing.gray.refresh-seconds:${GRAY_REFRESH_SECONDS:5}}") long refreshSeconds) {
         this.jdbc = jdbc;
         this.refreshSeconds = Math.max(1L, refreshSeconds);
     }

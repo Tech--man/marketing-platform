@@ -64,7 +64,8 @@ class PromoEngineBenchmarkTest {
         }
         CalcInput input = new CalcInput(1L, "ACT2026001", Set.of("VIP"), items);
 
-        PromoEngine engine = new PromoEngine(new DiscountProperties());
+        PromoEngine engine = new PromoEngine(new DiscountProperties(),
+                com.example.marketing.common.config.ConfigValues.empty());
 
         // 候选规模必须远小于规则总量，否则剪枝失效
         int candidateCount = snapshot.candidates(items).size();

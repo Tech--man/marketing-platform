@@ -54,9 +54,9 @@ public class GatewayConfigSyncer implements ConfigSyncer {
 
     public GatewayConfigSyncer(ReactiveRedisTemplate<String, String> redis, ConfigValues values,
                                ConfigSchemaRegistry registry,
-                               @Value("${marketing.config.form:}") String form,
+                               @Value("${marketing.config.form:${DEPLOY_FORM:}}") String form,
                                @Value("${spring.application.name:marketing-gateway}") String service,
-                               @Value("${marketing.config.poll-seconds:5}") long pollSeconds,
+                               @Value("${marketing.config.poll-seconds:${CONFIG_POLL_SECONDS:5}}") long pollSeconds,
                                MeterRegistry meters) {
         this.redis = redis;
         this.values = values;

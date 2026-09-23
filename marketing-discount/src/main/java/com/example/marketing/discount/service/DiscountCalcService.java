@@ -1,5 +1,7 @@
 package com.example.marketing.discount.service;
 
+import com.example.marketing.common.config.ConfigValues;
+import com.example.marketing.discount.config.DiscountConfigDefinitions;
 import com.example.marketing.discount.config.DiscountProperties;
 import com.example.marketing.discount.domain.CalcInput;
 import com.example.marketing.discount.domain.CalcResult;
@@ -32,15 +34,18 @@ public class DiscountCalcService {
     private final PromoEngine promoEngine;
     private final RuleCacheManager ruleCacheManager;
     private final DiscountProperties properties;
+    private final ConfigValues values;
     private final ExecutorService calcPool;
     private final Timer calcTimer;
     private final Counter degradeCounter;
 
     public DiscountCalcService(PromoEngine promoEngine, RuleCacheManager ruleCacheManager,
-                               DiscountProperties properties, MeterRegistry meterRegistry) {
+                               DiscountProperties properties, ConfigValues values,
+                               MeterRegistry meterRegistry) {
         this.promoEngine = promoEngine;
         this.ruleCacheManager = ruleCacheManager;
         this.properties = properties;
+        this.values = values;
         this.calcPool = new ThreadPoolExecutor(4, 8, 60, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(2000),
                 r -> {
@@ -60,7 +65,8 @@ public class DiscountCalcService {
         try {
             CalcResult result = CompletableFuture
                     .supplyAsync(() -> promoEngine.calculate(input, snapshot), calcPool)
-                    .orTimeout(properties.getCalcTimeoutMs(), TimeUnit.MILLISECONDS)
+                    .orTimeout(values.longOr(DiscountConfigDefinitions.CALC_TIMEOUT_MS,
+                            properties.getCalcTimeoutMs()), TimeUnit.MILLISECONDS)
                     .join();
             calcTimer.record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
             return result;

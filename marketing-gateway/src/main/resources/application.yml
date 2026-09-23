@@ -48,10 +48,8 @@ spring:
             - Path=/api/admin/**
 
 marketing:
-  # 在线配置下发：DEPLOY_FORM 未设置时只对 form=GLOBAL 的覆盖生效（行为与本段之前一致）
-  config:
-    form: ${DEPLOY_FORM:}
-    poll-seconds: ${CONFIG_POLL_SECONDS:5}
+  # 在线配置的形态标识与轮询节拍由 common 的嵌套占位统一读 DEPLOY_FORM / CONFIG_POLL_SECONDS，
+  # 不在这里复制一份（同 marketing.* 的单一来源口径）
   gateway:
     auth:
       enabled: true

@@ -39,6 +39,10 @@ public class ConfigCommonAutoConfiguration {
     /**
      * 阻塞轮询器。{@code ConfigSyncer} 出现即让位：网关有自己的 reactive 同步器，
      * 而它的 classpath 上确实存在 StringRedisTemplate bean（见 {@link ConfigSyncer}）。
+     *
+     * <p>属性写成"属性 &gt; 环境变量 {@code DEPLOY_FORM} &gt; 空"的嵌套占位：这样七个进程的
+     * 形态标识只有一处定义，不必在每个 application.yml 里复制同一段（本仓库曾专门消灭过
+     * 这类 {@code marketing.*} 的等值副本）。</p>
      */
     @Bean(initMethod = "start", destroyMethod = "stop")
     @ConditionalOnBean(StringRedisTemplate.class)
@@ -47,9 +51,10 @@ public class ConfigCommonAutoConfiguration {
                                                      ConfigValues values,
                                                      ConfigSchemaRegistry registry,
                                                      MeterRegistry meters,
-                                                     @Value("${marketing.config.form:}") String form,
+                                                     @Value("${marketing.config.form:${DEPLOY_FORM:}}") String form,
                                                      @Value("${spring.application.name:unknown}") String service,
-                                                     @Value("${marketing.config.poll-seconds:5}") long pollSeconds) {
+                                                     @Value("${marketing.config.poll-seconds:${CONFIG_POLL_SECONDS:5}}")
+                                                     long pollSeconds) {
         return new ConfigSnapshotPoller(redis, values, registry, form, service, pollSeconds, meters);
     }
 }

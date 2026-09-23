@@ -37,10 +37,8 @@ mybatis-plus:
     banner: false
 
 marketing:
-  # 在线配置：admin 既是唯一写方也是读方（配置页要显示"我这一档当前生效的是什么、跑在第几版"）
-  config:
-    form: ${DEPLOY_FORM:}
-    poll-seconds: ${CONFIG_POLL_SECONDS:5}
+  # 在线配置：admin 既是唯一写方也是读方（配置页要显示"我这一档当前生效的是什么、跑在第几版"）。
+  # 形态标识与节拍由 common 的嵌套占位统一读 DEPLOY_FORM / CONFIG_POLL_SECONDS，不在此复制
   admin:
     jwt-secret: ${ADMIN_JWT_SECRET:}
     access-ttl-seconds: ${ADMIN_TOKEN_TTL:900}

@@ -13,7 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SeckillStockServiceTest {
 
-    private final SeckillStockService service = new SeckillStockService(null, null);
+    private final SeckillStockService service = new SeckillStockService(null,
+            new com.example.marketing.seckill.config.SeckillRuntimeConfig(
+                    com.example.marketing.common.config.ConfigValues.empty(),
+                    new com.example.marketing.seckill.config.SeckillProperties()));
 
     @Test
     @DisplayName("整除分配：每桶均等")

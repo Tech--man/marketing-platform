@@ -1,5 +1,7 @@
 package com.example.marketing.discount.engine;
 
+import com.example.marketing.common.config.ConfigValues;
+import com.example.marketing.discount.config.DiscountConfigDefinitions;
 import com.example.marketing.discount.config.DiscountProperties;
 import com.example.marketing.discount.domain.CalcItem;
 import com.example.marketing.discount.domain.CalcInput;
@@ -28,6 +30,8 @@ import java.util.Set;
 public class PromoEngine {
 
     private final DiscountProperties properties;
+    /** 在线生效值；本类只读 max-rules-per-order 一个参数，所以直接问 ConfigValues */
+    private final ConfigValues values;
 
     public CalcResult calculate(CalcInput input, RuleSnapshot snapshot) {
         BigDecimal original = input.totalAmount();
@@ -43,7 +47,8 @@ public class PromoEngine {
         }
 
         // 3. 最优组合
-        List<RuleHit> chosen = CombinationSelector.select(hits, properties.getMaxRulesPerOrder());
+        List<RuleHit> chosen = CombinationSelector.select(hits,
+                values.intOr(DiscountConfigDefinitions.MAX_RULES_PER_ORDER, properties.getMaxRulesPerOrder()));
 
         // 4. 按应用顺序分摊（usedShares 累积行级已占额度）
         Map<String, BigDecimal> usedShares = new HashMap<>();

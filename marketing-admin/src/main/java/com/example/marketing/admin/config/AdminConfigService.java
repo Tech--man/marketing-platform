@@ -46,7 +46,7 @@ public class AdminConfigService {
     public AdminConfigService(AdminConfigStore store, ConfigSnapshotPublisher publisher,
                               ConfigSchemaReader schemaReader, ConfigValues values,
                               AuditService auditService,
-                              @Value("${marketing.config.form:}") String form) {
+                              @Value("${marketing.config.form:${DEPLOY_FORM:}}") String form) {
         this.store = store;
         this.publisher = publisher;
         this.schemaReader = schemaReader;
