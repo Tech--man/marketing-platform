@@ -287,8 +287,8 @@ if docker exec mkt-mysql mysql -umarketing -pmarketing123 -e \
     NOW=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/budget/remain" | sed -n 's/.*"data":\([0-9-]*\).*/\1/p')
     [ "$NOW" = "$RAISED" ] && ok "重预热后 C 端余额等于新口径（$RAISED 分）" || bad "重预热未生效" "$NOW"
   else
-    expect "FULL 分进程下重预热显式报错（不静默返回成功）" '"code":41000' "$R"
-    expect "报错里点名 owning 服务与待办形态" '⑤' "$R"
+    expect "FULL 分进程下重预热显式报错（不静默返回成功）" '"code":41010' "$R"
+    expect "报错里点名 owning 服务与待办形态" '③' "$R"
   fi
 else
   bad "无法直连 mkt-mysql 抬预算（重预热断言没跑）" "docker exec 失败"

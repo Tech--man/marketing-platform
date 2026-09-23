@@ -29,9 +29,11 @@ import java.util.List;
  *
  * <p><b>形态限制（诚实声明）</b>：注册表是从本 JVM 的 Bean 里收集的。LITE 聚合形态下
  * 三个 reheater 与后台在同一进程，这里能刷全部三类；FULL 分进程形态下 admin 进程里
- * 一个都没有，{@code types()} 为空，调用会拿到 41000 并附可用类型清单（也是空）。
- * 跨进程转发属于 ⑤"运维写动作的 HTTP 面"，本轮不做 —— 与其偷偷做个只在一档能用的按钮，
- * 不如让它显式报错。</p>
+ * 一个都没有，{@code types()} 为空，调用会拿到 {@code 41010 本形态不适用} 并附可用类型清单
+ * （也是空）。用 41010 而不是 41000：41000 是业务失败，运营看到它会去找业务方，
+ * 而这里真正该做的是换形态执行（母版风险 #4）。跨进程<b>回执</b>属于 ③
+ * （写库 + {@code mkt:reheat:pending/ack}，母版 §6.3）——⑤ 交付的只是那把轮询器本身。
+ * 与其偷偷做个只在一档能用的按钮，不如让它显式报错。</p>
  */
 @Slf4j
 @RestController
@@ -64,10 +66,10 @@ public class AdminCacheController {
             auditService.record(new AuditRecord(denied.uid(), denied.username(), denied.role(),
                     "cache.reheat", type, key, "POST", "/api/admin/cache/reheat",
                     "type=" + type + ", key=" + key + ", force=" + force,
-                    ErrorCode.BIZ_ERROR.getCode(), "本进程无 reheater", ClientIp.of(request), 0));
-            throw BizException.of(ErrorCode.BIZ_ERROR,
+                    ErrorCode.FORM_NOT_APPLICABLE.getCode(), "本进程无 reheater", ClientIp.of(request), 0));
+            throw BizException.of(ErrorCode.FORM_NOT_APPLICABLE,
                     "当前进程没有任何缓存重预热实现（FULL 分进程形态下 reheater 在业务服务里），"
-                            + "请在 owning 服务上执行或等 ⑤ 的跨进程转发");
+                            + "请在 owning 服务上执行，或等 ③ 的跨进程重预热回执");
         }
         AdminPrincipal actor = identityService.require(request, AdminRoles.OPERATIONAL);
         CacheReheater.Result result = registry.reheat(type, key, force);
