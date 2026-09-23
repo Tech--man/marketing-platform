@@ -56,6 +56,18 @@
 
 ---
 
+## 落地时对计划的修正（Task 1-4 执行后回填，后续任务以此为准）
+
+1. **新增 `common/config/ConfigSyncer.java`（标记接口）**。母版事实 #8 讲"网关只有 reactive 模板"说的是它*用什么*：`spring-boot-starter-data-redis-reactive` 会把 spring-data-redis 核心带进来，网关里**确实有 `StringRedisTemplate` bean**，于是 common 的阻塞轮询器会在网关里也起一个线程，与 `GatewayConfigSyncer` 两套节拍喂同一份生效值。修法：装配条件改成 `@ConditionalOnMissingBean({ConfigSnapshotPoller.class, ConfigSyncer.class})`，网关同步器实现该标记；common 侧加一条上下文测试钉住"有标记就不装轮询器"。
+2. **`ConfigDefinition.ofInt` 的 `min/max` 改成 `long`**（与 record 的字段类型一致）。否则调用点写 `ofInt(key, 1000, 1, 200_000L, ...)` 会报"possible lossy conversion from long to int"。
+3. **`GatewayConfigSyncer.syncOnce()` / `publishSchema()` 返回 `Mono<Void>`**，`start()` 里 `.subscribe()`、测试里 `.block(Duration.ofSeconds(5))`。计划原来让 `syncOnce()` 内部自己 subscribe，测试只能靠 mock 恰好同步完成来通过——那是运气不是设计。
+4. **snakeyaml 的多文档坑**：`new Yaml().load(reader)` 遇到 `application.yml`（local + nacos 两个文档）直接抛 `expected a single document`。守卫测试统一改用 `loadAll(...).iterator().next()` / 遍历。
+5. **`ValueOperations.set(K,V)` 返回 void**，桩它必须用 `doAnswer` / `doThrow`，`when(ops.set(...))` 编不过。
+6. **迁移脚本自带"本库有没有这张表"的前置判断**（计划里只写了 `CREATE TABLE IF NOT EXISTS`）：否则对 `marketing_activity` 执行会建出一张没人读的 `admin_config`，等于给"admin 连错库"留了个静默陷阱。实测三种库（单库 / 只有 activity / 只有 admin_user）判读都正确。
+7. **DDL 探针要带 `MYSQL_USER`/`MYSQL_PASSWORD`**：MySQL 8 不允许用 GRANT 顺带建用户，探针少给这两个变量会在 `01-schema.sql:20` 就 `ERROR 1410` 退出，看起来像 DDL 坏了其实是用探针的人错了。
+
+---
+
 ### Task 1: common 配置契约与生效值核心（纯逻辑，零 Spring 接线）
 
 **Files:**

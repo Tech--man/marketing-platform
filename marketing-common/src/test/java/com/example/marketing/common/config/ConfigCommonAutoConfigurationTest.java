@@ -75,6 +75,24 @@ class ConfigCommonAutoConfigurationTest {
     }
 
     @Test
+    @DisplayName("进程里已有 ConfigSyncer（网关）时阻塞轮询器让位，不出现两套节拍")
+    void backsOffWhenAnotherSyncerPresent() {
+        LettuceConnectionFactory f = neverConnecting();
+        try {
+            runner().withBean(StringRedisTemplate.class, () -> new StringRedisTemplate(f))
+                    .withBean(ConfigSyncer.class, () -> new ConfigSyncer() {
+                    })
+                    .run(ctx -> {
+                        assertEquals(1, ctx.getBeanNamesForType(ConfigValues.class).length);
+                        assertFalse(ctx.getBeanNamesForType(ConfigSnapshotPoller.class).length > 0,
+                                "网关的 classpath 上确实有 StringRedisTemplate bean，靠类型条件挡不住");
+                    });
+        } finally {
+            f.destroy();
+        }
+    }
+
+    @Test
     @DisplayName("两个 provider 声明同一个键时上下文启动失败（而不是静默覆盖）")
     void duplicateKeyFailsContext() {
         runner().withBean("secondProvider", ConfigDefinitionProvider.class, () -> new ConfigDefinitionProvider() {

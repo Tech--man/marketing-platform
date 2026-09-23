@@ -43,7 +43,7 @@ mkt:cfg:schema:{service} STRING(JSON)     该服务自述的可改参数清单
 - 逐条校验：未声明的键忽略；声明了但类型不符/越界的键忽略并记 degraded 计数 + WARN。快照 JSON 坏了 → 整份按空快照应用（**退回出厂值，不是沿用旧快照**）：静默抱着陈旧值是本项目最贵的一类 bug，而阈值退回 yml 只会"放行偏宽或偏紧"，不会起不来。
 - 写路径顺序固定：`INCR seq` → 事务写行 → 提交 → `SET snapshot` → `SET version`。后两步任一失败返回 `41009 配置已落库但未广播`，并提供幂等的"重新广播"动作。
 
-## 3. 对母版的四条偏离（都在动笔前对着代码核过）
+## 3. 对母版的五条偏离（都在动笔或落地时对着代码核过）
 
 | # | 母版原文 | 改成什么 | 为什么必须改 |
 |---|---|---|---|
@@ -51,6 +51,7 @@ mkt:cfg:schema:{service} STRING(JSON)     该服务自述的可改参数清单
 | 2 | §5.3 快照键 `mkt:cfg:snapshot:{form}` | 发布目标取固定集合 `{GLOBAL, LITE, FULL, DEV}`，合并后为空的形态 **DEL** 两个键 | 按"表里出现过的 form"发布有个洞：把 LITE 的最后几行删干净后，LITE 快照会停留在旧值上，读方永远收不到"恢复出厂"。固定集合 + 空则删键，才让 DELETE 真的等于出厂 |
 | 3 | §5.4 灰度"Redis 只当变更通知，冷启动回源 DB 重建"；§5.5 灰度在 activity 声明为一条 `ConfigDefinition` | 灰度**不进 `admin_config`、也不走 Redis 通知**：activity 自己每 5s 回源 DB 重建 `Map<activityNo, GrayRule>`；⑤ 不建灰度写端点 | 两个原因。(a) 通知键要有人 bump，而写端点必须长在 activity（§6.0），⑤ 里没有 activity 的后台写端点；(b) 更根本的是 §6.0 与 §6.2 在⑤落地时自相矛盾——见第 4 节，⑤ 不想在缺审计件的情况下开第一个业务侧后台写端点。回源 DB 反而把"Redis 被清"这一整类风险消掉了（灰度不再依赖 Redis），代价是 5s 收敛窗口与每 5s 一条 `WHERE gray_percent IS NOT NULL` 的小查询（种子 60 行，可忽略） |
 | 4 | §5.5 声明清单含"灰度在 activity" | ⑤ 的 provider 只有三个：网关（5 条限流）、discount（2）、seckill（3） | 灰度不再是 `admin_config` 键，声明它就没有校验对象。同时**不声明未接线的键**：`ConfigDefinitionProvider` 的每条都必须真的被某处 `configValues.intOr(...)` 消费，否则后台就是一个"点了没反应"的按钮（母版 §4 的"与其偷偷做个只在一档能用的按钮，不如显式报错"同源） |
+| 5 | 母版事实 #8 说"网关只有 reactive 模板" | 那句讲的是**它用什么**，不是 classpath 里缺什么：`spring-boot-starter-data-redis-reactive` 会带进 spring-data-redis 核心，于是网关里**确实存在 `StringRedisTemplate` bean**（实测：装配条件按类型挡住才算数）。补一个 `ConfigSyncer` 标记接口，网关的 reactive 同步器实现它，common 的阻塞轮询器见到任一实现就让位 | 少了这个标记，网关里会同时跑"阻塞轮询线程 + reactive 轮询"两套节拍喂同一份生效值：功能看起来正常，但一次刷新有两条竞态路径，且白占一条 Lettuce 阻塞连接。这类"两份都对的东西"正是最难查的那类 |
 
 ## 4. 遗留给 ③ 的一处矛盾（现在就有解，但不在 ⑤ 做）
 

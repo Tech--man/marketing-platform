@@ -36,9 +36,13 @@ public class ConfigCommonAutoConfiguration {
         return new ConfigValues(registry, meters);
     }
 
+    /**
+     * 阻塞轮询器。{@code ConfigSyncer} 出现即让位：网关有自己的 reactive 同步器，
+     * 而它的 classpath 上确实存在 StringRedisTemplate bean（见 {@link ConfigSyncer}）。
+     */
     @Bean(initMethod = "start", destroyMethod = "stop")
-    @ConditionalOnMissingBean
     @ConditionalOnBean(StringRedisTemplate.class)
+    @ConditionalOnMissingBean({ConfigSnapshotPoller.class, ConfigSyncer.class})
     public ConfigSnapshotPoller configSnapshotPoller(StringRedisTemplate redis,
                                                      ConfigValues values,
                                                      ConfigSchemaRegistry registry,

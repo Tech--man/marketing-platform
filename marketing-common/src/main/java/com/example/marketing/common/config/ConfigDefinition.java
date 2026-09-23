@@ -21,7 +21,8 @@ public record ConfigDefinition(String key, ConfigType type, long min, long max,
         }
     }
 
-    public static ConfigDefinition ofInt(String key, int def, int min, int max, String desc) {
+    /** min/max 用 long：边界值常量（如 200_000L）常常就是 long，调用点不该为此强转 */
+    public static ConfigDefinition ofInt(String key, int def, long min, long max, String desc) {
         return new ConfigDefinition(key, ConfigType.INT, min, max, String.valueOf(def), desc);
     }
 
