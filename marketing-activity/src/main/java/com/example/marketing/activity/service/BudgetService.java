@@ -3,6 +3,7 @@ package com.example.marketing.activity.service;
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.infrastructure.mapper.ActivityMapper;
 import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.cache.CacheConsistency;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.redis.LuaScripts;
@@ -27,7 +28,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class BudgetService implements CacheReheater {
+public class BudgetService implements CacheReheater, CacheConsistency {
 
     private static final RedisScript<Long> DEDUCT = LuaScripts.ofLong("lua/deduct_budget.lua");
 
@@ -188,5 +189,35 @@ public class BudgetService implements CacheReheater {
 
     private String budgetKey(String activityNo) {
         return "activity:budget:" + activityNo;
+    }
+
+    /** 自检抽样上限：每条两次读（DB 权威值 + Redis 当前值），所以刻意小 */
+    static final int CONSISTENCY_SAMPLE = 5;
+
+    /**
+     * 抽样内"Redis 预扣值 != 对账口径"的活动数。口径就是 {@link #computeRemainCents} 那一份，
+     * 不重写第二份。
+     *
+     * <p>返回 -1 表示判定不了（Redis 不可达等），<b>不是</b> 0：④ 的整个价值前提是
+     * "看不见"不许被报成"健康"。</p>
+     */
+    @Override
+    public int mismatchCount() {
+        try {
+            List<String> nos = jdbcTemplate.queryForList(
+                    "SELECT activity_no FROM activity ORDER BY id LIMIT " + CONSISTENCY_SAMPLE,
+                    String.class);
+            int mismatch = 0;
+            for (String no : nos) {
+                Long cached = readCents(budgetKey(no));
+                if (cached == null || cached != computeRemainCents(no)) {
+                    mismatch++;
+                }
+            }
+            return mismatch;
+        } catch (RuntimeException e) {
+            log.warn("[budget] 一致性自检判定不了: {}", e.toString());
+            return -1;
+        }
     }
 }

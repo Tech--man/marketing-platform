@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.api.PageQuery;
 import com.example.marketing.common.api.PageResult;
+import com.example.marketing.common.cache.CacheConsistency;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.exception.VersionGuard;
@@ -30,7 +31,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CouponTemplateService implements CacheReheater {
+public class CouponTemplateService implements CacheReheater, CacheConsistency {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
     public static final String STATUS_INACTIVE = "INACTIVE";
@@ -234,5 +235,33 @@ public class CouponTemplateService implements CacheReheater {
             throw new BizException(ErrorCode.NOT_FOUND, "券模板不存在: " + templateNo);
         }
         return template;
+    }
+
+    /** 自检抽样上限：每条两次读（DB 权威余量 + Redis 当前值），所以刻意小 */
+    static final int CONSISTENCY_SAMPLE = 5;
+
+    /**
+     * 抽样内"Redis 余量 != total_stock - 已发数"的 ACTIVE 模板数。
+     * 余量算的是 {@link #remainOf} 那一份公式，不重写第二份。-1 = 判定不了，不是 0。
+     */
+    @Override
+    public int mismatchCount() {
+        try {
+            List<CouponTemplateEntity> actives = templateMapper.selectList(
+                    Wrappers.<CouponTemplateEntity>lambdaQuery()
+                            .eq(CouponTemplateEntity::getStatus, STATUS_ACTIVE)
+                            .last("LIMIT " + CONSISTENCY_SAMPLE));
+            int mismatch = 0;
+            for (CouponTemplateEntity template : actives) {
+                Long cached = stockService.remainStock(template.getId());
+                if (cached == null || cached != remainOf(template, issuedCount(template.getId()))) {
+                    mismatch++;
+                }
+            }
+            return mismatch;
+        } catch (RuntimeException e) {
+            log.warn("[coupon] 一致性自检判定不了: {}", e.toString());
+            return -1;
+        }
     }
 }

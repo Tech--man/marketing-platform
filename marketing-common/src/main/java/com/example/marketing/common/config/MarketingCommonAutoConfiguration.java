@@ -1,5 +1,7 @@
 package com.example.marketing.common.config;
 
+import com.example.marketing.common.cache.CacheConsistency;
+import com.example.marketing.common.cache.CacheConsistencyRegistry;
 import com.example.marketing.common.cache.CacheReheatRegistry;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.GlobalExceptionHandler;
@@ -85,6 +87,20 @@ public class MarketingCommonAutoConfiguration {
                     "${marketing.reheat.poll-seconds:${CONFIG_POLL_SECONDS:5}}") long pollSeconds) {
         return new com.example.marketing.common.reheat.ReheatDispatcher(
                 stringRedisTemplate, registry, meterRegistry, pollSeconds);
+    }
+
+    /**
+     * 缓存一致性自检注册表：把各模块的 {@link com.example.marketing.common.cache.CacheConsistency}
+     * 绑成 gauge，供 ④ 的只读面取用。
+     *
+     * <p>与 {@link CacheReheatRegistry} 分开而不是并成一个接口：修（reheat）与发现（自检）
+     * 的失败后果不同——reheat 抛错是运营的动作失败，自检抛错只该让那一项读成"判定不了"。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public CacheConsistencyRegistry cacheConsistencyRegistry(
+            ObjectProvider<CacheConsistency> checks, MeterRegistry meterRegistry) {
+        return new CacheConsistencyRegistry(checks.orderedStream().toList(), meterRegistry);
     }
 
     /**

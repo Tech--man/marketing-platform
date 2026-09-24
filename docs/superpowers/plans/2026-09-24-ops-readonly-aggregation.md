@@ -263,7 +263,7 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
 - Test: `.../observe/ConsistencyTest.java`（H2 + mock 的 Redis）
 - Test: 三个业务模块各补一条"写进 Redis 的键 == CacheKeys.xxx"的断言
 
-- [ ] **Step 1** `CacheProbeKeyShapeTest` —— 这是本任务的全部价值所在，先写它。
+- [x] **Step 1** `CacheProbeKeyShapeTest` —— 这是本任务的全部价值所在，先写它。
   **前提修正**（实施前实测）：`marketing-admin` 不依赖任何业务模块，所以 ④ 拿不到
   `SeckillStockService.keysOf(...)`（它确实是 public，在 `:186`，但跨不到模块）。
   做法照 ⑤ 已有的先例 —— `common/transport/StreamKeys.java` 就是为了"键形只有一份"而存在的：
@@ -275,7 +275,7 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
   `verify(valueOps).set(CacheKeys.budget("ACT1"), ...)` 这种形式）；
   ② 秒杀桶序号**从 1 开始**、上界是**该活动行的 `buckets` 列**（全局默认 16 只兜 null）。
   键形漂移在编译期就没了，而这正是 ④ 自己最大的风险。
-- [ ] **Step 2** 恒等式（`ConsistencyStore`）：
+- [x] **Step 2** 恒等式（改成各模块自注册的 gauge，见修正 #9）：
 
 ```
 预算 期望 = activity.budget_amount * 100 - Σ(budget_record 扣) + Σ(退)   // 与 BudgetService 的 reheat 公式同式
@@ -286,7 +286,7 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
   ④ 不能再抄一份——抄两份就是下一个地雷。做法：`BudgetService` 暴露
   `public long expectedRemainCents(String activityNo)`（reheat 内部改调它），④ 调它拿期望值，
   再 `MGET` 实际值比对。**"公式只能有一处"写进 javadoc 与单测**。
-- [ ] **Step 3** 输出形状：
+- [x] **Step 3** 输出形状：
 
 ```java
 public record ConsistencyView(String kind, String key, Long expected, Long actual,
@@ -298,9 +298,9 @@ public record ConsistencyView(String kind, String key, Long expected, Long actua
   修法与"值不对"不同（前者要 warm，后者要 reheat）。秒杀那条顺带把**剩余 TTL** 报出来——
   spec §7.3 的 86400s 桶 TTL 就靠这一列被看见。
   抽样：`ORDER BY id LIMIT ops.consistency-sample-size`，note 明写"抽样"。
-- [ ] **Step 4** 变异检查两处：① 把 `MISSING_KEY` 并成 `MISMATCH` → 断言必红；
+- [x] **Step 4** 变异检查：① 把 `MISSING_KEY` 并成 `MISMATCH` → 断言必红；
   ② 把"两处公式合一"改回抄一份 → `expectedRemainCents` 那条一致性单测必红。
-- [ ] **Step 5** 提交：`feat(ops): ④ 缓存与账的恒等式对拍（公式单点、键形共用静态方法）`
+- [x] **Step 5** 提交：`feat(ops): ④ 缓存与账的恒等式自检（公式单点、键形共用静态方法）`
 
 ---
 
@@ -408,6 +408,7 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 | T2 | `TargetRef` + `OpsTargets`（正面清单：host 正则 + 七个端口 + 名称形状 + 启动期整表校验点名错项）、`ProxyMeterSource`（JDK HttpClient、1s 超时、256KB 超限即抛、非 2xx 带状态码、3xx 不跟） | 12 | admin 模块 66 用例全绿；变异检查四处全咬（跟重定向 / 端口不设限 / 超限静默截断 / host 正则收所有）；重定向断言是"目标 handler 被调 0 次"，不是只看状态码 |
 | T3 | `OpsProperties`（mode 取值与抽样数在启动期校验）、`OpsObservabilityConfig`（proxy/local 二选一 + 空清单拒启动）、admin yml 六个 target、standalone yml 覆成 `local` + 只有 `self`、full-app compose 给 admin 下发 `OPS_T_*` | 6 | 全仓 **306 用例 / 64 类** 绿；真起 LITE 栈（deploy-preview exit 0、standalone 100s 起）+ 冒烟 81/81；变异三处全咬（去掉空清单闸、把 matchIfMissing 挪到 local、去掉 mode 校验） |
 | T4 | `BacklogStore`（information_schema 发现含该表的库、逐库 group by、单库失败只污这一行）、`SchemaBacklog`、`StreamDepth`（两个业务 topic + 审计总线 + 按 type 的重预热总线；RocketMQ 通道标不可见） | 13 | admin 模块 85 用例全绿；变异四处全咬（跨库失败报 0、去掉大小写宽容、RocketMQ 填 0、XLEN 失败当 0）。其中"去掉 LOWER() 宽容"这条是**真 bug 被抓出来后补的**：H2 把标识符存成大写，第一版发现 0 个库 |
+| T5 | `CacheConsistency` 契约 + `CacheConsistencyRegistry`（按 type 绑 gauge、重复 type 启动期失败、未注册=-1）+ 三模块各自实现（复用 reheat 那一份公式），预算自检另加一条键形断言 | 16 | 全仓 **335 用例 / 70 类** 绿；变异四处全咬（Redis 挂了报 0、键缺失当一致、缺桶不算不符、gauge 把 -1 钳成 0）；**T5 的设计被换掉**，见修正 #9 |
 
 ## 落地时对计划的修正
 
@@ -447,3 +448,13 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
    （H2 把非引号标识符存成大写），表现正是本段要防的那个"看不见被报成没有"。
    修法是比较两侧都 `LOWER()`，并把它做成一条变异检查（去掉宽容必须变红）。
    另外 `StreamDepth` 不标 `@Component`：它的构造要 boolean 与 List，交给组件扫描会在启动期炸。
+9. **T5 的实现形状与计划不同，因为计划的形状在模块边界前不成立**：计划要 ④ 自己按
+   `CacheKeys` 生成精确键做 MGET、再按 SQL 算期望值，并"把 `BudgetService` 的公式抽成
+   `expectedRemainCents` 供两处用"。实测两件事挡路：① `marketing-admin` 不依赖任何业务模块，
+   那个"抽出来共用"跨不过去；② 真要跨，就得在 ④ 里重写一份 SQL 口径——正是这段要防的"两份公式"。
+   改成 `CacheConsistency` 契约 + 按 type 绑 gauge：判定长在 owning 模块（复用它 reheat 已在用的
+   那份算法），④ 只读 `marketing.cache.consistency{type}`。local/proxy 两种模式走同一条路，
+   也不需要跨库权限。代价是读数只有"不符几条"而没有逐键明细——逐键要么抄公式、要么给 owning
+   服务加后台可读端点（母版 §10 明列不做），都比少一个数贵。
+   连带把计划里新建的 `CacheKeys` 撤了：④ 不再读键形，它就没有第二个消费者（一处只服务自己的
+   间接层是净负担），三处服务回到自己原来的字面量。

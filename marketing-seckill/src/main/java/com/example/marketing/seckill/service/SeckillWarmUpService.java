@@ -3,6 +3,7 @@ package com.example.marketing.seckill.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.marketing.common.api.ErrorCode;
+import com.example.marketing.common.cache.CacheConsistency;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.seckill.config.SeckillProperties;
@@ -25,7 +26,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class SeckillWarmUpService implements CacheReheater {
+public class SeckillWarmUpService implements CacheReheater, CacheConsistency {
 
     private static final String STATUS_ONLINE = "ONLINE";
 
@@ -99,5 +100,41 @@ public class SeckillWarmUpService implements CacheReheater {
             throw BizException.of(ErrorCode.ACTIVITY_NOT_ONLINE, "活动已结束，拒绝重新开闸: " + activityNo);
         }
         return activity;
+    }
+
+    /** 自检抽样上限：每条要读 16 个桶 + 一次 DB，刻意小 */
+    static final int CONSISTENCY_SAMPLE = 5;
+
+    /**
+     * 抽样内"分桶余量合计 + 已售 != 总库存"的 ONLINE 活动数（与冒烟、复位脚本同一条恒等式）。
+     * 任一桶键缺失也算不符——那是要重做预热的信号，不是"余量为 0"。
+     *
+     * <p>-1 = 判定不了（Redis 不可达等）。把它报成 0 就是本段存在的理由所要防的那件事。</p>
+     */
+    @Override
+    public int mismatchCount() {
+        try {
+            List<SeckillActivityEntity> online = activityMapper.selectList(
+                    new LambdaQueryWrapper<SeckillActivityEntity>()
+                            .eq(SeckillActivityEntity::getStatus, STATUS_ONLINE)
+                            .last("LIMIT " + CONSISTENCY_SAMPLE));
+            int mismatch = 0;
+            for (SeckillActivityEntity activity : online) {
+                int buckets = bucketsOf(activity);
+                List<Long> current = stockService.currentBucketStocks(activity.getActivityNo(), buckets);
+                boolean missing = current.size() < buckets
+                        || current.stream().anyMatch(v -> v == null || v < 0);
+                long actual = current.stream()
+                        .filter(v -> v != null && v >= 0).mapToLong(Long::longValue).sum();
+                long expected = remainOf(activity.getTotalStock(), activity.getSoldStock());
+                if (missing || actual != expected) {
+                    mismatch++;
+                }
+            }
+            return mismatch;
+        } catch (RuntimeException e) {
+            log.warn("[seckill] 一致性自检判定不了: {}", e.toString());
+            return -1;
+        }
     }
 }

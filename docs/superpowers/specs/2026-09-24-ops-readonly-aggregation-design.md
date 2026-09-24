@@ -85,19 +85,22 @@ marketing-admin/src/main/java/com/example/marketing/admin/observe/
 秒杀：Σ(1..buckets 各桶余量) + sold_stock                        ==  seckill_activity.total_stock
 ```
 
-- 三处"缓存侧"取值**不重写一遍 Redis 读法**，也**不在 ④ 里抄一遍键形**：新建
-  `marketing-common/.../cache/CacheKeys.java`（先例就是 ⑤ 为解决同一问题立的 `common/transport/StreamKeys`），
-  三个纯函数由**业务服务与 ④ 共用**（`BudgetService:190`、`CouponStockService:105`、
-  `SeckillStockService:36-38` 三处改为调它，行为零变化）。
-  必须在 common 而不是"直接调业务模块的 public 方法"：`marketing-admin` 不依赖任何业务模块，
-  `SeckillStockService.keysOf(...)` 再 public 也跨不过模块边界。
-- 同理，预算的**期望值公式**只留一处：`BudgetService` 已有 `reheat` 里的那份（地雷 E 的修复），
-  抽成 `expectedRemainCents(no)` 供 reheat 与 ④ 同用 —— 两处公式就是下一个地雷。
-  代价是把 `reheat` 与 `CacheReheater` 的耦合保持下去，可接受。
-- 逐活动/逐模板算，限量：`ops.consistency.sample-size`（默认 20）+ 明确"这是抽样"。
-  全量扫会在 LITE 那台弱主机上把 Redis 打一圈 MGET。
-- 恒等式不成立时**不修**：输出 `MISMATCH` + 三个数，并给一句"可用 `POST /api/admin/cache/reheat`
-  修正"。④ 只读是它的价值前提；能改就变成第二个 ③。
+- **判定长在 owning 模块里，④ 只读它的读数**。原先设想的是"④ 自己按 `CacheKeys` 生成精确键做
+  MGET + 按 SQL 算期望值"，实施时否掉了：`marketing-admin` 不依赖任何业务模块（跨不过模块边界），
+  要在 ④ 里做就必须把三套公式各抄一份 SQL——**两份口径早晚分叉，而分叉的表现是自检说一切正常**。
+  最终形状：common 里一个 `CacheConsistency` 契约（与 `CacheReheater` 并列，`type()` 同名同源）+
+  `CacheConsistencyRegistry` 把它绑成 gauge `marketing.cache.consistency{type}`；
+  三个模块各自实现，复用的正是 `reheat` 已经在用的那一份权威算法
+  （`BudgetService.computeRemainCents`、`CouponTemplateService.remainOf`、`SeckillWarmUpService.planFor/remainOf`）。
+  ④ 无论 local 还是 proxy 模式都读同一个 gauge，不需要跨库权限、不需要新入站端点。
+- 读数是**每条不符计数**（0 / N / **-1=判定不了**），不是逐键明细。逐键明细要么靠抄公式、
+  要么靠给 owning 服务加后台可读端点（母版 §10 明列不做），两者都比"多一个数"贵。
+  运维要定位到具体键时，`POST /api/admin/cache/reheat` 是按键的、幂等的，直接修就是。
+- 抽样上限在各模块自己定（`CONSISTENCY_SAMPLE = 5`，注释写明"每条两次读"）：
+  自检的取值时刻是"有人来抓"（④ 读、或 Prometheus scrape），不是常驻轮询——
+  常驻会把 LITE 那台弱主机的空闲 CPU 吃在这件事上。
+- 恒等式不成立时**不修**：读数报 N，并给一句"可用 `POST /api/admin/cache/reheat` 修正"。
+  ④ 只读是它的价值前提；能改就变成第二个 ③。
 
 ### 4.4 进程存活与租约
 
