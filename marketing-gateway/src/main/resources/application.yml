@@ -66,6 +66,13 @@ spring:
           uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
           predicates:
             - Path=/api/admin/**
+        # ⑥ 的后台界面。与 admin-route 共用同一对占位符是刻意的：LITE 下 compose 把它们
+        # 指到 standalone:8085、FULL 进程档指到 127.0.0.1:8086、容器档指到 marketing-admin:8086，
+        # 单独写死一个地址就等于五套入口里总有一套打不开界面。
+        - id: ui-route
+          uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
+          predicates:
+            - Path=/ui/**
 
 marketing:
   # 在线配置的形态标识与轮询节拍由 common 的嵌套占位统一读 DEPLOY_FORM / CONFIG_POLL_SECONDS，
@@ -76,6 +83,9 @@ marketing:
       token: ${GATEWAY_TOKEN:demo-token-123}
     whitelist:
       - /actuator/**
+      # ⑥ 的静态资源。它们本身不含任何数据（真数据仍要 admin token），
+      # 不进白名单的后果是"打开后台得先有一个 C 端 demo token"——荒谬且难排查。
+      - /ui/**
     # 分层限流·网关层：按路由配置滑动窗口阈值（秒杀最严格，超限返回排队码）
     rate-limit:
       # 阈值随形态给（默认值即 FULL 口径）。LITE 单机实测异步排空约 110-140 msg/s/topic，
@@ -113,6 +123,11 @@ marketing:
         window-seconds: 1
       admin-seckill-route:
         limit: ${RL_ADMIN_SECKILL:50}
+        window-seconds: 1
+      # ⑥ 的界面。首屏十几个请求（js/css/字体），100/s 掐不到正常打开，
+      # 但挡住了"把后台 jar 当文件服务器刷"。不在 map 里 = 不限流且不报错。
+      ui-route:
+        limit: ${RL_UI:100}
         window-seconds: 1
 
     admin:
@@ -176,3 +191,8 @@ spring:
         - id: admin-route
           uri: lb://marketing-admin
           predicates: [ Path=/api/admin/** ]
+        # 与上面 local 段那条 ui-route 成对：漏这条，LITE 打开后台一切正常，
+        # 升到 FULL 就是整片 404（③ 已经为 admin-route 交过一次这个学费）。
+        - id: ui-route
+          uri: lb://marketing-admin
+          predicates: [ Path=/ui/** ]
