@@ -85,12 +85,15 @@ marketing-admin/src/main/java/com/example/marketing/admin/observe/
 秒杀：Σ(1..buckets 各桶余量) + sold_stock                        ==  seckill_activity.total_stock
 ```
 
-- 三处"缓存侧"取值**不重写一遍 Redis 读法**：抽 `CacheReheater` 已有的实现做不到（它返回的是
-  重算后的值，不是当前值），所以在 `marketing-common` 给 `CacheReheater` 加一个
-  `long current(String key)`？**不加**——那会把"只会重算"的接口撑成"还要会读"，三个实现各补一遍，
-  收益却只是省一次 `GET`。④ 用自己的只读探针（`ops` 包里一个 `CacheProbe`：MGET 精确键），
-  代价是"键形"在 ④ 与业务侧各有一份，**用一条单测钉住两处一致**（对每种缓存断言 ④ 生成的键
-  与业务服务实际写入的键逐个相等——键形漂移会红，这正是 ④ 自己最大的风险）。
+- 三处"缓存侧"取值**不重写一遍 Redis 读法**，也**不在 ④ 里抄一遍键形**：新建
+  `marketing-common/.../cache/CacheKeys.java`（先例就是 ⑤ 为解决同一问题立的 `common/transport/StreamKeys`），
+  三个纯函数由**业务服务与 ④ 共用**（`BudgetService:190`、`CouponStockService:105`、
+  `SeckillStockService:36-38` 三处改为调它，行为零变化）。
+  必须在 common 而不是"直接调业务模块的 public 方法"：`marketing-admin` 不依赖任何业务模块，
+  `SeckillStockService.keysOf(...)` 再 public 也跨不过模块边界。
+- 同理，预算的**期望值公式**只留一处：`BudgetService` 已有 `reheat` 里的那份（地雷 E 的修复），
+  抽成 `expectedRemainCents(no)` 供 reheat 与 ④ 同用 —— 两处公式就是下一个地雷。
+  代价是把 `reheat` 与 `CacheReheater` 的耦合保持下去，可接受。
 - 逐活动/逐模板算，限量：`ops.consistency.sample-size`（默认 20）+ 明确"这是抽样"。
   全量扫会在 LITE 那台弱主机上把 Redis 打一圈 MGET。
 - 恒等式不成立时**不修**：输出 `MISMATCH` + 三个数，并给一句"可用 `POST /api/admin/cache/reheat`
