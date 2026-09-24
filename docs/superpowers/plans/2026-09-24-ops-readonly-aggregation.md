@@ -219,7 +219,7 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
 - Test: `.../observe/BacklogStoreTest.java`（H2 `MODE=MySQL` 真 SQL）
 - Test: `.../observe/StreamDepthTest.java`（mock `StringRedisTemplate`）
 
-- [ ] **Step 1** `BacklogStoreTest` 先红，四条：
+- [x] **Step 1** `BacklogStoreTest` 先红，四条：
   ① 单库形态 `schemas()` 只回一个，且就是当前连接库（**先探 `CURRENT_SCHEMA()` 里有没有该表，
   有就不走 information_schema**——spec §7.5 省掉一次无谓的跨库权限依赖）；
   ② 每库的 `statusCounts()` 返回 `Map<String,Long>`，PENDING/SENT/CONFIRMED/FAILED 之外出现过的
@@ -228,7 +228,7 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
   做不到 → 改为**注入一个会抛的 JdbcTemplate 替身**）时，该库标 `UNKNOWN` + 原因，
   **其他库的值仍照常汇总**；
   ④ 没有任何库含该表 → 结果是空列表 + 一句原因，不是 0 条 PENDING。
-- [ ] **Step 2** SQL（口径抄 `LocalMessageService.java:99-103` 的判定，别另发明一套）：
+- [x] **Step 2** SQL（口径抄 `LocalMessageService.java:99-103` 的判定，别另发明一套）：
 
 ```java
 "SELECT status, COUNT(*) FROM " + schema + ".local_message GROUP BY status"
@@ -237,15 +237,16 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
 `schema` 只能来自 `SELECT DISTINCT table_schema FROM information_schema.tables WHERE table_name = 'local_message'`
 的结果集，**不接受任何外部输入**（拼表名进 SQL 是本段唯一可能的注入面，写死这条来源）。
 死信另取一条：`SELECT topic, biz_key, retry_count FROM <schema>.local_message WHERE status='FAILED' ORDER BY id LIMIT 5`。
-- [ ] **Step 3** `StreamDepth`：`XLEN` 用 `opsForStream().opsForXInfo`? 没有 ——
-  实际用 `execute(RedisCallback)` 走 `XLEN`/`XPENDING key group`（③ 的 T7/T8 已经用过 `execute` 的路子，
-  沿用它，别引新 API）。返回 `record StreamDepthView(String key, long len, long pending, boolean applicable, String note)`。
-  topic 键从 `RedisStreamEventPublisher.STREAM_KEY_PREFIX` 与 `MqTopics` 常量拼，**不写字面量**；
-  `MQ_TYPE=rocketmq` 时（读 `marketing.mq.type` 属性即可）两条 `MKT_STREAM_*` 直接
-  `applicable=false` + note 写"本形态走 RocketMQ，broker 队列深度客户端读不到"。
-- [ ] **Step 4** 变异检查两处：① 跨库失败被吞成 0 → ③ 号断言必红；② `NOT_APPLICABLE` 被并成 0 →
-  ④ 号断言必红。
-- [ ] **Step 5** 提交：`feat(ops): ④ 积压读数（local_message 跨库探测 + Stream 深度，不可见不填 0）`
+- [x] **Step 3** `StreamDepth`：没有 `opsForXInfo` 这种 API，实际走
+  `redis.execute(RedisCallback)` 上的 `conn.xLen(byte[])` 与
+  `conn.xPending(byte[], String group)`（返回 `PendingMessagesSummary`，注意它**不是**
+  `PendingMessages` 的嵌套类，组名是 `String` 而不是 byte[]）。
+  topic 键从 `RedisStreamEventPublisher.streamKey(topic)` 与 `MqTopics` 常量拼，**不写字面量**；
+  `redisStreamChannel=false` 时两条 `MKT_STREAM_*` 直接 `applicable=false` + note
+  "本形态走 RocketMQ，broker 队列深度客户端读不到"。
+- [x] **Step 4** 变异检查四处（① 跨库失败被报成 0；② 表名比较不再忽略大小写；
+  ③ RocketMQ 通道填 0；④ XLEN 读失败被当成 0）——四条全 CAUGHT。
+- [x] **Step 5** 提交：`feat(ops): ④ 积压读数（local_message 跨库探测 + Stream 深度，不可见不填 0）`
 
 ---
 
@@ -406,6 +407,7 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 | T1 | `MetricSample`/`ParseResult`、`PrometheusTextParser`（`_total`、派生线白名单后缀、引号内逗号与 `}`、坏行计数、摘 `application`）、`ScrapeException`、`MetricSource`、`LocalMeterSource`（复用 `PrometheusMeterRegistry.scrape()` 走同一个解析器） | 16 | admin 模块 54 用例全绿（原 38）；变异检查四处全咬：去 `_total`、坏行改抛异常、派生后缀不校验、不摘 `application` |
 | T2 | `TargetRef` + `OpsTargets`（正面清单：host 正则 + 七个端口 + 名称形状 + 启动期整表校验点名错项）、`ProxyMeterSource`（JDK HttpClient、1s 超时、256KB 超限即抛、非 2xx 带状态码、3xx 不跟） | 12 | admin 模块 66 用例全绿；变异检查四处全咬（跟重定向 / 端口不设限 / 超限静默截断 / host 正则收所有）；重定向断言是"目标 handler 被调 0 次"，不是只看状态码 |
 | T3 | `OpsProperties`（mode 取值与抽样数在启动期校验）、`OpsObservabilityConfig`（proxy/local 二选一 + 空清单拒启动）、admin yml 六个 target、standalone yml 覆成 `local` + 只有 `self`、full-app compose 给 admin 下发 `OPS_T_*` | 6 | 全仓 **306 用例 / 64 类** 绿；真起 LITE 栈（deploy-preview exit 0、standalone 100s 起）+ 冒烟 81/81；变异三处全咬（去掉空清单闸、把 matchIfMissing 挪到 local、去掉 mode 校验） |
+| T4 | `BacklogStore`（information_schema 发现含该表的库、逐库 group by、单库失败只污这一行）、`SchemaBacklog`、`StreamDepth`（两个业务 topic + 审计总线 + 按 type 的重预热总线；RocketMQ 通道标不可见） | 13 | admin 模块 85 用例全绿；变异四处全咬（跨库失败报 0、去掉大小写宽容、RocketMQ 填 0、XLEN 失败当 0）。其中"去掉 LOWER() 宽容"这条是**真 bug 被抓出来后补的**：H2 把标识符存成大写，第一版发现 0 个库 |
 
 ## 落地时对计划的修正
 
@@ -437,3 +439,11 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
    跑一次复位（`4848 + 152 == 5000`）后冒烟 81/81。**这条红不是回归，是环境状态**，
    但它是 ④ T5 最好的动机：这个漂移现在只能靠冒烟撞上来，做完之后 `GET /api/admin/ops`
    会在被人看见之前就先被说出来。
+7. **spec §7.5 那条"先探 CURRENT_SCHEMA 再跨库"的优化被删了**，实施时判断它站不住：
+   `information_schema` 不需要额外授权（MySQL 本来就把它对连接可见，且只显示有权限的库），
+   所以省不掉什么；反而 `DATABASE()` / `CURRENT_SCHEMA()` 两种写法在 H2 与 MySQL 之间不一致，
+   为省一条查询引入一个跨库方言分叉是净亏。现在是一条 `information_schema` 查询覆盖两种形态。
+8. **标识符大小写是这段的第一个真 bug**：第一版 `WHERE table_name = ?` 在 H2 上返回 0 个库
+   （H2 把非引号标识符存成大写），表现正是本段要防的那个"看不见被报成没有"。
+   修法是比较两侧都 `LOWER()`，并把它做成一条变异检查（去掉宽容必须变红）。
+   另外 `StreamDepth` 不标 `@Component`：它的构造要 boolean 与 List，交给组件扫描会在启动期炸。
