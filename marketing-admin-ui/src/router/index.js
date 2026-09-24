@@ -1,52 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useSession } from '@/stores/session'
-import AppLayout from '@/AppLayout.vue'
-import LoginView from '@/views/LoginView.vue'
-import OpsView from '@/views/OpsView.vue'
-import ConfigView from '@/views/ConfigView.vue'
-import ActivitiesView from '@/views/ActivitiesView.vue'
-import CouponsView from '@/views/CouponsView.vue'
-import RulesView from '@/views/RulesView.vue'
-import SeckillView from '@/views/SeckillView.vue'
-import CacheView from '@/views/CacheView.vue'
-import UsersView from '@/views/UsersView.vue'
-import SessionsView from '@/views/SessionsView.vue'
-import AuditsView from '@/views/AuditsView.vue'
+import { buildRoutes } from './routes'
 
-/**
- * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T6 配置、T7 活动…）。
- *
- * <p>基座用 history，所以 {@code /ui/audits} 直接刷新也要能开——回退由 admin 侧的
- * {@code UiWebMvcConfig} 负责，网关只按 {@code /ui/**} 转发，不懂前端路由。</p>
- *
- * <p>落地页是运维大盘：它是只读的，误进来不会改到任何东西。</p>
- */
-const routes = [
-  { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
-  {
-    path: '/',
-    component: AppLayout,
-    children: [
-      { path: '', name: 'ops', component: OpsView },
-      { path: 'config', name: 'config', component: ConfigView },
-      { path: 'activities', name: 'activities', component: ActivitiesView },
-      { path: 'coupons', name: 'coupons', component: CouponsView },
-      { path: 'rules', name: 'rules', component: RulesView },
-      { path: 'seckill', name: 'seckill', component: SeckillView },
-      {
-        path: 'cache',
-        name: 'cache',
-        component: CacheView,
-        meta: { roles: ['admin', 'operator'] },
-      },
-      { path: 'users', name: 'users', component: UsersView },
-      { path: 'sessions', name: 'sessions', component: SessionsView },
-      { path: 'audits', name: 'audits', component: AuditsView },
-    ],
-  },
-]
-
-const router = createRouter({ history: createWebHistory('/ui/'), routes })
+const router = createRouter({ history: createWebHistory('/ui/'), routes: buildRoutes() })
 
 /**
  * 守卫只做两件事：没凭证去登录、身份没取过去取一次。

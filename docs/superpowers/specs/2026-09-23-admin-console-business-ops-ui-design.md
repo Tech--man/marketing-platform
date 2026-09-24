@@ -225,7 +225,7 @@ nacos 配置中心、refresh token / OAuth2 / SSO / LDAP、RBAC 角色表与权�
 ③ `2026-09-23-admin-business-console-design.md`（**已实施**，偏离见 §13；含对本文件 §6.0 身份件形状、
 §6.2 审计载荷、§6.3 重预热回执与 ⑤ §4 的修改，理由在那份里）。
 
-## 13. 实施偏离（⑤③④ 落地时确认，已回写）
+## 13. 实施偏离（⑤③④⑥ 落地时确认，已回写）
 
 ⑤ 的段内 spec 是 `2026-09-23-online-config-delivery-design.md`（含完整理由与实测证据），这里只留摘要：
 
@@ -307,3 +307,31 @@ nacos 配置中心、refresh token / OAuth2 / SSO / LDAP、RBAC 角色表与权�
     看不见这种失败）；`StreamDepth` 刻意**不是**组件扫描出来的 bean——它要知道"本形态走哪条通道"
     与"本进程注册了哪些 reheat type"，这两件事只有装配层知道，所以显式 `@Bean` 喂进去，
     通道判据直接复用 `marketing.mq.type` 这个属性本身而不是新加一个 ④ 专属开关。
+### ⑥ 独立 SPA
+
+⑥ 的段内 spec 是 `2026-09-24-admin-spa-ui-design.md`（含母版 §8 的逐条重验结果），这里只留摘要：
+
+1. **§8 说"静态资源放 admin classpath 不等于能访问"的因果写反了**：拦住的不是 `AdminAuthFilter`
+   ——那个 filter 在**网关**里（不在 admin），且它**验签**、剥 `Authorization`、注入 `X-Admin-*`。
+   真正会拦住 `/ui/**` 的是网关 `AuthFilter` 的"非白名单一律要 C 端 token"。后果一样（要加白名单），
+   但改的地方完全不同；照原文去 admin 里找是找不到的。
+2. **界面拿不到身份**：正因为鉴权在网关，`/ui/**` 是匿名静态资源，前端**没有**任何网关注入的身份头可读，
+   "我是谁/什么角色"必须调 `GET /api/admin/auth/me`。母版没提这一条。
+3. **缓存头只能有一个主人**：`ResourceHandlerRegistry.setCacheControl(...)` 会在 handler 里再写一次
+   `Cache-Control`，把 filter 给指纹资源设的 `immutable` 覆盖成 `no-store`。落地时把它去掉了，
+   缓存头由一个只作用于 `/ui/*` 的 filter 独占。
+4. **`/ui` 与 `/ui/` 到不了 resolver**：`ResourceHttpRequestHandler.processPath` 对空路径直接判 404；
+   而修掉之后 `createRelative("")` 返回的是 `ui/` 这个**目录**，`exists()` 为真于是被当资源返回，
+   还是 404。最后用 `addViewController("/ui","/ui/")` 显式 forward 到 `index.html`。
+   纯函数单测两次都是绿的——**红的全在接线**，这就是"必须真起进程"的理由。
+5. **`ui-route` 必须同时补 ⑤ 的 `ConfigDefinition` 声明**：⑤ 的 `GatewayConfigDefinitionsTest`
+   比对 yml 的 rate-limit map 与声明清单，多一条少一条都红。母版与段内 spec 都以为"本段不新增声明"。
+6. **`marketing-admin-ui` 需要第二套测试运行时（vitest）**：前端逻辑（三码分处、不许自动重放、
+   导航⇄路由配对）不可能靠 Java 侧断言，而"没有 CI"又不允许把 node 挂进 maven。
+   所以 dist 入仓 + 三道闸，逻辑正确性由 vitest 管，产物自洽由 `mvn test` 里的 `UiDistIntegrityTest` 管。
+7. **按需引入必须真的按需**：第一版照常规写法全局 `use(ElementPlus)` + 引整包 CSS，dist 1388 KiB；
+   改成 unplugin 解析器 + 只手动引 `ElMessage/ElMessageBox` 的样式后 **144 KiB**（gzip 约 42KB）。
+   这份 dist 进的是常态服役档那个 jar，10 倍差值得这一趟返工。
+8. **Maven 的资源拷贝不删旧文件**：`target/classes/static/ui` 会攒下历次构建的 `assets/*`，
+   jar 里因此躺着仓库已经没有的产物——`check-ui-dist.sh` 第一次跑就抓到。修在 `build-ui.sh`：
+   构建后清掉那个目录（同一个工具既写 dist 也负责清它的陈旧副本）。

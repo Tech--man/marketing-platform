@@ -636,6 +636,31 @@ fi
 # ⑤ 链路 5 制造过 429，这里要求那份拒绝数真的能从网关进程读到（母版事实 #2 的正面证据）
 expect "网关的限流拒绝数带 route 维度进了面板" 'gateway.rate.limit.rejected' "$(cat "$OPS")"
 
+head2 "链路 8：后台界面（加了界面 ≠ 加了口子；缓存头错了会让人跑到旧索引上）"
+# 静态资源本身不含数据，所以这三条各管一种"错了也不响"的事故：
+#   ① 打不开 = ui-route/白名单没配对；② 索引可缓存 = 升级后旧索引配新指纹，白屏；
+#   ③ 后台数据接口仍然要凭证 = 加界面没顺手开一个读数据的旁路。
+UIIDX=/tmp/mkt-smoke-ui.html
+R=$(curl -s -m 15 -o "$UIIDX" -w '%{http_code}' "$GW/ui/")
+[ "$R" = "200" ] && ok "后台首页可打开（200，不带任何 token）" \
+  || bad "后台首页 HTTP $R：ui-route 或白名单没配对" "$(head -c 200 "$UIIDX")"
+expect "索引页 no-store（缓存了它就会拿旧索引去要新指纹）" \
+  'cache-control: no-store' "$(curl -sI -m 15 "$GW/ui/" | tr -d '\r' | tr 'A-Z' 'a-z')"
+# 深链必须回退到索引页：history 路由直接刷新 /ui/audits 不能 404
+expect "深链回退到索引页（history 路由直接刷新才打得开）" \
+  '<div id="app">' "$(curl -s -m 15 "$GW/ui/audits")"
+ASSET=$(grep -o '/ui/assets/[^"]*\.js' "$UIIDX" | head -1)
+if [ -z "$ASSET" ]; then
+  bad "索引页里没有指纹脚本引用（界面是空壳，或 vite 的 base 漂了）" ""
+else
+  expect "指纹资源给一年 immutable" 'cache-control: public, max-age=31536000, immutable' \
+    "$(curl -sI -m 15 "$GW$ASSET" | tr -d '\r' | tr 'A-Z' 'a-z')"
+fi
+expect "缺文件就是 404，不许回退成一份 HTML（否则浏览器只报模块加载失败）" \
+  '^HTTP/[0-9.]* 404' "$(curl -sI -m 15 --path-as-is "$GW/ui/definitely-not-here.js" | tr -d '\r')"
+expect "界面不给数据开旁路：无凭证打后台读接口仍是 40100" '"code":40100' \
+  "$(curl -s -m 15 "$GW/api/admin/users")"
+
 head2 "收尾：清理在线配置、登出与会话吊销（链路 5 之后才做，全脚本只登录这几次）"
 # 清理放在登出之前：登出之后 ADMIN_TOKEN 就作废了，trap 里再删只会静默失败
 config_cleanup
