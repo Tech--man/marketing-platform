@@ -29,6 +29,18 @@ if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
   exit 1
 fi
 
+# 本机进程形态还在跑时同样拒绝：macOS 上容器把 8090 发布出去并不报错（OrbStack 走 VM 转发），
+# 于是冒烟实际打到宿主机那套 JVM 上——形态记成"容器"、测的却是"进程"，五形态那张表整列作废
+# （复跑时踩过一次，靠 lsof 对端口才发现）。
+for pid_file in run/*.pid; do
+  [ -e "$pid_file" ] || continue
+  pid=$(cat "$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "!! 本机进程形态还在跑（$(basename "$pid_file" .pid) pid $pid），先执行 ./scripts/stop-all.sh" >&2
+    exit 1
+  fi
+done
+
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   echo "==> mvn package（全部模块）"
   mvn -q -DskipTests package

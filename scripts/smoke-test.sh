@@ -75,6 +75,36 @@ poll() { # url needle max_seconds
   echo "$body"; return 1
 }
 
+# 重预热并等它真的落地。LITE 的 owning 服务就在本进程里，同步返回 DONE；
+# FULL 是投给 owning 服务（DISPATCHED），回执最快也要一个消费轮询才回来。
+# 不等这一手就去读面板，会把"跨进程投递要几秒"误判成"③ 修不动 / ④ 看不见"
+# ——FULL 档实测就是这样红的，而两处读数其实都对。判据取自响应自己的 status，
+# 不看形态也不猜环境变量。
+reheat_wait() { # type key → 打印最终回执
+  local r rid
+  r=$(curl -s -m 10 -X POST -H "$AAUTH" \
+      "$GW/api/admin/cache/reheat?type=$1&key=$2&force=true")
+  echo "$r" | grep -q '"status":"DONE"' && { echo "$r"; return 0; }
+  rid=$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  # 拿不到 id 就是压根没投递成功（41010 那一类），再轮询 30 秒也只是浪费时间
+  [ -z "$rid" ] && { echo "$r"; return 1; }
+  for _ in $(seq 1 15); do
+    r=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/cache/reheat/ack?type=$1&id=$rid")
+    echo "$r" | grep -q '"status":"DONE"' && { echo "$r"; return 0; }
+    sleep 2
+  done
+  echo "$r"; return 1
+}
+
+# 从最后一次抓回的面板里取某个类型的不符条数（读不出返回空，调用方必须判空——
+# 空串参与数值比较会当成 0，那就又是一条静默的绿）。
+ops_mismatch() { # type
+  python3 -c "
+import json
+d = json.load(open('$OPS'))['data']['consistency']
+print(next((r['mismatch'] for r in d if r['type'] == '$1'), ''))" 2>/dev/null
+}
+
 ADM="Authorization: Bearer"
 # ③：后台登录上移到全脚本开头。链路 0 的"创建活动/状态流转"本来就是配置类写，
 # 现在搬到 /api/admin/activities 之后，链路 0 也需要后台 token 了。
@@ -520,6 +550,91 @@ expect "同一发直连请求带合法 token 时身份放行（拒的是凭证�
 # 结果这条路径的红只能被部署探针抓到（修正 #31）
 expect "后台规则列表可读（③ 之后 discount 唯一的 GET）" '"code":0' \
   "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/discount/rules?page=1&size=3")"
+
+head2 "链路 7：运维只读聚合（同式对拍积压 → 不可见不许填 0 → 恒等式能看见也能修好）"
+OPS=/tmp/mkt-smoke-ops.json
+R=$(curl -s -m 25 -H "$AAUTH" "$GW/api/admin/ops" -o "$OPS" -w '%{http_code}')
+[ "$R" = "200" ] && ok "运维总览可读了（200）" || bad "运维总览 HTTP $R" "$(head -c 200 "$OPS")"
+# ① 面板必须自报"这次读的是谁"：local 与 proxy 在 LITE 下是并存的（网关永远是独立进程）
+expect "总览自报指标源与逐 target 路径" '"source":"\(local\|proxy\)"' "$(cat "$OPS")"
+# ② 同式对拍：④ 报的未排空条数必须等于脚本自己按同一口径直连 MySQL 查出来的和。
+#    断言它等于 0 是假信号（跑起来就有 in-flight），断言"两处相等"才是真信号。
+#    库名来自 information_schema（与 ④ 同一发现路径），逐库拼限定名求和。
+TOTAL=0; SCHEMA_HITS=0
+for sch in $(mysql_admin -N -e "
+  SELECT DISTINCT table_schema FROM information_schema.tables
+   WHERE LOWER(table_name)='local_message'
+     AND LOWER(table_schema) NOT IN ('information_schema','mysql','performance_schema','sys')" \
+     2>/dev/null | tr -d '\r'); do
+  n=$(mysql_admin -N -e "SELECT COUNT(*) FROM \`${sch}\`.local_message WHERE status IN ('PENDING','SENT')" \
+        2>/dev/null | tr -d '\r')
+  TOTAL=$((TOTAL + ${n:-0})); SCHEMA_HITS=$((SCHEMA_HITS + 1))
+done
+if [ "$SCHEMA_HITS" = "0" ]; then
+  bad "对拍没跑成：一条 SQL 都没查到（④ 的积压读数没被验过）" "schemas=0"
+else
+  OPS_PENDING=$(python3 -c "import json;print(json.load(open('$OPS'))['data']['backlog']['totalPendingSent'])" 2>/dev/null || echo "?")
+  [ "$OPS_PENDING" = "$TOTAL" ] \
+    && ok "④ 的未排空合计与直连 SQL 同式相等（$TOTAL）" \
+    || bad "两处读数不一致：④=$OPS_PENDING 直查=$TOTAL" "见 $OPS"
+fi
+# ③ 通道差异按形态分岔（判据读面板自己说的，不猜环境变量）：
+#    聚合档（LITE/dev，消息走 Redis Stream）有值；分进程档（FULL）显式 NOT_APPLICABLE
+if [ "$HAS_BUDGET_REHEATER" -ge 1 ]; then
+  expect "聚合档下 Stream 通道深度可读（不是空数组）" '"key":"MKT_STREAM_' "$(cat "$OPS")"
+else
+  expect "分进程档下 Stream 深度显式标不可见，不填 0" 'RocketMQ' "$(cat "$OPS")"
+fi
+# ④ 恒等式：④ 只读，所以先把缓存改错（不碰 DB），看它能不能说出来；再用 ③ 的重预热修回去。
+#    这一条同时验了"发现"与"修"两端，也钉住 ④ 不许自己动手改数据。
+#    改错必须挑 ④ 真在读的那 5 条：判定是 `ORDER BY id LIMIT 5` 的抽样，链路 0 新建的
+#    $ACT_NO id 最大、根本不在样本里（实测这样红过一次——面板是对的，断言在验一个没人看的活动）。
+SAMPLE_NO=$(mysql_admin -N -e "SELECT activity_no FROM ${MYSQL_DB:-marketing}.activity ORDER BY id LIMIT 1" \
+             2>/dev/null | tr -d '\r' | head -1)
+if [ -z "$SAMPLE_NO" ]; then
+  bad "取不到抽样活动号，恒等式这一条没跑成" "SAMPLE_NO 为空"
+else
+  # 动手前先把自己要碰的那条预热成一致：换库布局时抽样里本来就带着上一布局的缓存漂移
+  # （每服务一库档实测开局 budget=2 / coupon=1 / seckill=1，④ 报得没错，那是布局切换的账，
+  # 不是本次 SET 的账）。只归零本条，其余不符项由下面的基线吸收，断言才不被环境噪声左右。
+  if reheat_wait budget "$SAMPLE_NO" >/dev/null; then
+    curl -s -m 25 -H "$AAUTH" "$GW/api/admin/ops" -o "$OPS"
+    BASE=$(ops_mismatch budget)
+    if [ -z "$BASE" ]; then
+      bad "面板读不出 budget 的不符条数（后面两条无从比对）" "$(head -c 200 "$OPS")"
+    else
+      ok "面板基线可读：本档 budget 抽样内有 $BASE 条不符"
+      # 999999999999 分 = 百亿级，任何真实预算都不可能等于它，
+      # 所以条数一旦上涨，涨的那一条只可能是这个值造成的。
+      redis_admin SET "activity:budget:$SAMPLE_NO" 999999999999 >/dev/null
+      sleep 2; curl -s -m 25 -H "$AAUTH" "$GW/api/admin/ops" -o "$OPS"
+      BROKE=$(ops_mismatch budget)
+      if [ -n "$BROKE" ] && [ "$BROKE" -gt "$BASE" ]; then
+        ok "缓存被改错后面板的不符条数涨了（$BASE → $BROKE，不是安静地显示 0）"
+      else
+        bad "改错缓存后面板没反应：期望大于 $BASE，实际 $BROKE" "$(head -c 300 "$OPS")"
+      fi
+      # 再要求它回到基线：只认"回落到不超过基线"，因为别的抽样项可能被定时任务改动，
+      # 钉死等于 BASE 会把环境噪声变成红。
+      RH=$(reheat_wait budget "$SAMPLE_NO")
+      if echo "$RH" | grep -q '"status":"DONE"'; then
+        curl -s -m 25 -H "$AAUTH" "$GW/api/admin/ops" -o "$OPS"
+        FIXED=$(ops_mismatch budget)
+        if [ -n "$FIXED" ] && [ "$FIXED" -le "$BASE" ]; then
+          ok "重预热后面板回落到基线（$BROKE → $FIXED，④ 只读、③ 才修，这条线是通的）"
+        else
+          bad "重预热落了但面板没回落：期望 ≤$BASE，实际 $FIXED" "$(head -c 300 "$OPS")"
+        fi
+      else
+        bad "重预热 30s 内没落地，面板这一条无从判（先查 owning 服务的消费组在不在）" "$RH"
+      fi
+    fi
+  else
+    bad "预热基线失败：本条 budget 缓存没法归零，恒等式这一条没跑成" ""
+  fi
+fi
+# ⑤ 链路 5 制造过 429，这里要求那份拒绝数真的能从网关进程读到（母版事实 #2 的正面证据）
+expect "网关的限流拒绝数带 route 维度进了面板" 'gateway.rate.limit.rejected' "$(cat "$OPS")"
 
 head2 "收尾：清理在线配置、登出与会话吊销（链路 5 之后才做，全脚本只登录这几次）"
 # 清理放在登出之前：登出之后 ADMIN_TOKEN 就作废了，trap 里再删只会静默失败
