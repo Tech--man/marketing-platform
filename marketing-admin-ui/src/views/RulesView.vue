@@ -3,6 +3,11 @@ import { ref } from 'vue'
 import { api } from '@/api/client'
 import { useSession } from '@/stores/session'
 import PagedTable from '@/components/PagedTable.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import Panel from '@/components/Panel.vue'
+import Field from '@/components/Field.vue'
+import Button from '@/components/Button.vue'
+import StatusPill from '@/components/StatusPill.vue'
 
 /**
  * 优惠规则页（③）。只有**一条**写端点：`POST /api/admin/discount/rules` 是整条 upsert，
@@ -21,9 +26,9 @@ const columns = [
   { prop: 'activityNo', label: '活动' },
   { prop: 'ruleType', label: '类型' },
   { prop: 'mutexGroup', label: '互斥组' },
-  { prop: 'priority', label: '优先级' },
-  { prop: 'status', label: '状态' },
-  { prop: 'version', label: '版本' },
+  { prop: 'priority', label: '优先级', numeric: true },
+  { prop: 'status', label: '状态', slot: 'status' },
+  { prop: 'version', label: '版本', numeric: true },
   { prop: 'actions', label: '动作', slot: 'actions', width: '12rem' },
 ]
 
@@ -111,116 +116,74 @@ async function toggleStatus(row) {
 </script>
 
 <template>
-  <main>
-    <header>
-      <h1>优惠规则</h1>
-      <p v-if="!s.canWrite" class="hint">当前角色只读：写动作在后端也会被拒（40300）。</p>
-    </header>
+  <main class="stack">
+    <PageHeader title="优惠规则">
+      <template #desc>
+        <p v-if="!s.canWrite" class="muted">当前角色只读：写动作在后端也会被拒（40300）。</p>
+      </template>
+    </PageHeader>
+
     <p v-if="notice" :class="notice.includes('被拒') || notice.includes('解析') ? 'warn' : 'ok'" data-testid="notice">
       {{ notice }}
     </p>
 
-    <PagedTable ref="table" endpoint="/api/admin/discount/rules" :columns="columns">
-      <template #actions="{ row }">
-        <button type="button" data-act="edit" :disabled="!s.canWrite" @click="open(row)">
-          编辑
-        </button>
-        <button
-          type="button"
-          data-act="toggle-status"
-          :disabled="!s.canWrite"
-          @click="toggleStatus(row)"
-        >
-          {{ row.status === 'ENABLED' ? '停用' : '启用' }}
-        </button>
-      </template>
-    </PagedTable>
+    <Panel flush>
+      <PagedTable ref="table" endpoint="/api/admin/discount/rules" :columns="columns">
+        <template #status="{ value }">
+          <StatusPill :tone="value === 'ENABLED' ? 'success' : 'neutral'">{{ value }}</StatusPill>
+        </template>
+        <template #actions="{ row }">
+          <Button size="sm" data-act="edit" :disabled="!s.canWrite" @click="open(row)">编辑</Button>
+          <Button
+            size="sm"
+            variant="accent-ghost"
+            data-act="toggle-status"
+            :disabled="!s.canWrite"
+            @click="toggleStatus(row)"
+          >
+            {{ row.status === 'ENABLED' ? '停用' : '启用' }}
+          </Button>
+        </template>
+      </PagedTable>
+    </Panel>
 
     <section v-if="editor" class="drawer">
-      <h2>编辑规则：{{ form.ruleNo }}</h2>
-      <div class="grid">
-        <label>名称<input v-model="form.name" data-field="name" /></label>
-        <label>活动号<input v-model="form.activityNo" data-field="activityNo" /></label>
-        <label>类型<input v-model="form.type" data-field="type" disabled /></label>
-        <label>互斥组<input v-model="form.mutexGroup" data-field="mutexGroup" /></label>
-        <label>优先级<input v-model="form.priority" data-field="priority" /></label>
-        <label>
-          状态
-          <select v-model="form.status" data-field="status">
+      <div class="drawer__head"><h2 class="drawer__title">编辑规则：{{ form.ruleNo }}</h2></div>
+      <div class="form-grid">
+        <Field label="名称"><input v-model="form.name" class="input" data-field="name" /></Field>
+        <Field label="活动号"><input v-model="form.activityNo" class="input" data-field="activityNo" /></Field>
+        <Field label="类型"><input v-model="form.type" class="input" data-field="type" disabled /></Field>
+        <Field label="互斥组"><input v-model="form.mutexGroup" class="input" data-field="mutexGroup" /></Field>
+        <Field label="优先级"><input v-model="form.priority" class="input" data-field="priority" /></Field>
+        <Field label="状态">
+          <select v-model="form.status" class="select" data-field="status">
             <option value="ENABLED">ENABLED</option>
             <option value="DISABLED">DISABLED</option>
           </select>
-        </label>
+        </Field>
       </div>
-      <label class="json">
-        规则 DSL（JSON，整条 upsert 会把它一起写回）
-        <textarea v-model="form.ruleJson" data-field="ruleJson" rows="8" spellcheck="false" />
-      </label>
+      <Field label="规则 DSL（JSON，整条 upsert 会把它一起写回）" class="drawer__json">
+        <textarea v-model="form.ruleJson" class="textarea" data-field="ruleJson" rows="8" spellcheck="false" />
+      </Field>
       <p class="hint">
         改完<b>不能只改状态</b>：这一条端点是整条覆盖，所以界面会把上面这份 DSL 一并带回。
       </p>
-      <p>
-        <button type="button" data-act="save" @click="save()">保存</button>
-        <button type="button" @click="editor = null">取消</button>
-      </p>
+      <div class="drawer__foot">
+        <Button variant="primary" data-act="save" @click="save()">保存</Button>
+        <Button variant="ghost" @click="editor = null">取消</Button>
+      </div>
     </section>
   </main>
 </template>
 
 <style scoped>
-h1 {
-  margin-top: 0;
-}
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 13px;
-}
-th,
-td {
-  border-bottom: 1px solid #ebeef5;
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-}
-.drawer {
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin-top: 1rem;
-}
-.grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-}
-label {
-  display: grid;
-  gap: 0.2rem;
-  font-size: 13px;
-}
-.json {
-  margin-top: 0.6rem;
-}
-textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-button {
-  font: inherit;
-  margin-right: 0.35rem;
-}
-.hint,
-.ok,
-.warn {
-  font-size: 13px;
+.drawer__json {
+  margin-top: var(--space-3);
 }
 .hint {
-  color: #909399;
-}
-.ok {
-  color: #67c23a;
-}
-.warn {
-  color: #f56c6c;
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  margin-top: var(--space-3);
 }
 </style>

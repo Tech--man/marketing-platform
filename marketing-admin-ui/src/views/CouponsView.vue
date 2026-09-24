@@ -3,6 +3,11 @@ import { ref } from 'vue'
 import { api } from '@/api/client'
 import { useSession } from '@/stores/session'
 import PagedTable from '@/components/PagedTable.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import Panel from '@/components/Panel.vue'
+import Field from '@/components/Field.vue'
+import Button from '@/components/Button.vue'
+import StatusPill from '@/components/StatusPill.vue'
 
 /**
  * 券模板页（③）。端点是 `/api/admin/coupon/templates`，与活动的 `/api/admin/activities`
@@ -18,13 +23,13 @@ const columns = [
   { prop: 'templateNo', label: '模板号' },
   { prop: 'name', label: '名称' },
   { prop: 'couponType', label: '类型' },
-  { prop: 'faceValue', label: '面额' },
-  { prop: 'thresholdAmount', label: '门槛' },
-  { prop: 'totalStock', label: '总库存' },
-  { prop: 'perUserLimit', label: '每人限领' },
-  { prop: 'validDays', label: '有效天数' },
-  { prop: 'status', label: '状态' },
-  { prop: 'version', label: '版本' },
+  { prop: 'faceValue', label: '面额', numeric: true },
+  { prop: 'thresholdAmount', label: '门槛', numeric: true },
+  { prop: 'totalStock', label: '总库存', numeric: true },
+  { prop: 'perUserLimit', label: '每人限领', numeric: true },
+  { prop: 'validDays', label: '有效天数', numeric: true },
+  { prop: 'status', label: '状态', slot: 'status' },
+  { prop: 'version', label: '版本', numeric: true },
   { prop: 'actions', label: '动作', slot: 'actions', width: '12rem' },
 ]
 
@@ -70,90 +75,53 @@ async function toggleStatus(row) {
 </script>
 
 <template>
-  <main>
-    <header>
-      <h1>券模板</h1>
-      <p v-if="!s.canWrite" class="hint">当前角色只读：写动作在后端也会被拒（40300）。</p>
-    </header>
+  <main class="stack">
+    <PageHeader title="券模板">
+      <template #desc>
+        <p v-if="!s.canWrite" class="muted">当前角色只读：写动作在后端也会被拒（40300）。</p>
+      </template>
+    </PageHeader>
+
     <p v-if="notice" :class="notice.includes('被拒') ? 'warn' : 'ok'" data-testid="notice">
       {{ notice }}
     </p>
 
-    <PagedTable ref="table" endpoint="/api/admin/coupon/templates" :columns="columns">
-      <template #actions="{ row }">
-        <button type="button" data-act="edit-stock" :disabled="!s.canWrite" @click="openStock(row)">
-          改库存
-        </button>
-        <button
-          type="button"
-          data-act="toggle-status"
-          :disabled="!s.canWrite"
-          @click="toggleStatus(row)"
-        >
-          {{ row.status === 'ACTIVE' ? '下线' : '上线' }}
-        </button>
-      </template>
-    </PagedTable>
+    <Panel flush>
+      <PagedTable ref="table" endpoint="/api/admin/coupon/templates" :columns="columns">
+        <template #status="{ value }">
+          <StatusPill :tone="value === 'ACTIVE' ? 'success' : 'neutral'">{{ value }}</StatusPill>
+        </template>
+        <template #actions="{ row }">
+          <Button size="sm" data-act="edit-stock" :disabled="!s.canWrite" @click="openStock(row)">
+            改库存
+          </Button>
+          <Button
+            size="sm"
+            variant="accent-ghost"
+            data-act="toggle-status"
+            :disabled="!s.canWrite"
+            @click="toggleStatus(row)"
+          >
+            {{ row.status === 'ACTIVE' ? '下线' : '上线' }}
+          </Button>
+        </template>
+      </PagedTable>
+    </Panel>
 
     <section v-if="editor" class="drawer">
-      <h2>改总库存：{{ editor.row.templateNo }}</h2>
-      <label>
-        总库存
-        <input v-model="form.totalStock" data-field="totalStock" />
-      </label>
+      <div class="drawer__head"><h2 class="drawer__title">改总库存：{{ editor.row.templateNo }}</h2></div>
+      <div class="form-grid">
+        <Field label="总库存">
+          <input v-model="form.totalStock" class="input" data-field="totalStock" />
+        </Field>
+      </div>
       <p class="hint">
         低于<b>已发放数量</b>会被写侧直接拒（40000）——那是真实已经发出去的券，不能被一次改动抹掉。
       </p>
-      <p>
-        <button type="button" data-act="save" @click="saveStock()">保存</button>
-        <button type="button" @click="editor = null">取消</button>
-      </p>
+      <div class="drawer__foot">
+        <Button variant="primary" data-act="save" @click="saveStock()">保存</Button>
+        <Button variant="ghost" @click="editor = null">取消</Button>
+      </div>
     </section>
   </main>
 </template>
-
-<style scoped>
-h1 {
-  margin-top: 0;
-}
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 13px;
-}
-th,
-td {
-  border-bottom: 1px solid #ebeef5;
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-}
-.drawer {
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin-top: 1rem;
-}
-.drawer label {
-  display: grid;
-  gap: 0.2rem;
-  margin-bottom: 0.5rem;
-}
-button {
-  font: inherit;
-  margin-right: 0.35rem;
-}
-.hint,
-.ok,
-.warn {
-  font-size: 13px;
-}
-.hint {
-  color: #909399;
-}
-.ok {
-  color: #67c23a;
-}
-.warn {
-  color: #f56c6c;
-}
-</style>

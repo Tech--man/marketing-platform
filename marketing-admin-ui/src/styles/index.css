@@ -1,0 +1,5 @@
+/* 全站样式单一入口：main.js 里 import 这一份即可。
+   顺序 = 令牌 → 基础 → 组件（后面的语义名依赖前面定义的变量）。 */
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";

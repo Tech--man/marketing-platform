@@ -1,0 +1,525 @@
+/* ============================================================
+ * 组件原语：跨页复用的外观类。视图只引语义名 + token 变量。
+ * 只加类选择器，不裸改全局 button/input，避免与 Element Plus 打架；
+ * 另对 #app 里"没有 class 的裸控件"给一层兜底，保证漏网也不裸奔。
+ * ============================================================ */
+
+/* ---------- 按钮 ---------- */
+.btn {
+  --_bg: var(--c-surface);
+  --_fg: var(--c-text);
+  --_bd: var(--c-border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--_fg);
+  background: var(--_bg);
+  border: 1px solid var(--_bd);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.btn:hover {
+  background: var(--c-surface-3);
+}
+.btn:active {
+  transform: translateY(0.5px);
+}
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn:disabled:hover,
+.btn[disabled]:hover {
+  background: var(--_bg);
+}
+
+.btn-primary {
+  --_bg: var(--c-accent);
+  --_fg: var(--c-accent-contrast);
+  --_bd: var(--c-accent);
+}
+.btn-primary:hover {
+  background: var(--c-accent-hover);
+  border-color: var(--c-accent-hover);
+}
+.btn-primary:disabled:hover {
+  background: var(--c-accent);
+}
+
+.btn-danger {
+  --_bg: var(--c-danger);
+  --_fg: #fff;
+  --_bd: var(--c-danger);
+}
+.btn-danger:hover {
+  filter: brightness(0.94);
+  background: var(--c-danger);
+}
+
+.btn-ghost {
+  --_bg: transparent;
+  --_bd: transparent;
+  --_fg: var(--c-text-2);
+}
+.btn-ghost:hover {
+  background: var(--c-surface-3);
+  border-color: transparent;
+}
+
+.btn-accent-ghost {
+  --_bg: transparent;
+  --_bd: transparent;
+  --_fg: var(--c-accent);
+}
+.btn-accent-ghost:hover {
+  background: var(--c-accent-soft);
+  border-color: transparent;
+}
+
+.btn-sm {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  gap: var(--space-1);
+}
+
+.btn-icon {
+  width: var(--control-h);
+  padding: 0;
+}
+.btn-icon.btn-sm {
+  width: 28px;
+}
+
+/* ---------- 表单控件 ---------- */
+.input,
+.select,
+.textarea,
+.field :where(input, select, textarea) {
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+.input,
+.select {
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+}
+.textarea {
+  padding: var(--space-2) var(--space-3);
+  line-height: 1.5;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--c-text-faint);
+}
+.input:hover:not(:disabled),
+.select:hover:not(:disabled),
+.textarea:hover:not(:disabled) {
+  border-color: var(--c-text-faint);
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--c-accent);
+  box-shadow: var(--ring);
+}
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  background: var(--c-surface-2);
+  color: var(--c-text-muted);
+  cursor: not-allowed;
+}
+.select {
+  appearance: none;
+  padding-right: var(--space-5);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+  background-size: 16px;
+}
+
+/* Field 容器：说明在上，控件在下 */
+.field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.field__label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--c-text-2);
+}
+.field__hint {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-3);
+}
+
+/* ---------- 面板 / 卡片 ---------- */
+.panel {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+}
+.panel__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  margin: 0;
+}
+.panel__desc {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  margin-top: 2px;
+}
+.panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.panel__body {
+  padding: var(--space-4);
+}
+.panel--flush > .panel__body {
+  padding: 0;
+}
+
+/* ---------- 页头 ---------- */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+.page-head__title {
+  font-size: var(--fs-xl);
+}
+.page-head__desc {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  margin-top: var(--space-1);
+  max-width: 60ch;
+}
+.page-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---------- 工具条（过滤 / 搜索行） ---------- */
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+.toolbar .field {
+  min-width: 12rem;
+}
+
+/* ---------- 数据表（保留 <table> 语义，只换外观） ---------- */
+.data-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.data {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--fs-sm);
+}
+.data th,
+.data td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--c-border);
+  vertical-align: top;
+}
+.data thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header);
+  background: var(--c-surface-2);
+  color: var(--c-text-muted);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.data tbody tr:hover {
+  background: var(--c-surface-2);
+}
+.data tbody tr:last-child td {
+  border-bottom: none;
+}
+.data .num {
+  text-align: right;
+}
+.data td small {
+  display: block;
+  color: var(--c-text-muted);
+  font-weight: 400;
+}
+
+/* ---------- 分页 ---------- */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--c-border);
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+}
+.pager__count {
+  margin-right: auto;
+}
+.pager__page {
+  min-width: 2rem;
+  text-align: center;
+  color: var(--c-text);
+  font-weight: 500;
+}
+
+/* ---------- 抽屉 / 内联编辑卡（不是 toast，仍在树内） ---------- */
+.drawer {
+  margin-top: var(--space-4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-4);
+}
+.drawer__head {
+  margin-bottom: var(--space-3);
+}
+.drawer__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.drawer__foot {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* ---------- 徽章 / 状态点 ---------- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 22px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--c-text-2);
+  background: var(--c-surface-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill-success {
+  color: var(--c-success);
+  background: var(--c-success-soft);
+  border-color: transparent;
+}
+.pill-warning {
+  color: var(--c-warning);
+  background: var(--c-warning-soft);
+  border-color: transparent;
+}
+.pill-danger {
+  color: var(--c-danger);
+  background: var(--c-danger-soft);
+  border-color: transparent;
+}
+.pill-info {
+  color: var(--c-info);
+  background: var(--c-info-soft);
+  border-color: transparent;
+}
+.pill-accent {
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+  border-color: transparent;
+}
+
+/* ---------- 通知横幅（内联，保留 data-testid 与原文案） ---------- */
+.notice,
+.ok {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  background: var(--c-success-soft);
+  color: var(--c-success);
+  border: 1px solid transparent;
+}
+.warn {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  border: 1px solid transparent;
+}
+.err {
+  color: var(--c-danger);
+  font-size: var(--fs-sm);
+}
+.hint {
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+}
+.empty {
+  color: var(--c-text-muted);
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+}
+
+/* ---------- TriState：纯 CSS 依 data-kind 上色，绝不加字 ---------- */
+.tri {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.tri[data-kind="zero"] {
+  color: var(--c-success);
+}
+.tri[data-kind="bad"] {
+  color: var(--c-danger);
+}
+.tri[data-kind="na"],
+.tri[data-kind="unknown"] {
+  color: var(--c-text-muted);
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* ---------- 工具类 ---------- */
+.stack {
+  display: grid;
+  gap: var(--space-4);
+}
+.stack-sm {
+  display: grid;
+  gap: var(--space-2);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.muted {
+  color: var(--c-text-muted);
+}
+.ico {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.ico-lg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- 漏网裸控件兜底（EP 表单控件站内不存在，安全） ---------- */
+#app :where(button:not([class])) {
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
+}
+#app :where(button:not([class]):hover) {
+  background: var(--c-surface-3);
+}
+#app :where(input:not([class]), select:not([class]), textarea:not([class])) {
+  font-family: inherit;
+  font-size: var(--fs-base);
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  height: var(--control-h);
+}

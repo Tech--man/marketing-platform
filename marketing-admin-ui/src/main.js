@@ -6,7 +6,15 @@ import { createPinia } from 'pinia'
 // 例外是命令式调用的那几个（ElMessage/ElMessageBox）：resolver 管不到它们，样式得手动引。
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
+// Element Plus 的暗色变量（仅在 html.dark 时生效），与我们 tokens.css 的 [data-theme=dark] 同源。
+import 'element-plus/theme-chalk/dark/css-vars.css'
+// 全站设计系统：令牌 → 基础 → 组件（唯一的颜色/间距/字体来源）。
+import './styles/index.css'
 import App from './App.vue'
 import router from './router'
+import { initTheme } from './theme'
+
+// 挂载前先落地主题，避免暗色用户首屏闪白。
+initTheme()
 
 createApp(App).use(createPinia()).use(router).mount('#app')

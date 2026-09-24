@@ -1,0 +1,169 @@
+/* ============================================================
+ * 设计令牌：整站唯一的颜色/间距/圆角/阴影/字体/层级来源。
+ * 亮色在 :root，暗色在 [data-theme=dark] 重映射同一批变量名——
+ * 视图只引用语义名，永远不直接写十六进制。
+ * ============================================================ */
+:root {
+  /* —— 表面与描边 —— */
+  --c-canvas: #f5f6f8; /* 内容底：让白色面板浮起来 */
+  --c-surface: #ffffff; /* 卡片 / 侧栏 */
+  --c-surface-2: #f8fafc; /* 表头 / zebra / 悬停底 */
+  --c-surface-3: #f1f5f9; /* 更强悬停 / 分组底 */
+  --c-border: #e5e7eb;
+  --c-border-strong: #d1d5db;
+
+  /* —— 文字 —— */
+  --c-text: #0f172a; /* 主文本 slate-900 */
+  --c-text-2: #334155; /* 次级 */
+  --c-text-muted: #64748b; /* 说明 / 占位 slate-500 */
+  --c-text-faint: #94a3b8; /* 仅用于非关键装饰，正文禁用 */
+
+  /* —— 强调（indigo） —— */
+  --c-accent: #4f46e5;
+  --c-accent-hover: #4338ca;
+  --c-accent-active: #3730a3;
+  --c-accent-soft: #eef2ff; /* 淡背景，用于选中项 / 徽章底 */
+  --c-accent-contrast: #ffffff; /* 强调底上的文字 */
+
+  /* —— 语义状态 —— */
+  --c-success: #15803d;
+  --c-success-soft: #dcfce7;
+  --c-warning: #b45309;
+  --c-warning-soft: #fef3c7;
+  --c-danger: #dc2626;
+  --c-danger-soft: #fee2e2;
+  --c-info: #0369a1;
+  --c-info-soft: #e0f2fe;
+
+  /* —— 间距阶（4px 基准，密集档） —— */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* —— 圆角 —— */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* —— 阴影（克制） —— */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-2: 0 4px 12px rgba(15, 23, 42, 0.1), 0 2px 4px rgba(15, 23, 42, 0.06);
+  --ring: 0 0 0 3px rgba(79, 70, 229, 0.35);
+
+  /* —— 层级 —— */
+  --z-header: 10;
+  --z-dropdown: 20;
+  --z-modal: 30;
+  --z-toast: 50;
+
+  /* —— 动效 —— */
+  --dur: 180ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* —— 字体 —— */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+  --fs-2xl: 28px;
+
+  /* —— 尺寸 —— */
+  --sidebar-w: 15rem;
+  --header-h: 3.5rem;
+  --control-h: 36px; /* 桌面密集；触控下 min-height 抬到 44 */
+}
+
+/* ============================================================
+ * 暗色：重映射同一批语义名（≥4.5:1 文本对比）。
+ * EP 的 --el-* 由 element-plus 的 dark css-vars 随 html.dark 接管，
+ * 这里只负责我们自己的语义色 + 把关键 EP 变量对齐到 indigo。
+ * ============================================================ */
+[data-theme="dark"] {
+  --c-canvas: #0e1116;
+  --c-surface: #161a21;
+  --c-surface-2: #1c222b;
+  --c-surface-3: #232b36;
+  --c-border: #2a313d;
+  --c-border-strong: #3a4351;
+
+  --c-text: #e6e9ef;
+  --c-text-2: #b9c1cd;
+  --c-text-muted: #828c9c;
+  --c-text-faint: #5b6472;
+
+  --c-accent: #6366f1;
+  --c-accent-hover: #818cf8;
+  --c-accent-active: #a5b4fc;
+  --c-accent-soft: #1e1b4b;
+  --c-accent-contrast: #ffffff;
+
+  --c-success: #4ade80;
+  --c-success-soft: rgba(34, 197, 94, 0.16);
+  --c-warning: #fbbf24;
+  --c-warning-soft: rgba(245, 158, 11, 0.16);
+  --c-danger: #f8717a;
+  --c-danger-soft: rgba(239, 68, 68, 0.16);
+  --c-info: #38bdf8;
+  --c-info-soft: rgba(14, 165, 233, 0.16);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --ring: 0 0 0 3px rgba(99, 102, 241, 0.45);
+}
+
+/* ============================================================
+ * Element Plus 变量对齐（亮）：让 ElMessage/ElMessageBox 与我们的
+ * 面板同源。EP 内部 --el-* 见各组件，这里覆盖最常露面的几组。
+ * ============================================================ */
+:root {
+  --el-color-primary: var(--c-accent);
+  --el-color-primary-light-3: #6366f1;
+  --el-color-primary-light-5: #a5b4fc;
+  --el-color-primary-light-7: #c7d2fe;
+  --el-color-primary-light-8: #e0e7ff;
+  --el-color-primary-light-9: var(--c-accent-soft);
+  --el-color-primary-dark-2: var(--c-accent-hover);
+  --el-color-success: var(--c-success);
+  --el-color-warning: var(--c-warning);
+  --el-color-danger: var(--c-danger);
+  --el-color-error: var(--c-danger);
+  --el-color-info: var(--c-info);
+  --el-border-radius-base: var(--radius-sm);
+  --el-font-family: var(--font-sans);
+  --el-bg-color: var(--c-surface);
+  --el-bg-color-overlay: var(--c-surface);
+  --el-text-color-primary: var(--c-text);
+  --el-text-color-regular: var(--c-text-2);
+  --el-text-color-secondary: var(--c-text-muted);
+  --el-border-color: var(--c-border);
+  --el-border-color-light: var(--c-border);
+  --el-border-color-lighter: var(--c-border);
+  --el-fill-color-blank: var(--c-surface);
+}
+
+/* 暗色下把 EP 表面色也接上我们的面板（EP 的 dark css-vars 已给一版，
+   这里让它跟我们的 surface 完全一致，避免消息框和页面两个灰阶）。 */
+[data-theme="dark"] {
+  --el-bg-color: var(--c-surface);
+  --el-bg-color-overlay: var(--c-surface);
+  --el-text-color-primary: var(--c-text);
+  --el-text-color-regular: var(--c-text-2);
+  --el-border-color: var(--c-border);
+  --el-border-color-light: var(--c-border);
+  --el-border-color-lighter: var(--c-border);
+  --el-fill-color-blank: var(--c-surface);
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+}

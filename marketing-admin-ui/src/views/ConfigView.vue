@@ -2,6 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, E } from '@/api/client'
 import { useSession } from '@/stores/session'
+import PageHeader from '@/components/PageHeader.vue'
+import Panel from '@/components/Panel.vue'
+import Field from '@/components/Field.vue'
+import Button from '@/components/Button.vue'
 
 /**
  * ⑤ 的在线配置页（读任意后台角色，写仅 admin）。
@@ -126,18 +130,23 @@ function askDelete(entry) {
 </script>
 
 <template>
-  <main v-if="busy">加载中…</main>
-  <main v-else-if="error">读不到配置：{{ error }} <button @click="load">重试</button></main>
-  <main v-else-if="d">
-    <header>
-      <h1>在线配置</h1>
-      <p data-testid="own-form">
-        本进程形态 <b>{{ d.ownForm }}</b> · 生效快照版本
-        <b>{{ d.appliedVersion }}</b>
-        <span v-if="d.appliedVersion === 0">（没人写过覆盖，全部跑出厂值）</span>
-        <button data-act="reload" @click="load">重读</button>
-      </p>
-    </header>
+  <main v-if="busy" class="loading">加载中…</main>
+  <main v-else-if="error" class="state-err">
+    <p>读不到配置：{{ error }}</p>
+    <Button size="sm" @click="load">重试</Button>
+  </main>
+  <main v-else-if="d" class="stack">
+    <PageHeader title="在线配置" desc="读任意后台角色，写仅 admin。没被覆盖过的键也照样列出——否则“改了没生效”与“这个键压根没覆盖过”分不开。">
+      <template #actions>
+        <Button size="sm" data-act="reload" @click="load">重读</Button>
+      </template>
+    </PageHeader>
+
+    <p class="meta" data-testid="own-form">
+      本进程形态 <b>{{ d.ownForm }}</b> · 生效快照版本
+      <b>{{ d.appliedVersion }}</b>
+      <span v-if="d.appliedVersion === 0" class="muted">（没人写过覆盖，全部跑出厂值）</span>
+    </p>
 
     <p v-if="d.degradedKeys?.length" class="warn">
       本进程忽略了这些键（未声明或越界）：{{ d.degradedKeys.join('、') }}
@@ -147,165 +156,155 @@ function askDelete(entry) {
     </p>
     <p v-if="d.orphans?.length" class="warn">
       幽灵行（写了但没人声明）：
-      <span v-for="o in d.orphans" :key="o.form + o.cfgKey"
-        >[{{ o.form }}] {{ o.cfgKey }}={{ o.value }} by {{ o.updatedBy }}</span
-      >
+      <span v-for="o in d.orphans" :key="o.form + o.cfgKey">[{{ o.form }}] {{ o.cfgKey }}={{ o.value }} by {{ o.updatedBy }}</span>
     </p>
 
     <p v-if="notBroadcast" class="warn" data-testid="not-broadcast">
       配置已落库但未广播——现在库里是新值、各进程还在跑旧值。
-      <button data-act="rebroadcast" @click="rebroadcast">重新广播</button>
+      <Button size="sm" variant="danger" data-act="rebroadcast" @click="rebroadcast">重新广播</Button>
     </p>
     <p v-else-if="notice" class="notice">{{ notice }}</p>
 
-    <table>
-      <thead>
-        <tr>
-          <th>键</th>
-          <th>声明方</th>
-          <th>生效值</th>
-          <th>来源</th>
-          <th>出厂值</th>
-          <th>允许区间</th>
-          <th>各形态覆盖行</th>
-          <th>动作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="e in d.entries" :key="e.key" :data-key="e.key">
-          <td>
-            {{ e.key }}
-            <small>{{ e.description }}</small>
-          </td>
-          <td>{{ e.service }}</td>
-          <td><b>{{ e.effectiveValue }}</b></td>
-          <td :data-src="e.source">{{ SOURCE_LABEL[e.source] || e.source }}</td>
-          <td>{{ e.defaultValue }}</td>
-          <td>[{{ e.min }}, {{ e.max }}]</td>
-          <td>
-            <span v-for="r in rowsOf(e)" :key="r.form" class="row-chip">
-              {{ r.form }}={{ r.value }}<small> v{{ r.version }} by {{ r.updatedBy }}</small>
-            </span>
-            <span v-if="!rowsOf(e).length" class="none">无</span>
-          </td>
-          <td>
-            <button
-              v-if="s.canWrite"
-              data-act="edit"
-              type="button"
-              @click="startEdit(e)"
-            >
-              改值
-            </button>
-            <button
-              v-else
-              data-act="edit"
-              type="button"
-              disabled
-              title="只有 admin 角色能改阈值（operator 在网关可写运维，但改不动配置）"
-            >
-              改值
-            </button>
-            <button
-              v-if="rowsOf(e).length && s.canWrite"
-              data-act="delete"
-              type="button"
-              @click="askDelete(e)"
-            >
-              删行
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <Panel flush>
+      <div class="data-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>键</th>
+              <th>声明方</th>
+              <th>生效值</th>
+              <th>来源</th>
+              <th>出厂值</th>
+              <th>允许区间</th>
+              <th>各形态覆盖行</th>
+              <th>动作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in d.entries" :key="e.key" :data-key="e.key">
+              <td>
+                {{ e.key }}
+                <small>{{ e.description }}</small>
+              </td>
+              <td>{{ e.service }}</td>
+              <td><b>{{ e.effectiveValue }}</b></td>
+              <td :data-src="e.source">
+                <span class="pill" :class="e.source === 'DEFAULT' ? '' : 'pill-accent'">{{ SOURCE_LABEL[e.source] || e.source }}</span>
+              </td>
+              <td class="muted">{{ e.defaultValue }}</td>
+              <td class="muted num">[{{ e.min }}, {{ e.max }}]</td>
+              <td>
+                <span v-for="r in rowsOf(e)" :key="r.form" class="row-chip">
+                  <span class="chip">{{ r.form }}={{ r.value }}</span
+                  ><small class="muted"> v{{ r.version }} by {{ r.updatedBy }}</small>
+                </span>
+                <span v-if="!rowsOf(e).length" class="muted">无</span>
+              </td>
+              <td class="actions">
+                <Button v-if="s.canWrite" size="sm" data-act="edit" @click="startEdit(e)">改值</Button>
+                <Button
+                  v-else
+                  size="sm"
+                  data-act="edit"
+                  disabled
+                  title="只有 admin 角色能改阈值（operator 在网关可写运维，但改不动配置）"
+                >
+                  改值
+                </Button>
+                <Button
+                  v-if="rowsOf(e).length && s.canWrite"
+                  size="sm"
+                  variant="accent-ghost"
+                  data-act="delete"
+                  @click="askDelete(e)"
+                >
+                  删行
+                </Button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Panel>
 
     <section v-if="editing" class="drawer" data-testid="editor">
-      <h2>写覆盖：{{ editing.key }}</h2>
-      <label>
-        形态
-        <select v-model="editing.form" data-field="form">
-          <option v-for="f in formOptions" :key="f" :value="f">{{ f }}</option>
-        </select>
-      </label>
-      <label>
-        值
-        <input v-model="editing.value" data-field="value" />
-      </label>
-      <label>
-        备注
-        <input v-model="editing.remark" data-field="remark" />
-      </label>
+      <div class="drawer__head"><h2 class="drawer__title">写覆盖：{{ editing.key }}</h2></div>
+      <div class="form-grid">
+        <Field label="形态">
+          <select v-model="editing.form" class="select" data-field="form">
+            <option v-for="f in formOptions" :key="f" :value="f">{{ f }}</option>
+          </select>
+        </Field>
+        <Field label="值"><input v-model="editing.value" class="input" data-field="value" /></Field>
+        <Field label="备注"><input v-model="editing.remark" class="input" data-field="remark" /></Field>
+      </div>
       <p class="hint">
-        越界与未声明的键会在写侧就被拒；窗宽这类"不该在线改"的东西根本不在这张表里。
+        越界与未声明的键会在写侧就被拒；窗宽这类“不该在线改”的东西根本不在这张表里。
       </p>
       <p v-if="editing.error" class="warn" data-testid="editor-error">{{ editing.error }}</p>
-      <p>
-        <button data-act="save" type="button" @click="save">保存</button>
-        <button type="button" @click="editing = null">取消</button>
-      </p>
+      <div class="drawer__foot">
+        <Button variant="primary" data-act="save" @click="save">保存</Button>
+        <Button variant="ghost" @click="editing = null">取消</Button>
+      </div>
     </section>
 
     <section v-if="confirmDel" class="drawer">
-      <h2>删掉这一行？</h2>
-      <p>
+      <div class="drawer__head"><h2 class="drawer__title">删掉这一行？</h2></div>
+      <p class="drawer__warn">
         删除 <b>{{ confirmDel.key }}</b> 在 <b>{{ confirmDel.form }}</b> 档的覆盖行 =
         <b>恢复出厂</b>：这一档退回本进程 yml 的出厂值，不是删成 0，也不会去改别的档。
       </p>
-      <p>
-        <button data-act="confirm-delete" type="button" @click="doDelete">确认删除</button>
-        <button type="button" @click="confirmDel = null">取消</button>
-      </p>
+      <div class="drawer__foot">
+        <Button variant="danger" data-act="confirm-delete" @click="doDelete">确认删除</Button>
+        <Button variant="ghost" @click="confirmDel = null">取消</Button>
+      </div>
     </section>
   </main>
 </template>
 
 <style scoped>
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 13px;
+.loading {
+  color: var(--c-text-muted);
 }
-th,
-td {
-  border-bottom: 1px solid #ebeef5;
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-  vertical-align: top;
+.state-err {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  border-radius: var(--radius-md);
 }
-td small {
-  display: block;
-  color: #909399;
+.meta {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+}
+.meta b {
+  color: var(--c-text-2);
+  font-weight: 600;
 }
 .row-chip {
-  display: inline-block;
-  margin-right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 2px var(--space-2) 2px 0;
 }
-.none {
-  color: #c0c4cc;
+.chip {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
 }
-.warn {
-  color: #f56c6c;
+.actions {
+  white-space: nowrap;
 }
-.notice {
-  color: #67c23a;
+.actions > * + * {
+  margin-left: var(--space-1);
 }
-.hint {
-  color: #909399;
-  font-size: 12px;
-}
-.drawer {
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin-top: 1rem;
-}
-.drawer label {
-  display: grid;
-  gap: 0.2rem;
-  margin-bottom: 0.5rem;
-}
-button {
-  font: inherit;
-  margin-right: 0.4rem;
+.drawer__warn {
+  color: var(--c-text-2);
+  line-height: 1.6;
 }
 </style>

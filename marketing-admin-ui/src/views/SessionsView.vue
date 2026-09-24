@@ -3,6 +3,9 @@ import { ref } from 'vue'
 import { api } from '@/api/client'
 import { useSession } from '@/stores/session'
 import PagedTable from '@/components/PagedTable.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import Panel from '@/components/Panel.vue'
+import Button from '@/components/Button.vue'
 
 /**
  * 在线会话页。<code>mine</code> 两种取值是两条不同权限：
@@ -35,62 +38,52 @@ async function kick(row) {
 </script>
 
 <template>
-  <main>
-    <h1>在线会话</h1>
-    <label v-if="s.canWrite" class="chk">
-      <input v-model="mine" type="checkbox" data-field="mine" @change="table?.reload()" />
-      只看我自己的会话（不勾则需要 admin 角色）
-    </label>
-    <p v-else class="hint">当前角色只能看自己的会话。</p>
+  <main class="stack">
+    <PageHeader title="在线会话" desc="当前持有效 token 的登录会话。吊销即刻生效，被吊销端下一发请求收到 40102。" />
+
+    <div class="toolbar">
+      <label v-if="s.canWrite" class="check">
+        <input v-model="mine" type="checkbox" data-field="mine" @change="table?.reload()" />
+        <span>只看我自己的会话（不勾则需要 admin 角色）</span>
+      </label>
+      <p v-else class="hint">当前角色只能看自己的会话。</p>
+    </div>
+
     <p v-if="notice" :class="notice.includes('失败') ? 'warn' : 'ok'" data-testid="notice">
       {{ notice }}
     </p>
 
-    <PagedTable
-      ref="table"
-      endpoint="/api/admin/sessions"
-      :columns="columns"
-      :params="{ mine: mine ? 'true' : '' }"
-    >
-      <template #actions="{ row }">
-        <button v-if="s.canWrite" type="button" data-act="kick" @click="kick(row)">下线</button>
-      </template>
-    </PagedTable>
+    <Panel flush>
+      <PagedTable
+        ref="table"
+        endpoint="/api/admin/sessions"
+        :columns="columns"
+        :params="{ mine: mine ? 'true' : '' }"
+      >
+        <template #actions="{ row }">
+          <Button v-if="s.canWrite" size="sm" variant="danger" data-act="kick" @click="kick(row)">
+            下线
+          </Button>
+        </template>
+      </PagedTable>
+    </Panel>
   </main>
 </template>
 
 <style scoped>
-h1 {
-  margin-top: 0;
-}
-.chk {
-  display: flex;
-  gap: 0.35rem;
+.check {
+  display: inline-flex;
   align-items: center;
-  font-size: 13px;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+  cursor: pointer;
+  user-select: none;
 }
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 13px;
-}
-th,
-td {
-  border-bottom: 1px solid #ebeef5;
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-}
-button {
-  font: inherit;
-}
-.hint {
-  color: #909399;
-  font-size: 13px;
-}
-.ok {
-  color: #67c23a;
-}
-.warn {
-  color: #f56c6c;
+.check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--c-accent);
+  cursor: pointer;
 }
 </style>

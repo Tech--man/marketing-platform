@@ -2,6 +2,10 @@
 import { computed, onUnmounted, ref } from 'vue'
 import { api, E } from '@/api/client'
 import { useSession } from '@/stores/session'
+import PageHeader from '@/components/PageHeader.vue'
+import Panel from '@/components/Panel.vue'
+import Field from '@/components/Field.vue'
+import Button from '@/components/Button.vue'
 
 /**
  * 重预热页（③，admin + operator 都能用）。
@@ -144,16 +148,45 @@ async function pollAgain() {
 </script>
 
 <template>
-  <main>
-    <h1>缓存重预热</h1>
-    <p class="hint">
-      预扣缓存与 DB 对不上时（大盘的"缓存与账"那一列非 0），修的地方在这里。
-      operator 也可以用这一页——它是运维动作，不是配置。
-    </p>
+  <main class="stack">
+    <PageHeader title="缓存重预热" desc="预扣缓存与 DB 对不上时（大盘的“缓存与账”那一列非 0），修的地方在这里。operator 也可以用这一页——它是运维动作，不是配置。" />
+
+    <Panel>
+      <form class="form-grid" @submit.prevent="run">
+        <Field label="类型">
+          <select v-model="selected" class="select" data-field="type">
+            <option v-for="o in typeOptions" :key="o.type" :value="o.type">
+              {{ o.type }}{{ o.target ? `（由 ${o.target} 上报）` : '（本进程）' }}
+            </option>
+          </select>
+        </Field>
+        <Field label="key（活动号 / 模板号 / 秒杀活动号）">
+          <input v-model="key" class="input" data-field="key" placeholder="例如 ACT2026001" />
+        </Field>
+        <div class="cache-submit">
+          <label class="check">
+            <input v-model="force" type="checkbox" data-field="force" />
+            <span>force（值本来就对时也强制重写一遍）</span>
+          </label>
+          <Button
+            variant="primary"
+            data-act="reheat"
+            :disabled="busy || !typeOptions.length"
+            @click="run"
+          >
+            {{ busy ? '执行中…' : '重预热' }}
+          </Button>
+        </div>
+      </form>
+      <p v-if="!typeOptions.length" class="hint">
+        一个类型都没有：本进程没注册 reheater，④ 面板也没报上 consistency 类型。
+      </p>
+    </Panel>
+
     <p v-if="error" class="warn" data-testid="error">{{ error }}</p>
-    <p v-if="state" data-testid="state">{{ state }}</p>
+    <p v-if="state" class="ok" data-testid="state">{{ state }}</p>
     <p v-if="receipt" class="receipt">
-      <code>{{ receipt.status }}</code>
+      <span class="badge" :class="receipt.status === 'FAILED' ? 'is-down' : 'is-up'">{{ receipt.status }}</span>
       type={{ receipt.type }} · key={{ receipt.key }}
       <template v-if="receipt.id"> · id={{ receipt.id }}</template>
       <template v-if="receipt.status !== 'DISPATCHED'">
@@ -161,71 +194,65 @@ async function pollAgain() {
       </template>
       <small v-if="receipt.note"> · {{ receipt.note }}</small>
     </p>
-
-    <form class="row" @submit.prevent="run">
-      <label>
-        类型
-        <select v-model="selected" data-field="type">
-          <option v-for="o in typeOptions" :key="o.type" :value="o.type">
-            {{ o.type }}{{ o.target ? `（由 ${o.target} 上报）` : '（本进程）' }}
-          </option>
-        </select>
-      </label>
-      <label>
-        key（活动号 / 模板号 / 秒杀活动号）
-        <input v-model="key" data-field="key" placeholder="例如 ACT2026001" />
-      </label>
-      <label class="chk">
-        <input v-model="force" type="checkbox" data-field="force" />
-        force（值本来就对时也强制重写一遍）
-      </label>
-      <button type="button" data-act="reheat" :disabled="busy || !typeOptions.length" @click="run">
-        {{ busy ? '执行中…' : '重预热' }}
-      </button>
-    </form>
-    <p v-if="!typeOptions.length" class="hint">
-      一个类型都没有：本进程没注册 reheater，④ 面板也没报上 consistency 类型。
-    </p>
     <p v-if="state.startsWith('仍待回执')">
-      <button type="button" data-act="poll-again" @click="pollAgain()">再查一次回执</button>
+      <Button size="sm" variant="accent-ghost" data-act="poll-again" @click="pollAgain()">
+        再查一次回执
+      </Button>
     </p>
   </main>
 </template>
 
 <style scoped>
-h1 {
-  margin-top: 0;
-}
-.row {
+.cache-submit {
   display: flex;
-  gap: 1rem;
-  align-items: end;
+  align-items: center;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
-label {
-  display: grid;
-  gap: 0.2rem;
-  font-size: 13px;
-}
-.chk {
-  display: flex;
-  gap: 0.35rem;
+.check {
+  display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+  cursor: pointer;
+  user-select: none;
 }
-button {
-  font: inherit;
+.check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--c-accent);
+  cursor: pointer;
 }
 .receipt {
-  background: #f5f7fa;
-  border-radius: 4px;
-  padding: 0.4rem 0.6rem;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
 }
-.hint {
-  color: #909399;
-  font-size: 13px;
+.receipt .badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-family: var(--font-mono);
 }
-.warn {
-  color: #f56c6c;
+.receipt .badge.is-up {
+  color: var(--c-success);
+  background: var(--c-success-soft);
+}
+.receipt .badge.is-down {
+  color: var(--c-danger);
+  background: var(--c-danger-soft);
 }
 </style>
+

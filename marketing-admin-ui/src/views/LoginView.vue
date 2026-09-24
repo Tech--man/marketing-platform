@@ -1,10 +1,12 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Odometer } from '@element-plus/icons-vue'
 import { useSession } from '@/stores/session'
 import { E } from '@/api/client'
-import { ref } from 'vue'
+import Button from '@/components/Button.vue'
+import Field from '@/components/Field.vue'
 
 const s = useSession()
 const route = useRoute()
@@ -49,32 +51,91 @@ const hint = computed(() => (cooldown.value > 0 ? `请等待 ${cooldown.value}s`
 
 <template>
   <main class="login">
-    <h1>营销平台后台</h1>
-    <form data-testid="login-form" @submit.prevent="submit">
-      <input v-model="username" data-field="username" autocomplete="username" placeholder="账号" />
-      <input
-        v-model="password"
-        data-field="password"
-        type="password"
-        autocomplete="current-password"
-        placeholder="口令"
-      />
-      <button data-act="submit" :disabled="busy || cooldown > 0" type="submit">{{ hint }}</button>
-    </form>
-    <!-- 种子口令在 README 公示（dev 环境），这里不额外显示，免得生产上被人当默认密码 -->
+    <div class="login__card">
+      <div class="login__brand">
+        <span class="login__mark"><el-icon><Odometer /></el-icon></span>
+        <div>
+          <h1>营销平台后台</h1>
+          <p class="login__sub">运营与管理控制台</p>
+        </div>
+      </div>
+      <form data-testid="login-form" class="stack-sm" @submit.prevent="submit">
+        <Field label="账号">
+          <input
+            v-model="username"
+            class="input"
+            data-field="username"
+            autocomplete="username"
+            placeholder="请输入账号"
+          />
+        </Field>
+        <Field label="口令">
+          <input
+            v-model="password"
+            class="input"
+            data-field="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="请输入口令"
+          />
+        </Field>
+        <Button
+          type="submit"
+          variant="primary"
+          block
+          data-act="submit"
+          :disabled="busy || cooldown > 0"
+        >
+          {{ hint }}
+        </Button>
+      </form>
+      <!-- 种子口令在 README 公示（dev 环境），这里不额外显示，免得生产上被人当默认密码 -->
+    </div>
   </main>
 </template>
 
 <style scoped>
 .login {
-  max-width: 22rem;
-  margin: 12vh auto;
+  min-height: 100vh;
   display: grid;
-  gap: 0.75rem;
+  place-items: center;
+  padding: var(--space-4);
+  background:
+    radial-gradient(1100px 520px at 50% -10%, var(--c-accent-soft), transparent 60%),
+    var(--c-canvas);
 }
-.login input,
-.login button {
-  padding: 0.5rem 0.75rem;
-  font: inherit;
+.login__card {
+  width: 100%;
+  max-width: 22rem;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-6);
+}
+.login__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.login__mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--c-accent);
+  color: var(--c-accent-contrast);
+  font-size: 20px;
+}
+.login__brand h1 {
+  font-size: var(--fs-lg);
+}
+.login__sub {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  margin-top: 2px;
 }
 </style>

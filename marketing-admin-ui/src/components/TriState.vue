@@ -37,17 +37,6 @@ const title = computed(() => {
   <span :class="['tri', kind]" :data-kind="kind" :title="title">{{ text }}</span>
 </template>
 
-<style scoped>
-.tri {
-  font-variant-numeric: tabular-nums;
-}
-.tri.na,
-.tri.unknown {
-  color: #909399;
-  font-style: italic;
-}
-.tri.bad {
-  color: #f56c6c;
-  font-weight: 600;
-}
-</style>
+<!-- 外观交给全局 styles/components.css 的 `.tri[data-kind=…]`：这里只留语义，
+     绝不在根 span 内塞图标/前缀（tristate.spec 断言根元素文本严格等于 '0'）。 -->
+

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { api } from '@/api/client'
+import Button from '@/components/Button.vue'
 
 /**
  * 列表页的共用基座：翻页 + 过滤参数 + 三种非正常态（加载中 / 出错 / 空）。
@@ -67,74 +68,82 @@ load()
 
 <template>
   <div class="paged">
-    <p v-if="busy" data-testid="loading">加载中…</p>
-    <p v-else-if="error" data-testid="error" class="err">
+    <p v-if="busy" class="loading" data-testid="loading">加载中…</p>
+    <p v-else-if="error" class="err" data-testid="error">
       读不到：{{ error }}
-      <button type="button" @click="load">重试</button>
+      <Button size="sm" variant="ghost" @click="load">重试</Button>
     </p>
     <template v-else>
-      <table>
-        <thead>
-          <tr>
-            <th v-for="c in columns" :key="c.prop" :style="c.width ? { width: c.width } : {}">
-              {{ c.label }}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="!rows.length">
-            <td :colspan="columns.length" class="empty">没有符合条件的行</td>
-          </tr>
-          <tr v-for="(r, i) in rows" :key="i" data-row>
-            <td v-for="c in columns" :key="c.prop" :data-prop="c.prop">
-              <slot v-if="c.slot" :name="c.slot" :row="r" :value="r[c.prop]" />
-              <template v-else>{{ cell(r, c) }}</template>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="data-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th
+                v-for="c in columns"
+                :key="c.prop"
+                :class="{ num: c.numeric }"
+                :style="c.width ? { width: c.width } : {}"
+              >
+                {{ c.label }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!rows.length">
+              <td :colspan="columns.length" class="empty">没有符合条件的行</td>
+            </tr>
+            <tr v-for="(r, i) in rows" :key="i" data-row>
+              <td
+                v-for="c in columns"
+                :key="c.prop"
+                :class="{ num: c.numeric }"
+                :data-prop="c.prop"
+              >
+                <slot v-if="c.slot" :name="c.slot" :row="r" :value="r[c.prop]" />
+                <template v-else>{{ cell(r, c) }}</template>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <footer class="pager">
-        <span>共 {{ total }} 行 · 第 {{ page }} 页</span>
-        <button type="button" :disabled="page <= 1" data-act="prev" @click="go(page - 1)">
+        <span class="pager__count">共 {{ total }} 行</span>
+        <Button size="sm" variant="ghost" :disabled="page <= 1" data-act="prev" @click="go(page - 1)">
           上一页
-        </button>
-        <button
-          type="button"
+        </Button>
+        <span class="pager__page">{{ page }}</span>
+        <Button
+          size="sm"
+          variant="ghost"
           :disabled="page * pageSize >= total"
           data-act="next"
           @click="go(page + 1)"
         >
           下一页
-        </button>
+        </Button>
       </footer>
     </template>
   </div>
 </template>
 
 <style scoped>
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 14px;
-}
-th,
-td {
-  border-bottom: 1px solid #ebeef5;
-  padding: 0.4rem 0.5rem;
-  text-align: left;
+.loading {
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
 }
 .err {
-  color: #f56c6c;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  font-size: var(--fs-sm);
 }
 .empty {
-  color: #909399;
-}
-.pager {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin-top: 0.5rem;
-  font-size: 13px;
-  color: #606266;
+  color: var(--c-text-muted);
+  text-align: center;
+  padding: var(--space-7) var(--space-4);
 }
 </style>
