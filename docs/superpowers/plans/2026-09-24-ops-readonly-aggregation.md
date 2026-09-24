@@ -122,7 +122,7 @@ Prometheus 风格样本（counter → `name_total`、gauge → `name`、timer �
 - Test: `.../observe/ProxyMeterSourceTest.java`（`com.sun.net.httpserver.HttpServer` 起回环桩）
 - Test: `.../observe/OpsTargetsTest.java`（SSRF 正面清单）
 
-- [ ] **Step 1** `OpsTargetsTest` 先红。规则必须**正面清单**而不是黑名单（"排除内网"这类
+- [x] **Step 1** `OpsTargetsTest` 先红。规则必须**正面清单**而不是黑名单（"排除内网"这类
   黑名单写法漏一个 127.0.0.1 就完了）：
 
 ```java
@@ -133,7 +133,7 @@ Prometheus 风格样本（counter → `name_total`、gauge → `name`、timer �
 //         空 target、大小写变体（MARKETING-ACTIVITY 也应拒——避免下游 host 解析差异）
 ```
 
-- [ ] **Step 2** `ProxyMeterSource`：
+- [x] **Step 2** `ProxyMeterSource`：
 
 ```java
 private static final Duration TIMEOUT = Duration.ofSeconds(1);
@@ -151,7 +151,7 @@ private final HttpClient http = HttpClient.newBuilder()
 - 任何 `IOException`/`InterruptedException` → `ScrapeException` 并把 cause 摘要进 message。
   超时后 `Thread.currentThread().interrupt()` 保持中断位干净（只在异常分支做，别把中断吞了）。
 
-- [ ] **Step 3** `ProxyMeterSourceTest` 用 `HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)`
+- [x] **Step 3** `ProxyMeterSourceTest` 用 `HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)`
   起四个 handler：正常返回样本、返回 500、返回 302 到 `http://127.0.0.1:1/`（断言**没有**第二请求，
   用一个计数 handler 挂在目标路径上验证它没被调到）、返回 300KB 大 body。
   这是选 JDK HttpClient 而非 `RestTemplate` 的回报：重定向被拒这件事在这里是真的被验了。
@@ -160,9 +160,10 @@ private final HttpClient http = HttpClient.newBuilder()
   改为 `OpsTargets` 允许 `127.0.0.1` + 全端口段太宽。正确做法：测试用**白名单内的端口**跑桩
   （从 8081..8090 里 `findFreePort` 优先试），或让桩直接绑 8090。
   **不要为测试放宽生产规则。**
-- [ ] **Step 4** 变异检查两处：① `Redirect.NEVER` → `ALWAYS`，重定向断言必红；
-  ② 白名单端口段改成"任意"，SSRF 断言必红。
-- [ ] **Step 5** 提交：`feat(ops): ④ 跨进程指标抓取（JDK HttpClient + 正面清单 SSRF，拒重定向）`
+- [x] **Step 4** 变异检查四处（① `Redirect.NEVER` → `ALWAYS`，重定向断言必红；
+  ② 白名单端口段改成"任意"，SSRF 断言必红；③ 超限改成静默截断；④ host 正则改成收所有）——
+  四条全 CAUGHT。
+- [x] **Step 5** 提交：`feat(ops): ④ 跨进程指标抓取（JDK HttpClient + 正面清单 SSRF，拒重定向）`
 
 ---
 
@@ -401,6 +402,7 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 | 任务 | 交付 | 新增用例 | 实测证据 |
 |---|---|---|---|
 | T1 | `MetricSample`/`ParseResult`、`PrometheusTextParser`（`_total`、派生线白名单后缀、引号内逗号与 `}`、坏行计数、摘 `application`）、`ScrapeException`、`MetricSource`、`LocalMeterSource`（复用 `PrometheusMeterRegistry.scrape()` 走同一个解析器） | 16 | admin 模块 54 用例全绿（原 38）；变异检查四处全咬：去 `_total`、坏行改抛异常、派生后缀不校验、不摘 `application` |
+| T2 | `TargetRef` + `OpsTargets`（正面清单：host 正则 + 七个端口 + 名称形状 + 启动期整表校验点名错项）、`ProxyMeterSource`（JDK HttpClient、1s 超时、256KB 超限即抛、非 2xx 带状态码、3xx 不跟） | 12 | admin 模块 66 用例全绿；变异检查四处全咬（跟重定向 / 端口不设限 / 超限静默截断 / host 正则收所有）；重定向断言是"目标 handler 被调 0 次"，不是只看状态码 |
 
 ## 落地时对计划的修正
 
@@ -417,3 +419,10 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 3. **micrometer 1.12 在 tag 列表尾部多打一个逗号**（`mkt_job_dedup_skipped_total{task="x",}`）。
    解析器按"引号外逗号才是分隔符"实现，天然容住，但这条单独写了 fixture 测试：
    它一旦被当成坏行，**所有带维度的计数会静默消失**，而大盘照样是绿的。
+4. **`TargetRef` 不做校验，校验放在 `OpsTargets`**（计划 Step 1 里把两件事混在一句"target 名 → host/port 的解析 + 白名单校验"）。
+   分开之后请求期与启动期各有一道闸：启动期 `parseAll` 拒任何一条不合规配置（**报错点名是哪条**），
+   请求期只允许"从已校验清单里按名字取"——所以用户可控的字符串根本碰不到 host/port。
+   这也让测试能直连 `bind(0)` 的随机口而不必放宽生产规则（生产路径拿不到白名单外的值）。
+5. 两处 JDK17 的现实：`com.sun.net.httpserver.HttpServer` **不是** `AutoCloseable`
+   （JDK21 才是），测试不能 try-with-resources，得显式 `stop(0)`；
+   桩端口用随机口，因此上面那条分层是必需的，不是可有可无的讲究。
