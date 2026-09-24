@@ -347,16 +347,16 @@ public record OpsSnapshotView(
 - Create: `marketing-gateway/src/test/java/com/example/marketing/gateway/filter/RateLimitFilterTest.java`
   （**这个 filter 至今没有测试类**，本任务顺手补最小的一条）
 
-- [ ] **Step 1** 测试先红：构造 filter（`SimpleMeterRegistry`），走一次"Lua 返回 0"的分支，
+- [x] **Step 1** 测试先红：构造 filter（`SimpleMeterRegistry`），走一次"Lua 返回 0"的分支，
   断言 `marketing.gateway.rate.limit.rejected{route="seckill-route"}` 计数 1，
   且 429 响应体**逐字节不变**（`code` 42900、`data.queueCode` 前缀 `Q`）。
   **手法照同目录的 `AuthFilterTest`**（实测：`marketing-gateway/pom.xml` 里**没有** reactor-test，
   既有反应式测试全部用 `MockServerWebExchange` + `.block()` + Mockito 桩 `chain.filter(any())`，
   `AuthFilterTest.java:31,50`）——不为了一个计数器往测试里引新依赖。
-- [ ] **Step 2** 生产改动只有两处：构造器加 `MeterRegistry`，拒绝分支加一行 `counter(...).increment()`。
+- [x] **Step 2** 生产改动只有两处：构造器加 `MeterRegistry`，拒绝分支加一行 `counter(...).increment()`。
   **不动 Lua、不动判定顺序、不动响应体**（spec §5）。
-- [ ] **Step 3** 复跑网关模块测试 + ③ 的 `GatewayConfigDefinitions` 反漂移测试。
-- [ ] **Step 4** 提交：`feat(gateway): ④ 限流拒绝补 route 维度计数（判定逻辑零改动）`
+- [x] **Step 3** 复跑网关模块测试 + ③ 的 `GatewayConfigDefinitions` 反漂移测试。
+- [x] **Step 4** 提交：`feat(gateway): ④ 限流拒绝补 route 维度计数（判定逻辑零改动）`
 
 ---
 
@@ -410,6 +410,8 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 | T4 | `BacklogStore`（information_schema 发现含该表的库、逐库 group by、单库失败只污这一行）、`SchemaBacklog`、`StreamDepth`（两个业务 topic + 审计总线 + 按 type 的重预热总线；RocketMQ 通道标不可见） | 13 | admin 模块 85 用例全绿；变异四处全咬（跨库失败报 0、去掉大小写宽容、RocketMQ 填 0、XLEN 失败当 0）。其中"去掉 LOWER() 宽容"这条是**真 bug 被抓出来后补的**：H2 把标识符存成大写，第一版发现 0 个库 |
 | T5 | `CacheConsistency` 契约 + `CacheConsistencyRegistry`（按 type 绑 gauge、重复 type 启动期失败、未注册=-1）+ 三模块各自实现（复用 reheat 那一份公式），预算自检另加一条键形断言 | 16 | 全仓 **335 用例 / 70 类** 绿；变异四处全咬（Redis 挂了报 0、键缺失当一致、缺桶不算不符、gauge 把 -1 钳成 0）；**T5 的设计被换掉**，见修正 #9 |
 | T6 | `OpsSnapshotView`/`OpsSnapshotService`/`AdminOpsController`（`GET /api/admin/ops`）、`AuditTableStore`、`RedisLeaseLock.keyOf` 暴露、liveness 三态 | 17 | admin 模块 94 用例绿；变异两处全咬（三态塌回两态、抓不到就整片抛）。**真起 LITE 后一次读盘就抓到两条真漂移**：budget 99993500 vs 期望 99993600、coupon-stock 92822 vs 92824（都是先前形态来回留下的），用 `POST /cache/reheat` 修完再读全部归 0 —— 发现→定位→修这条链第一次在真栈上走通 |
+| T7 | `RateLimitFilter` 拒绝分支补 `marketing.gateway.rate.limit.rejected{route}`；新建 `RateLimitFilterTest`（这个 filter 此前零测试） | 3 | 网关模块 38 用例绿；真栈实测：70 发打 `admin-route` → 15 次 429 → 面板读到 `{route=admin-route} 15.0`（经 HTTP 从网关进程抓来）|
+| — | **T3 的 `metrics-mode` 被推翻重做**（见修正 #13）：`TargetSources` 按 target 分派 local/proxy，视图逐条带 `source` | — | 全仓 **347 用例 / 73 类** 绿；LITE 真栈 `mode=local+proxy`，`self` 与 `marketing-gateway` 两条都 OK |
 
 ## 落地时对计划的修正
 
@@ -471,3 +473,15 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
     现在按 `DEPLOY_FORM` 给"不适用"，并在 notes 里写明是哪一档给的判断。
 12. **端点减到只有一个**：计划里的 `GET /ops/metrics?target=&name=` 没做。加了它就要在请求期再判一次
     "这个 target 在不在清单里"——多一道 SSRF 面去换一点便利，而快照本身已经按白名单过滤过了。
+13. **T3 的"proxy/local 二选一"在 T6/T7 被推翻**（母版事实 #2 我之前只读没当真）：
+    LITE 下四个业务模块与后台确实同进程，但**网关在任何形态下都是独立进程** ——
+    二选一的结果就是单机服役档的运维面恰好看不到限流拒绝数，而那是 LITE 最该看的指标。
+    改成 `local-targets` 名单 + 两个源同时存在，按 target 名分派；`mode` 字段变成"本次真正用到的源"，
+    每个 target 自己带 `source`。原来那条"mode 拼错要炸"的断言随之改写成
+    "local-targets 里的名字不在清单内 → 启动失败"。
+14. **预览容器形态里网关的可解析名字不是 `marketing-gateway`**：`docker-compose.preview.yml` 的
+    服务名是 `gateway`/`standalone`，网络别名是 `container_name`（`mkt-preview-gateway`）。
+    第一版照 ⑤ 的习惯写 `127.0.0.1:8090`，在容器里指的是本站点自己 → 一条 ERROR；
+    改成 `marketing-gateway` 仍然连不上（那个名字不在 `mkt-data` 的别名里，实测 `getent` 只有
+    `mkt-preview-gateway` 与 `gateway`）。现在默认 `127.0.0.1`（dev 两 JVM 同机）+ compose 显式
+    覆 `OPS_GATEWAY_HOST: mkt-preview-gateway`。教训：**跨容器的默认值不能按同机想当然**。
