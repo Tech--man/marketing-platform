@@ -36,7 +36,11 @@
 
 1. `routes`：**local 与 nacos 各加一条** `ui-route` → `uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}`（nacos 段 `lb://marketing-admin`），`Path=/ui/**`。
 2. `whitelist` 加 `- /ui/**`。
-3. `rate-limit` 加 `ui-route: {limit: ${RL_UI:100}, window-seconds: 1}`。静态资源一次首屏是十几个请求，100/s 既掐不死正常打开，也挡住了"把 jar 当文件服务器刷"。
+3. `rate-limit` 加 `ui-route: {limit: ${RL_UI:100}, window-seconds: 1}`。**并且必须同时给
+   `GatewayConfigDefinitions` 补一条 `gateway.ratelimit.ui-route.limit` 声明**：⑤ 的
+   `GatewayConfigDefinitionsTest` 会比对"yml 的 rate-limit map"与"声明清单"，多一个少一个都红
+   ——原稿这里写的"本段不新增声明"是错的，那条闸在 T3 就把这个漏判抓出来了。
+   副作用是好的：界面静态资源的阈值从此也能在线调，与其他五条路同一套裁决。
 
 `AdminAuthFilter` 与 `AuthFilter` **代码零改动**：前者按 `/api/admin/` 前缀生效、后者按白名单放行。
 

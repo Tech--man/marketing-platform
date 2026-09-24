@@ -1673,3 +1673,25 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
 ## 落地时对计划的修正
 
 （实施时逐条追加）
+
+1. **T1 的 dist 体积返工**：按计划把 Element Plus 全量注册写进 `main.js` 后，产物 **1388 KiB**
+   （JS 1049KB + CSS 361KB）——那等于把"按需引入"这个决定当场作废。改成只用 unplugin 的
+   resolver、并手动引 `ElMessage`/`ElMessageBox` 两个命令式组件的样式后降到 **144 KiB**
+   （gzip 约 42KB）。这份 dist 直接进常态服役档 LITE 的 jar，10 倍差值得这一次返工。
+2. **T1 的 `-dirty` 标记是死代码**：脚本先 `cd` 进了 `marketing-admin-ui/`，
+   于是 `git status --porcelain -- marketing-admin-ui` 的相对 pathspec 什么都匹配不到，
+   标记永不触发。改成 `:/marketing-admin-ui`（仓库根相对）后实测生效。
+3. **T1 的门禁测试自己写错**：`static/` 后面漏了 `ui/` 段，导致它恒红在"仓库里没有这个文件"。
+   红是对的、理由是错的——修的是测试。
+4. **T2 的真栈连抓两个"只有起进程才看得见"的 bug**（纯函数单测两次都是绿的）：
+   ① 空路径时 `createRelative("")` 返回 `ui/` 这个**目录**，`exists() && isReadable()` 都为真，
+   于是被当资源返回，最后由 handler 以"是个目录"拒掉 → `/ui/` 恒 404；
+   ② 修掉①后仍 404，因为 `ResourceHttpRequestHandler.processPath` 对空路径直接判 404，
+   **根本问不到 resolver**。最终用 `addViewController("/ui","/ui/")` 显式 forward 到 index.html。
+   这正是 Step 5 必须真跑的理由，也证明这三条判据剥成纯函数没白做（判定对、接线错，一眼可分）。
+5. **T3 少写了一条声明**：spec §4 原文说"ui-route 的限流键本段不新增声明"——**做不到**。
+   ⑤ 的 `GatewayConfigDefinitionsTest` 会比对 yml 的 rate-limit map 与声明清单，
+   多一条少一条都红（这次红在多了 `ui-route` 上）。补了 `GatewayConfigDefinitions` 那条声明，
+   spec 已回改。副作用是好的：界面阈值从此也能在线调，与其他五条路同一套裁决。
+   注：修在 e51ddfd 之后的一个单独提交里（fix-forward），因为那一条提交时套件是 1 红——
+   不 amend，让"红过一次"留在历史里。
