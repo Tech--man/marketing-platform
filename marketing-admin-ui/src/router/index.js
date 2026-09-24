@@ -8,6 +8,9 @@ import ActivitiesView from '@/views/ActivitiesView.vue'
 import CouponsView from '@/views/CouponsView.vue'
 import RulesView from '@/views/RulesView.vue'
 import SeckillView from '@/views/SeckillView.vue'
+import CacheView from '@/views/CacheView.vue'
+import UsersView from '@/views/UsersView.vue'
+import SessionsView from '@/views/SessionsView.vue'
 
 /**
  * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T6 配置、T7 活动…）。
@@ -29,6 +32,14 @@ const routes = [
       { path: 'coupons', name: 'coupons', component: CouponsView },
       { path: 'rules', name: 'rules', component: RulesView },
       { path: 'seckill', name: 'seckill', component: SeckillView },
+      {
+        path: 'cache',
+        name: 'cache',
+        component: CacheView,
+        meta: { roles: ['admin', 'operator'] },
+      },
+      { path: 'users', name: 'users', component: UsersView },
+      { path: 'sessions', name: 'sessions', component: SessionsView },
     ],
   },
 ]
