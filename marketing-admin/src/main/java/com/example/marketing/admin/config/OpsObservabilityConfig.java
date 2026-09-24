@@ -28,6 +28,34 @@ import java.util.Map;
 @EnableConfigurationProperties(OpsProperties.class)
 public class OpsObservabilityConfig {
 
+    /**
+     * 快照时刻的来源。Spring Boot 不默认给 {@code Clock} bean，
+     * 少了这一个，standalone 会在装配 {@code OpsSnapshotService} 时直接起不来
+     * ——单测里注入的是固定时钟，看不见这种缺 bean 的失败。
+     */
+    @Bean
+    public java.time.Clock opsClock() {
+        return java.time.Clock.systemUTC();
+    }
+
+    /**
+     * 队列深度读数。{@code StreamDepth} 刻意不是组件扫描出来的 bean：它要的是
+     * "本形态走的是哪条消息通道"与"本进程注册了哪些 reheat type"，两者在这里显式喂进去。
+     *
+     * <p>通道判断读 <b>{@code marketing.mq.type} 这个属性本身</b>，而不是新加一个 ④ 专属开关：
+     * standalone 的 yml 里它就是 {@code ${MQ_TYPE:redis-stream}}（LITE/dev 因此是 stream），
+     * 而分进程的 admin 没有这个属性、默认值 {@code rocketmq}（FULL 因此 broker 深度不可见）。
+     * 复用同一个事实源，就不会出现"④ 以为还在用 Stream"的第二份真相。</p>
+     */
+    @Bean
+    public com.example.marketing.admin.observe.StreamDepth opsStreamDepth(
+            org.springframework.data.redis.core.StringRedisTemplate redis,
+            com.example.marketing.common.cache.CacheReheatRegistry reheatRegistry,
+            @org.springframework.beans.factory.annotation.Value("${marketing.mq.type:rocketmq}") String mqType) {
+        return new com.example.marketing.admin.observe.StreamDepth(redis,
+                "redis-stream".equalsIgnoreCase(mqType), reheatRegistry.types());
+    }
+
     @Bean
     @ConditionalOnProperty(prefix = "marketing.admin.ops", name = "metrics-mode",
             havingValue = OpsProperties.MODE_PROXY, matchIfMissing = true)

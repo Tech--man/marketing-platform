@@ -312,7 +312,7 @@ public record ConsistencyView(String kind, String key, Long expected, Long actua
 - Create: `marketing-admin/src/main/java/com/example/marketing/admin/dto/OpsSnapshotView.java`（+ 若干子 record）
 - Test: `.../controller/AdminOpsControllerTest.java`、`.../observe/OpsSnapshotServiceTest.java`
 
-- [ ] **Step 1** 视图（record 树，字段即 spec §2 的三问 + §4.4/§4.5）：
+- [x] **Step 1** 视图（record 树，字段即 spec §2 的三问 + §4.4/§4.5）：
 
 ```java
 public record OpsSnapshotView(
@@ -326,17 +326,17 @@ public record OpsSnapshotView(
         List<String> notes) {              // 人读的口径说明（"抽样"、"锁键不存在≠没人跑"…）
 }
 ```
-- [ ] **Step 2** 两个断言先写：
+- [x] **Step 2** 两个断言先写：
   ① 某个 target 抓取失败时，`targets` 里那条是 `ERROR` + 原因，而**其余读数照常返回**
   （一个 target 挂掉不能把整张大盘变 500，也不能变空）；
   ② `GET /api/admin/ops` 无凭证 → 40100；只读角色可读（它是只读面）。
-- [ ] **Step 3** 实现（并发度 1、串行抓；`takenAt` 用注入的 `Clock`，测试用固定时钟）。
+- [x] **Step 3** 实现（并发度 1、串行抓；`takenAt` 用注入的 `Clock`，测试用固定时钟）。
   `liveness.notes` 里必须写 spec §4.4 那句：**Redis 抖动时 `RedisLeaseLock` 会照常执行**，
   所以锁键缺失不等于"没人在跑"。
-- [ ] **Step 4** `AdminOpsControllerTest`（standaloneSetup + mock）：断言 41010 **不出现**在只读面
+- [x] **Step 4** `AdminOpsControllerTest`：断言 41010 **不出现**在只读面
   （④ 不分形态可用，只是 target 集不同——这是对 ③ 那条"只在某档可用要显式报错"纪律的边界确认：
   确实可用的东西不要报错）。
-- [ ] **Step 5** 提交：`feat(ops): ④ GET /api/admin/ops 只读总览（逐 target 状态，不整片失败）`
+- [x] **Step 5** 提交：`feat(ops): ④ GET /api/admin/ops 只读总览（逐 target 状态，不整片失败）`
 
 ---
 
@@ -409,6 +409,7 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 | T3 | `OpsProperties`（mode 取值与抽样数在启动期校验）、`OpsObservabilityConfig`（proxy/local 二选一 + 空清单拒启动）、admin yml 六个 target、standalone yml 覆成 `local` + 只有 `self`、full-app compose 给 admin 下发 `OPS_T_*` | 6 | 全仓 **306 用例 / 64 类** 绿；真起 LITE 栈（deploy-preview exit 0、standalone 100s 起）+ 冒烟 81/81；变异三处全咬（去掉空清单闸、把 matchIfMissing 挪到 local、去掉 mode 校验） |
 | T4 | `BacklogStore`（information_schema 发现含该表的库、逐库 group by、单库失败只污这一行）、`SchemaBacklog`、`StreamDepth`（两个业务 topic + 审计总线 + 按 type 的重预热总线；RocketMQ 通道标不可见） | 13 | admin 模块 85 用例全绿；变异四处全咬（跨库失败报 0、去掉大小写宽容、RocketMQ 填 0、XLEN 失败当 0）。其中"去掉 LOWER() 宽容"这条是**真 bug 被抓出来后补的**：H2 把标识符存成大写，第一版发现 0 个库 |
 | T5 | `CacheConsistency` 契约 + `CacheConsistencyRegistry`（按 type 绑 gauge、重复 type 启动期失败、未注册=-1）+ 三模块各自实现（复用 reheat 那一份公式），预算自检另加一条键形断言 | 16 | 全仓 **335 用例 / 70 类** 绿；变异四处全咬（Redis 挂了报 0、键缺失当一致、缺桶不算不符、gauge 把 -1 钳成 0）；**T5 的设计被换掉**，见修正 #9 |
+| T6 | `OpsSnapshotView`/`OpsSnapshotService`/`AdminOpsController`（`GET /api/admin/ops`）、`AuditTableStore`、`RedisLeaseLock.keyOf` 暴露、liveness 三态 | 17 | admin 模块 94 用例绿；变异两处全咬（三态塌回两态、抓不到就整片抛）。**真起 LITE 后一次读盘就抓到两条真漂移**：budget 99993500 vs 期望 99993600、coupon-stock 92822 vs 92824（都是先前形态来回留下的），用 `POST /cache/reheat` 修完再读全部归 0 —— 发现→定位→修这条链第一次在真栈上走通 |
 
 ## 落地时对计划的修正
 
@@ -458,3 +459,15 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
    服务加后台可读端点（母版 §10 明列不做），都比少一个数贵。
    连带把计划里新建的 `CacheKeys` 撤了：④ 不再读键形，它就没有第二个消费者（一处只服务自己的
    间接层是净负担），三处服务回到自己原来的字面量。
+10. **T6 抓到两件计划没写的事**：
+    ① `Clock` 必须由 ④ 自己声明成 bean（Spring Boot 不默认给），少了它 standalone 直接起不来 ——
+    而装配单测全绿。**这正是 ⑤ 那条教训的复现**，也是本段坚持"每段收尾真起一次栈"的理由；
+    ② `StreamDepth` 也不该是扫描出来的 bean（构造要 boolean + List），改成配置里显式 new，
+    通道判据复用 **`marketing.mq.type` 这个属性本身**（standalone 的 yml 里它是
+    `${MQ_TYPE:redis-stream}`，分进程的 admin 没有这个属性、默认 `rocketmq`）——
+    不新增一个 ④ 专属开关，免得出现"④ 以为还在用 Stream"的第二份真相。
+11. **liveness 改成三态**（计划只有 true/false）：LITE/dev 下四个业务模块与后台都在 standalone 里，
+    它们**不该**有自己的自述键；报成 false 等于对运维说"五个服务全死了"。
+    现在按 `DEPLOY_FORM` 给"不适用"，并在 notes 里写明是哪一档给的判断。
+12. **端点减到只有一个**：计划里的 `GET /ops/metrics?target=&name=` 没做。加了它就要在请求期再判一次
+    "这个 target 在不在清单里"——多一道 SSRF 面去换一点便利，而快照本身已经按白名单过滤过了。

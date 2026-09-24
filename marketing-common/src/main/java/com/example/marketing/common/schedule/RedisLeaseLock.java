@@ -24,6 +24,11 @@ public class RedisLeaseLock {
 
     private static final String KEY_PREFIX = "mkt:job:";
 
+    /** 租约键的唯一形状。④ 的只读面要按它查"这个周期有没有人在跑"，不能抄第二份字面量 */
+    public static String keyOf(String task) {
+        return KEY_PREFIX + task;
+    }
+
     private final StringRedisTemplate redisTemplate;
     private final MeterRegistry meterRegistry;
     private final String owner = UUID.randomUUID().toString();
@@ -38,7 +43,7 @@ public class RedisLeaseLock {
      * @param interval 调度周期：key 的 TTL，等于周期长度即"本周期只执行一次"
      */
     public void runExclusive(String task, Duration interval, Runnable body) {
-        String key = KEY_PREFIX + task;
+        String key = keyOf(task);
         Boolean acquired;
         try {
             acquired = redisTemplate.opsForValue().setIfAbsent(key, owner, interval);

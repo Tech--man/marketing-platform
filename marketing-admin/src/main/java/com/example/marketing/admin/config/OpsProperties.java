@@ -4,7 +4,9 @@ import lombok.Data;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -33,6 +35,14 @@ public class OpsProperties implements InitializingBean {
 
     /** target 名 → host:port。值必须在 OpsTargets 的正面清单内，否则启动失败 */
     private Map<String, String> targets = new LinkedHashMap<>();
+
+    /**
+     * 周期任务名，用来查各自的去重键。三份字面量长在三个模块的 job 里     * （{@code coupon-expire} / {@code seckill-timeout} / {@code local-message-retry}），
+     * ④ 跨不过模块边界，所以这里给一份可配置的对齐清单：漂了的表现是该任务恒 held=false，
+     * 而不是报错——读数说明里也写了这一点。
+     */
+    private List<String> scheduledTasks = new ArrayList<>(List.of(
+            "coupon-expire", "seckill-timeout", "local-message-retry"));
 
     @Override
     public void afterPropertiesSet() {

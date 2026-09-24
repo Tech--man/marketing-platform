@@ -4,6 +4,9 @@ import com.example.marketing.admin.config.OpsObservabilityConfig;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.prometheus.PrometheusConfig;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -29,6 +32,11 @@ class OpsAssemblyTest {
     private ApplicationContextRunner runner() {
         return new ApplicationContextRunner()
                 .withBean(MeterRegistry.class, () -> new PrometheusMeterRegistry(PrometheusConfig.DEFAULT))
+                // opsStreamDepth 要这两样：真实装配里由 common 的自动装配给，
+                // 裸容器里必须自己补，否则测的是"缺 bean"而不是"模式选对了没"
+                .withBean(StringRedisTemplate.class, () -> org.mockito.Mockito.mock(StringRedisTemplate.class))
+                .withBean(com.example.marketing.common.cache.CacheReheatRegistry.class,
+                        () -> new com.example.marketing.common.cache.CacheReheatRegistry(List.of()))
                 .withUserConfiguration(OpsObservabilityConfig.class);
     }
 
