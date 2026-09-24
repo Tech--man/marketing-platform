@@ -32,6 +32,14 @@ fi
 echo "==> vite build"
 npm run build
 
+# 清掉 target 里的上一份 dist：maven 的资源拷贝只覆盖、不删除，
+# 所以改过几次前端之后 jar 里会攒下**没人引用的旧产物**（第一版 check-ui-dist.sh 就是这样红的：
+# jar 里躺着一份仓库已经没有的 css）。删掉这个目录让下一次 package 重新拷一份干净的。
+if [ -d "$PWD/../marketing-admin/target/classes/static/ui" ]; then
+  echo "==> 清理 target/classes/static/ui 里的旧产物"
+  rm -rf "$PWD/../marketing-admin/target/classes/static/ui"
+fi
+
 # 指纹注释：让"jar 里的界面是哪棵树的哪个时刻"在浏览器里直接看得出来。
 # 没有这一行，产物漂了只能靠比对文件时间猜——而入仓产物最容易漂。
 # pathspec 必须写成 `:/` 开头（仓库根相对）：脚本此刻已经 cd 进了 marketing-admin-ui/，

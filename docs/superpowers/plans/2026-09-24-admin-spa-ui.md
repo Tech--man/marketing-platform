@@ -1706,3 +1706,8 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
    vitest（用真后端 DTO 形状的 mock）+ T12 旅程里的真实点击。
    触发这条决定的实测很直白：T6 那次浏览器打开 `/ui/config` 是空白页——
    没有 JS 报错，只是容器还在跑上一任务的 dist。
+8. **T11 的孤儿断言第一次跑就红了，而红的是构建产物不是仓库**：Maven 的资源拷贝只覆盖不删除，
+   所以 `marketing-admin/target/classes/static/ui` 会攒下历次构建的 `assets/*`，
+   打出来的 jar 里因此躺着一份仓库已经没有的 css。修在唯一写这份 dist 的地方——
+   `build-ui.sh` 构建后清掉 `target/classes/static/ui`，让下一次 package 拷一份干净的。
+   这条不在计划里，是闸自己抓出来的（也正是它存在的理由）。
