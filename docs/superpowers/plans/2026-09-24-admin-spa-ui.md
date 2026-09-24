@@ -41,7 +41,7 @@
 **Interfaces**
 - Produces：`static/ui/index.html` 与 `static/ui/assets/*-[hash].js|css`（后续任务的落点）；`scripts/build-ui.sh`（唯一重建入口，后续每个改前端的任务都要跑它再提交）；`UiDistIntegrityTest`（T11 会往里加断言，保持同一个类）。
 
-- [ ] **Step 1 先写红的门禁测试**（这一步在任何前端代码之前：产物不存在时它必须失败）
+- [x] **Step 1 先写红的门禁测试**（这一步在任何前端代码之前：产物不存在时它必须失败）
 
 ```java
 package com.example.marketing.admin.web;
@@ -78,7 +78,7 @@ class UiDistIntegrityTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin test -Dtest=UiDistIntegrityTest`
 Expected: FAIL —— `static/ui/index.html 不在 classpath`
 
-- [ ] **Step 2 前端骨架**
+- [x] **Step 2 前端骨架**
 
 `marketing-admin-ui/package.json`（版本号写范围，`npm install` 解析出的精确值记进本计划的执行记录）：
 
@@ -208,7 +208,7 @@ export default router
 </template>
 ```
 
-- [ ] **Step 3 构建入口脚本**
+- [x] **Step 3 构建入口脚本**
 
 `scripts/build-ui.sh`：
 
@@ -267,7 +267,7 @@ marketing-admin-ui/node_modules/
 marketing-admin-ui/dist/
 ```
 
-- [ ] **Step 4 跑构建，确认产物落位**
+- [x] **Step 4 跑构建，确认产物落位**
 
 ```bash
 chmod +x scripts/build-ui.sh
@@ -276,16 +276,16 @@ ls -la marketing-admin/src/main/resources/static/ui
 ```
 Expected：`==> 产物：N 个文件，K KiB（未压缩）`、`index.html` 里含 `<!-- build-ui: rev=... -->`、`assets/` 下有 `index-<hash>.js` 与 `.css`。**把精确的 node/npm/依赖版本与这一步的 N/K 抄进"执行记录"。**
 
-- [ ] **Step 5 跑门禁测试确认变绿**
+- [x] **Step 5 跑门禁测试确认变绿**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin test -Dtest=UiDistIntegrityTest`
 Expected: PASS
 
-- [ ] **Step 6 变异检查（必须做，不许省）**
+- [x] **Step 6 变异检查（必须做，不许省）**
 
 把 `vite.config.js` 的 `base` 临时改成 `'/app/'` → `SKIP_INSTALL=1 ./scripts/build-ui.sh` → 测试**必须红**在"`src=\"/ui/assets/...\"` 匹配不到"。改回 `'/ui/'` 重构建，回绿。红过才继续。
 
-- [ ] **Step 7 全仓回归 + 提交**
+- [x] **Step 7 全仓回归 + 提交**
 
 ```bash
 source scripts/common.sh && mvn -q install
@@ -310,7 +310,7 @@ git commit -m "feat(ui): ⑥ 前端骨架与唯一构建入口（dist 入仓 + �
 > 而这段逻辑里**唯一会伤到人的**就是"什么该回退 index、什么该 404、什么该 no-store"这三个判断。
 > 把它们做成可单测的纯函数，配置类只剩接线；不然只能起整个 web 上下文去测一个 if。
 
-- [ ] **Step 1 写红的测试**
+- [x] **Step 1 写红的测试**
 
 ```java
 package com.example.marketing.admin.web;
@@ -370,7 +370,7 @@ class UiResourceSupportTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin test -Dtest=UiResourceSupportTest`
 Expected: 编译失败（类不存在）。若报 `MockHttpServletResponse` 找不到，加 `spring-test` 到 admin 的 test scope——它今天已经有（`@SpringBootTest` 类的装配测试在用），别改成手写 stub。
 
-- [ ] **Step 2 实现纯判定类**
+- [x] **Step 2 实现纯判定类**
 
 ```java
 package com.example.marketing.admin.web;
@@ -421,7 +421,7 @@ public final class UiResourceSupport {
 }
 ```
 
-- [ ] **Step 3 接线成配置类**
+- [x] **Step 3 接线成配置类**
 
 ```java
 package com.example.marketing.admin.web;
@@ -502,12 +502,12 @@ public class UiWebMvcConfig implements WebMvcConfigurer {
 > `com.example.marketing`（见 `MarketingStandaloneApplication`）。Step 5 的直连 8085 实测
 > 就是这条装配边界的验证；如果 8085 上没有 `/ui/`，先看扫描边界再怀疑前端。
 
-- [ ] **Step 4 跑测试到绿**
+- [x] **Step 4 跑测试到绿**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-admin test -Dtest='UiResourceSupportTest,UiDistIntegrityTest'`
 Expected: PASS
 
-- [ ] **Step 5 真栈实测（不能只看单测）**
+- [x] **Step 5 真栈实测（不能只看单测）**
 
 ```bash
 ./scripts/deploy-preview.sh                      # LITE
@@ -522,11 +522,11 @@ curl -is http://127.0.0.1:8090/ui/nope.js | grep -iE 'HTTP/'
 Expected（网关改动在 T3，这一步先经 8085 直连）：`/ui/` 200 + `no-store` + CSP；`$ASSET` 200 + `immutable`；`/ui/audits` 200（回退生效，但此时 404 也算预期内，T3 之后再看）；`/ui/nope.js` **404**。
 > 直连 8085 时把上面 URL 的 `:8090` 换成 `:8085`。
 
-- [ ] **Step 6 变异检查**
+- [x] **Step 6 变异检查**
 
 `shouldFallbackToIndex` 里 `return !tail.contains(".")` 改成 `return true` → 测试必须红在 `/ui/assets/...` 那条（"js 404 变 200 HTML"）。回绿后再提交。
 
-- [ ] **Step 7 提交**
+- [x] **Step 7 提交**
 
 ```bash
 source scripts/common.sh && mvn -q install
@@ -545,7 +545,7 @@ git commit -m "feat(ui): ⑥ 静态资源与 history fallback 长在 admin，索
 **Interfaces**
 - Produces：route id `ui-route`（限流 key `gateway.ratelimit.ui-route.limit` 因此在 ⑤ 的声明范围内可选，本段不新增声明）、白名单项 `/ui/**`。
 
-- [ ] **Step 1 写红的配置测试**
+- [x] **Step 1 写红的配置测试**
 
 ```java
 package com.example.marketing.gateway.config;
@@ -628,7 +628,7 @@ class GatewayUiRouteConfigTest {
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway test -Dtest=GatewayUiRouteConfigTest`
 Expected: 三条全红
 
-- [ ] **Step 2 改 yml**
+- [x] **Step 2 改 yml**
 
 local routes 段末尾（紧跟 `admin-route` 之后）：
 
@@ -670,12 +670,12 @@ rate-limit map 末尾：
         window-seconds: 1
 ```
 
-- [ ] **Step 3 跑测试到绿**
+- [x] **Step 3 跑测试到绿**
 
 Run: `source scripts/common.sh && mvn -q -pl marketing-gateway test -Dtest=GatewayUiRouteConfigTest`
 Expected: PASS ×3
 
-- [ ] **Step 4 真栈实测 LITE 与 FULL 两种装配**
+- [x] **Step 4 真栈实测 LITE 与 FULL 两种装配**
 
 ```bash
 ./scripts/deploy-preview.sh
@@ -685,12 +685,12 @@ docker exec mkt-preview-gateway getent hosts marketing-admin || true   # 只是�
 然后起 FULL 容器档（`./scripts/stop-preview.sh && export ADMIN_JWT_SECRET=$(cat .admin-jwt-secret) && SKIP_BUILD=1 ./scripts/deploy-full.sh`）再打一次 `curl -is http://127.0.0.1:8090/ui/`。
 Expected: 两档都 200。**FULL 容器档必须单独看一眼**——那是 `lb://marketing-admin` 这条路唯一被验的地方。
 
-- [ ] **Step 5 变异检查**
+- [x] **Step 5 变异检查**
 
 把 nacos 段的 `ui-route` 整条注释掉 → 第一条断言必须红（"只在升档后红"这条病被探针抓到）。恢复。
 再把 `${RL_UI:100}` 那三行删掉 → 第三条必须红。恢复。
 
-- [ ] **Step 6 全仓回归 + 提交**
+- [x] **Step 6 全仓回归 + 提交**
 
 ```bash
 source scripts/common.sh && mvn -q install
@@ -715,7 +715,7 @@ git commit -m "feat(gateway): ⑥ ui-route 两套 profile + /ui 白名单 + 独�
 - Consumes：`POST /api/admin/auth/login` → `{code,message,data:{token,expiresInSeconds,...},success}`；`GET /api/admin/auth/me`。
 - Produces：`api.get/post/put/del(path, body?)` → resolve 后端 `data`，非 0 码抛 `ApiError{code,message,payload}`；`SESSION_KEY='mkt.admin.token'`、`useSession()`（`token`、`role`、`me`、`expiresAt`、`login()`、`logout()`、`secondsLeft()`）；`ApiError` 的码常量 `E.UNAUTHORIZED=40100 / E.EXPIRED=40101 / E.REVOKED=40102 / E.FORBIDDEN=40300 / E.CONFLICT=41008 / E.NOT_BROADCAST=41009 / E.NOT_APPLICABLE=41010 / E.THROTTLED=42900`。
 
-- [ ] **Step 1 装 vitest 并写红的测试**
+- [x] **Step 1 装 vitest 并写红的测试**
 
 ```bash
 cd marketing-admin-ui && npx vitest --version   # 记下解析到的精确版本 → 执行记录
@@ -785,7 +785,7 @@ describe('api client', () => {
 Run: `cd marketing-admin-ui && npx vitest run`
 Expected: FAIL（`@/api/client` 不存在）
 
-- [ ] **Step 2 实现 client**
+- [x] **Step 2 实现 client**
 
 `marketing-admin-ui/src/api/client.js`：
 
@@ -863,7 +863,7 @@ export const api = {
 }
 ```
 
-- [ ] **Step 3 会话 store + 路由守卫 + 登录页 + 布局**
+- [x] **Step 3 会话 store + 路由守卫 + 登录页 + 布局**
 
 `marketing-admin-ui/src/stores/session.js`：
 
@@ -1084,12 +1084,12 @@ const visible = computed(() =>
 T5-T10 的每个页面都挂在 `AppLayout` 之下：把 T4 的路由表里除 `login` 外的每条都改成
 `children` 形式挂在 `component: AppLayout` 的父路由下（一步到位，避免每个任务再改一次 router）。
 
-- [ ] **Step 4 跑测试到绿 + 变异检查**
+- [x] **Step 4 跑测试到绿 + 变异检查**
 
 Run: `cd marketing-admin-ui && npx vitest run` → PASS ×5。
 变异：把 `authAction` 里 `REVOKED` 也映射成 `login-redirect` → 第三条必须红；把"抛错前重试一发"这种"贴心"代码加进去 → 第四条必须红（证明它挡得住自动重放）。
 
-- [ ] **Step 5 构建 + 全仓回归 + 提交**
+- [x] **Step 5 构建 + 全仓回归 + 提交**
 
 ```bash
 SKIP_INSTALL=1 ./scripts/build-ui.sh
@@ -1112,7 +1112,7 @@ git commit -m "feat(ui): ⑥ 前端基座（api 客户端三码分处 + 会话�
 - Consumes：`GET /api/admin/ops` → `OpsSnapshotView{mode,ownForm,takenAt,targets[],backlog{liveness{...}},consistency[],metrics[],liveness{},audit{},notes[]}`；`GET /api/admin/{activities,coupon/templates,discount/rules,seckill/activities}` 的 `PageResult`。
 - Produces：`PagedTable`（props：`endpoint`、`columns`、`pageSize`；expose：`reload()`）、`TriState`（props：`value`、`applicable`）——T6-T10 的每个列表页都消费 `PagedTable`。
 
-- [ ] **Step 1 写红的 TriState 测试（④ 的纪律在界面上的投影）**
+- [x] **Step 1 写红的 TriState 测试（④ 的纪律在界面上的投影）**
 
 ```js
 import { describe, it, expect } from 'vitest'
@@ -1138,7 +1138,7 @@ describe('TriState', () => {
 
 Run: `cd marketing-admin-ui && npx vitest run test/tristate.spec.js` → FAIL（组件不存在）
 
-- [ ] **Step 2 实现三个组件**
+- [x] **Step 2 实现三个组件**
 
 `TriState.vue`：`value < 0 && applicable` → "判定不了"（灰底 + `title` 说明"④ 读不到，不等于没问题"）；`!applicable` → "不适用"；否则显示数值，`> 0` 时红。**不许把 -1 归一化。**
 
@@ -1146,15 +1146,15 @@ Run: `cd marketing-admin-ui && npx vitest run test/tristate.spec.js` → FAIL（
 
 `OpsView.vue`：按 `mode` 显示"这一盘读的是谁"，`targets` 表（name/url/source/status/样本数），`backlog.schemas` 表 + 合计（任一 `UNKNOWN` → 合计也显示"判定不了"，与后端同一口径），`backlog.streams` 用 `TriState`，`consistency` 三行 + note，`liveness.processes` 三态（`null` → "本档不适用"），`audit` 摘要，`notes` 原文列出。**页面上不出现任何写按钮**（④ 只读，spec §5 的边界）。
 
-- [ ] **Step 3 测试到绿 + 变异检查**
+- [x] **Step 3 测试到绿 + 变异检查**
 
 `npx vitest run` → PASS ×3。变异：把 `-1` 归一化成 0 → 第一条必须红。
 
-- [ ] **Step 4 真浏览器验证（第一处，用 browser-use）**
+- [x] **Step 4 真浏览器验证（第一处，用 browser-use）**
 
 LITE 起栈后打开 `http://127.0.0.1:8090/ui/`：登录 → 大盘截图。核对三件事：`mode` 与 target 列表和 `curl /api/admin/ops` 一致；`MKT_STREAM_*` 在 LITE 显示数字、RocketMQ 说明只在 FULL 出现（换档验一次）；`consistency` 三条都是 0 或非 0 与后端逐字一致。**不一致就停下来修，别继续堆页面。**
 
-- [ ] **Step 5 构建 + 回归 + 提交**
+- [x] **Step 5 构建 + 回归 + 提交**
 
 ```bash
 SKIP_INSTALL=1 ./scripts/build-ui.sh && source scripts/common.sh && mvn -q install
@@ -1174,7 +1174,7 @@ git commit -m "feat(ui): ⑥ 运维大盘页与列表基座（-1/不适用绝不
 **Interfaces**
 - Consumes：`GET /api/admin/config` → `ConfigOverviewView{ownForm,entries[{form,rows[{cfgKey,cfgValue,source,...}]}],orphan[],unreported[],ignored[]}`；`PUT /api/admin/config`（body `cfgKey/form/value/remark`）、`DELETE /api/admin/config?cfgKey=&form=`、`POST /api/admin/config/rebroadcast`。角色：写仅 `admin`。
 
-- [ ] **Step 1 写红的测试**
+- [x] **Step 1 写红的测试**
 
 ```js
 // marketing-admin-ui/test/config-view.spec.js
@@ -1239,10 +1239,10 @@ describe('ConfigView', () => {
 ```
 
 Run: `cd marketing-admin-ui && npx vitest run test/config-view.spec.js` → 三条 FAIL（视图不存在）
-- [ ] **Step 2 实现**：按 form 分组的表 + "改值 / 删行（=恢复出厂）/ 重新广播"。删行必须二次确认，文案写"删掉这行后本档退回 yml 出厂值，不是删成 0"。
-- [ ] **Step 3** `npx vitest run` 到绿；变异检查两处（把 `DEFAULT` 和 `GLOBAL` 渲染成同一标签 → 红；把 41009 的按钮条件删掉 → 红）。
-- [ ] **Step 4** 浏览器实测：把 `seckill-route` 阈值改成 3/s，连打 `/api/seckill/activities` 看到 429，改回来（**收尾必须删掉覆盖行**，与 smoke 链路 5 同一纪律）。
-- [ ] **Step 5** 构建 + `mvn -q install` + 提交 `feat(ui): ⑥ 在线配置页（③⑤：来源可辨、41009 有出口）`
+- [x] **Step 2 实现**：按 form 分组的表 + "改值 / 删行（=恢复出厂）/ 重新广播"。删行必须二次确认，文案写"删掉这行后本档退回 yml 出厂值，不是删成 0"。
+- [x] **Step 3** `npx vitest run` 到绿；变异检查两处（把 `DEFAULT` 和 `GLOBAL` 渲染成同一标签 → 红；把 41009 的按钮条件删掉 → 红）。
+- [x] **Step 4** 浏览器实测：把 `seckill-route` 阈值改成 3/s，连打 `/api/seckill/activities` 看到 429，改回来（**收尾必须删掉覆盖行**，与 smoke 链路 5 同一纪律）。
+- [x] **Step 5** 构建 + `mvn -q install` + 提交 `feat(ui): ⑥ 在线配置页（③⑤：来源可辨、41009 有出口）`
 
 ---
 
@@ -1256,7 +1256,7 @@ Run: `cd marketing-admin-ui && npx vitest run test/config-view.spec.js` → 三�
 **Interfaces**
 - Consumes：`GET/POST /api/admin/activities`、`POST /api/admin/activities/{no}/transition?event=`、`PUT .../budget`、`PUT .../gray`（全部仅 `admin`）。`ActivityView` 带 `version`。
 
-- [ ] **Step 1 写红的测试**
+- [x] **Step 1 写红的测试**
 
 ```js
 // marketing-admin-ui/test/activities.spec.js
@@ -1323,10 +1323,10 @@ describe('ActivitiesView', () => {
 ```
 
 Run: `cd marketing-admin-ui && npx vitest run test/activities.spec.js` → FAIL（视图不存在）
-- [ ] **Step 2 实现**（表单字段：`activityNo/name/status/budgetAmount/grayPercent/grayWhitelist/起止时间`；灰度表单下方写死一句提示："灰度只写 DB，5s 内由 activity 回源生效，不会立刻反映在缓存读数里"）。
-- [ ] **Step 3** 测试到绿 + 变异检查（去掉 `version` 透传 → 红；把 41008 当普通错误弹 toast → 红）。
-- [ ] **Step 4** 浏览器实测一次真写：给 smoke 建的临时活动改预算 +1 元 → 列表看到新值 → `GET /api/activity/{no}/budget/remain`（C 端）与后台一致。**这一步是本段唯一"改到共享数据"的动作，做完把改动记进执行记录**（便于对照下一轮冒烟）。
-- [ ] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 活动页（乐观锁撞号给出口，不当成保存失败）`
+- [x] **Step 2 实现**（表单字段：`activityNo/name/status/budgetAmount/grayPercent/grayWhitelist/起止时间`；灰度表单下方写死一句提示："灰度只写 DB，5s 内由 activity 回源生效，不会立刻反映在缓存读数里"）。
+- [x] **Step 3** 测试到绿 + 变异检查（去掉 `version` 透传 → 红；把 41008 当普通错误弹 toast → 红）。
+- [x] **Step 4** 浏览器实测一次真写：给 smoke 建的临时活动改预算 +1 元 → 列表看到新值 → `GET /api/activity/{no}/budget/remain`（C 端）与后台一致。**这一步是本段唯一"改到共享数据"的动作，做完把改动记进执行记录**（便于对照下一轮冒烟）。
+- [x] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 活动页（乐观锁撞号给出口，不当成保存失败）`
 
 ---
 
@@ -1341,7 +1341,7 @@ Run: `cd marketing-admin-ui && npx vitest run test/activities.spec.js` → FAIL�
 **Interfaces**
 - Consumes：`GET/POST /api/admin/coupon/templates`、`PUT /api/admin/coupon/templates/{no}/stock`、`PUT .../{no}/status`；`GET/POST /api/admin/discount/rules`（upsert，`status` 在 body）；`GET/POST /api/admin/seckill/activities`、`PUT /api/admin/seckill/activities/{no}/stock`、`PUT .../{no}/status`。全部仅 `admin`。**三条 URL 前缀形状互不相同**（spec §1），每页顶部注释写死自己的端点常量。
 
-- [ ] **Step 1 写红的测试**
+- [x] **Step 1 写红的测试**
 
 ```js
 // marketing-admin-ui/test/resource-views.spec.js
@@ -1401,10 +1401,10 @@ describe('三页的端点与口径', () => {
 ```
 
 Run: `cd marketing-admin-ui && npx vitest run test/resource-views.spec.js` → FAIL（三个视图不存在）
-- [ ] **Step 2 实现三页**（复用 `PagedTable`；每页一个抽屉表单）。
-- [ ] **Step 3** 测试到绿 + 变异检查（把非 ONLINE 的提示条件去掉 → 红）。
-- [ ] **Step 4** 浏览器实测：给 `SK2026001` 改一次总库存（**ONLINE 态**，看分桶真的重建：`GET /api/seckill/stock/SK2026001` 余量随之变），再把 `ACT`/规则各建一条演示数据；改完把库存复位到 5000 并跑一次 `./scripts/reset-demo-data.sh`，不给下一轮冒烟留极端值。
-- [ ] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 券/规则/秒杀三页（端点不约定式拼装 + 非 ONLINE 改库存的口径写进界面）`
+- [x] **Step 2 实现三页**（复用 `PagedTable`；每页一个抽屉表单）。
+- [x] **Step 3** 测试到绿 + 变异检查（把非 ONLINE 的提示条件去掉 → 红）。
+- [x] **Step 4** 浏览器实测：给 `SK2026001` 改一次总库存（**ONLINE 态**，看分桶真的重建：`GET /api/seckill/stock/SK2026001` 余量随之变），再把 `ACT`/规则各建一条演示数据；改完把库存复位到 5000 并跑一次 `./scripts/reset-demo-data.sh`，不给下一轮冒烟留极端值。
+- [x] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 券/规则/秒杀三页（端点不约定式拼装 + 非 ONLINE 改库存的口径写进界面）`
 
 ---
 
@@ -1419,7 +1419,7 @@ Run: `cd marketing-admin-ui && npx vitest run test/resource-views.spec.js` → F
 **Interfaces**
 - Consumes：`GET /api/admin/cache/types`、`POST /api/admin/cache/reheat?type=&key=&force=true`、`GET /api/admin/cache/reheat/ack?type=&id=`（`admin|operator`）；`GET /api/admin/users`、`GET /users/{id}`、`PUT /users/{id}/status`（仅 admin）；`GET /api/admin/sessions?mine=`、`DELETE /sessions/{jti}`（不带 `mine` 仅 admin；踢人仅 admin）。
 
-- [ ] **Step 1 写红的测试**
+- [x] **Step 1 写红的测试**
 
 ```js
 // marketing-admin-ui/test/reheat.spec.js
@@ -1492,10 +1492,10 @@ describe('重预热与账号面', () => {
 ```
 
 Run: `cd marketing-admin-ui && npx vitest run test/reheat.spec.js` → FAIL（视图不存在）
-- [ ] **Step 2 实现**：轮询间隔 2s、上限 30s，超时后显示"仍待回执，点这里再查"——**不许静默放弃**（③ 的回执有 10 分钟 TTL，静默会让人以为丢了）。
-- [ ] **Step 3** 测试到绿 + 变异检查（把 `DISPATCHED` 当成功 → 红）。
-- [ ] **Step 4** 浏览器实测：FULL 容器档下跑一次 `type=budget` 的重预热，看它从 `DISPATCHED` 走到 `DONE` 并显示 owning 服务回写的 `after`（这是 ③ 跨进程回执第一次有界面可看）。
-- [ ] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 重预热与账号会话页（DISPATCHED 不是成功也不是失败）`
+- [x] **Step 2 实现**：轮询间隔 2s、上限 30s，超时后显示"仍待回执，点这里再查"——**不许静默放弃**（③ 的回执有 10 分钟 TTL，静默会让人以为丢了）。
+- [x] **Step 3** 测试到绿 + 变异检查（把 `DISPATCHED` 当成功 → 红）。
+- [x] **Step 4** 浏览器实测：FULL 容器档下跑一次 `type=budget` 的重预热，看它从 `DISPATCHED` 走到 `DONE` 并显示 owning 服务回写的 `after`（这是 ③ 跨进程回执第一次有界面可看）。
+- [x] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 重预热与账号会话页（DISPATCHED 不是成功也不是失败）`
 
 ---
 
@@ -1506,7 +1506,7 @@ Run: `cd marketing-admin-ui && npx vitest run test/reheat.spec.js` → FAIL（�
 - Modify: `marketing-admin-ui/src/AppLayout.vue`（导航顺序、退出、倒计时到 60s 的提醒）
 - Test: `marketing-admin-ui/test/audits.spec.js`
 
-- [ ] **Step 1 写红的测试**
+- [x] **Step 1 写红的测试**
 
 ```js
 // marketing-admin-ui/test/audits.spec.js
@@ -1554,10 +1554,10 @@ describe('AuditsView', () => {
 ```
 
 Run: `cd marketing-admin-ui && npx vitest run test/audits.spec.js` → FAIL（视图不存在）
-- [ ] **Step 2 实现**：审计明细里的 `summary` 已脱敏（③），界面原样显示，**不做**任何"猜字段再拼一次"的解读。
-- [ ] **Step 3** 测试到绿 + 变异检查。
-- [ ] **Step 4** 浏览器实测：跑一轮 `smoke-test.sh` 后进审计页，按本轮 `activityNo` 过滤应查得到那条 `activity.transition`——**这条断言把"界面看到的东西"与"冒烟验过的东西"对上了**，是本段的第二层证据。
-- [ ] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 审计页与导航收尾`
+- [x] **Step 2 实现**：审计明细里的 `summary` 已脱敏（③），界面原样显示，**不做**任何"猜字段再拼一次"的解读。
+- [x] **Step 3** 测试到绿 + 变异检查。
+- [x] **Step 4** 浏览器实测：跑一轮 `smoke-test.sh` 后进审计页，按本轮 `activityNo` 过滤应查得到那条 `activity.transition`——**这条断言把"界面看到的东西"与"冒烟验过的东西"对上了**，是本段的第二层证据。
+- [x] **Step 5** 构建 + 回归 + 提交 `feat(ui): ⑥ 审计页与导航收尾`
 
 ---
 
@@ -1571,8 +1571,8 @@ Run: `cd marketing-admin-ui && npx vitest run test/audits.spec.js` → FAIL（�
 **Interfaces**
 - Produces：`scripts/check-ui-dist.sh` 退出码（0 一致 / 1 不一致 / 2 jar 不存在）。
 
-- [ ] **Step 1 加红的测试断言**（同一类，不新建）：解析 `index.html` 里所有 `/ui/assets/**` 引用（js 与 css 与 preload 链接），逐个断言 classpath 存在；再断言 `static/ui/**` 下**没有孤儿文件**（存在 `assets/*.js` 却没被索引页或其 chunk 引用图引用）——孤儿来自 `emptyOutDir` 没生效，而它的症状是"jar 里躺着一份没人用的旧代码"。
-- [ ] **Step 2 实现 shell 门禁**：
+- [x] **Step 1 加红的测试断言**（同一类，不新建）：解析 `index.html` 里所有 `/ui/assets/**` 引用（js 与 css 与 preload 链接），逐个断言 classpath 存在；再断言 `static/ui/**` 下**没有孤儿文件**（存在 `assets/*.js` 却没被索引页或其 chunk 引用图引用）——孤儿来自 `emptyOutDir` 没生效，而它的症状是"jar 里躺着一份没人用的旧代码"。
+- [x] **Step 2 实现 shell 门禁**：
 
 ```bash
 #!/usr/bin/env bash
@@ -1607,9 +1607,9 @@ done < <(find "$WORK" -type f)
 exit $DRIFT
 ```
 
-- [ ] **Step 3 变异检查（这一步就是它的验收）**：`touch marketing-admin/src/main/resources/static/ui/index.html && echo x >> .../index.html` → 门禁必须非零退出；随后 `SKIP_INSTALL=1 ./scripts/build-ui.sh` 复原 → 退出 0。
-- [ ] **Step 4** `source scripts/common.sh && mvn -q -pl marketing-admin test -Dtest=UiDistIntegrityTest` 到绿。
-- [ ] **Step 5** 提交 `test(ui): ⑥ dist 一致性三道闸补全（无 CI 的仓库里唯一自动的一道）`
+- [x] **Step 3 变异检查（这一步就是它的验收）**：`touch marketing-admin/src/main/resources/static/ui/index.html && echo x >> .../index.html` → 门禁必须非零退出；随后 `SKIP_INSTALL=1 ./scripts/build-ui.sh` 复原 → 退出 0。
+- [x] **Step 4** `source scripts/common.sh && mvn -q -pl marketing-admin test -Dtest=UiDistIntegrityTest` 到绿。
+- [x] **Step 5** 提交 `test(ui): ⑥ dist 一致性三道闸补全（无 CI 的仓库里唯一自动的一道）`
 
 ---
 
@@ -1621,7 +1621,7 @@ exit $DRIFT
 - Modify: `docs/superpowers/specs/2026-09-23-admin-console-business-ops-ui-design.md`（§13 追加 ⑥ 偏离）
 - Modify: `docs/superpowers/specs/2026-09-24-admin-spa-ui-design.md`（本段实测回写）
 
-- [ ] **Step 1 链路 8（3 条，形态无关）**
+- [x] **Step 1 链路 8（3 条，形态无关）**
 
 ```bash
 head2 "链路 8：后台界面（加了界面 ≠ 加了口子；缓存头错了会让人跑到旧索引上）"
@@ -1644,8 +1644,8 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
 
 > 第 4 条只在 `ASSET` 取得到时才算，所以基数按实测写（LITE/dev 92 或 93）。**别为了凑数把空针断言留下**——`expect` 拒空针，但 `grep` 型的会静默。
 
-- [ ] **Step 2** `bash -n scripts/smoke-test.sh`；LITE 真跑，逐条看红。
-- [ ] **Step 3 整趟真浏览器旅程（spec §9 的第二层证据，不可选）**
+- [x] **Step 2** `bash -n scripts/smoke-test.sh`；LITE 真跑，逐条看红。
+- [x] **Step 3 整趟真浏览器旅程（spec §9 的第二层证据，不可选）**
 
 用 `browser-use` 在 LITE 上走一遍，每一步截图存档到 `docs/superpowers/evidence/⑥/`：
 ① 打开 `http://127.0.0.1:8090/ui/` → 未登录被弹到 `/ui/login` 且地址栏带回 `?next=`；
@@ -1657,10 +1657,10 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
 ⑦ 退出后直接改地址栏去 `/ui/audits` → 回登录。
 任何一步不一致：停下来修到一致，再往下走。截图不是装饰，是"界面说的与 curl 说的是同一件事"的证据。
 
-- [ ] **Step 4 五形态口径**：A LITE、D dev 必跑（同一份 dist，验的是"两种装配下静态资源都在"）；C FULL 容器跑一次（唯一验 `lb://marketing-admin` 那条 ui-route 的机会）；B FULL 进程按需。**每格记录**：断言数、`/ui/` 的 HTTP 与两个缓存头、`docker stats` 与 dist 的 KiB。
-- [ ] **Step 5 README**：新增"### 7. 后台界面（⑥）"（同源为什么不能放开、三个门禁哪道是自动的、构建入口与"改了 .vue 必须重跑"）；API 表加 `GET /ui/**`；覆盖矩阵加一格；计数刷新（单测类数/用例数、断言基数、七条→八条链路）。
-- [ ] **Step 6 母版 §13 追加 ⑥ 偏离**（至少：`AdminAuthFilter` 在网关且验签而非"admin 侧读头"；`applyTo`/`shouldFallbackToIndex` 从配置类里剥成纯函数（MVC 上下文不值得为一个 if 起）；CSP 与缓存头由 filter 独占、`ResourceHandlerRegistry.setCacheControl` 因此**不能用**（它会把指纹资源的 immutable 覆盖成 no-store）；vitest 是本段新增的第二套测试运行时、spec 没写；jar 体积实测值；FULL 两档只验 `ui-route` 可达不重跑全冒烟）。
-- [ ] **Step 7 提交**：`docs: ⑥ 口径收口（后台界面一节 + 三道门禁 + 五形态 /ui 实测记录）`
+- [x] **Step 4 五形态口径**：A LITE、D dev 必跑（同一份 dist，验的是"两种装配下静态资源都在"）；C FULL 容器跑一次（唯一验 `lb://marketing-admin` 那条 ui-route 的机会）；B FULL 进程按需。**每格记录**：断言数、`/ui/` 的 HTTP 与两个缓存头、`docker stats` 与 dist 的 KiB。
+- [x] **Step 5 README**：新增"### 7. 后台界面（⑥）"（同源为什么不能放开、三个门禁哪道是自动的、构建入口与"改了 .vue 必须重跑"）；API 表加 `GET /ui/**`；覆盖矩阵加一格；计数刷新（单测类数/用例数、断言基数、七条→八条链路）。
+- [x] **Step 6 母版 §13 追加 ⑥ 偏离**（至少：`AdminAuthFilter` 在网关且验签而非"admin 侧读头"；`applyTo`/`shouldFallbackToIndex` 从配置类里剥成纯函数（MVC 上下文不值得为一个 if 起）；CSP 与缓存头由 filter 独占、`ResourceHandlerRegistry.setCacheControl` 因此**不能用**（它会把指纹资源的 immutable 覆盖成 no-store）；vitest 是本段新增的第二套测试运行时、spec 没写；jar 体积实测值；FULL 两档只验 `ui-route` 可达不重跑全冒烟）。
+- [x] **Step 7 提交**：`docs: ⑥ 口径收口（后台界面一节 + 三道门禁 + 五形态 /ui 实测记录）`
 
 ---
 
@@ -1668,7 +1668,19 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
 
 | 任务 | 交付 | 新增用例 | 实测 |
 |---|---|---|---|
-| — | — | — | — |
+| T1 | `marketing-admin-ui/`（Vue 3.5 + Vite 5.4.21，`base:/ui/`）、`scripts/build-ui.sh`（唯一构建入口：注入 `build-ui: rev=`、清 `target/classes` 旧产物、**源码比产物新就拒**）、首次 dist 入仓、`.gitignore` 放行 | 3（Java `UiDistIntegrityTest`） | 产物 **3 个文件 / 252 KiB**（未压缩）；`/ui/` 由 admin jar 直接伺服，零新增进程 |
+| T2 | `UiResourceSupport`（纯判定：回退/缓存头/CSP）+ `UiWebMvcConfig`（`PathResourceResolver` 回退、`addViewController("/ui","/ui/")`、`UiHeaderFilter` 独占响应头） | 4（Java `UiResourceSupportTest`） | 真栈连抓两个只有起进程才看得见的 bug（修正 #4）；头断言：index `no-store`、`assets/**` `immutable`、缺文件 404 |
+| T3 | 网关 yml 两套 profile 各加 `ui-route`、`/ui/**` 进白名单、`rate-limit.ui-route` 独立桶 | 4（Java `GatewayUiRouteConfigTest`） | `ApplicationContextRunner` 读 yml 断言（比真起服务便宜两个数量级）；**少写一条声明被 ⑤ 的防漂移闸抓住**（修正 #5，fix-forward `4073a2e`） |
+| T4 | `api/client.js`（三码分处：40101 续登 / 40102 严格回登录不带 `next` / 40100 清凭证；**不自动重放**）、`stores/session.js`、路由守卫、`LoginView`、`AppLayout`（页脚角色 + 剩余秒数） | 11（`client` 7 + `session` 4） | 变异检查：把"登出后不再发 Authorization 头"回退 → 红 |
+| T5 | `TriState`/`PagedTable` 基座 + 运维大盘页（④ 的 `-1`/`applicable=false` 在界面上绝不塌成 0） | 5（`tristate`） | 真浏览器第一处逐页核对：大盘 32 行、7 处"不适用/判定不了"（`evidence/6-ops-browser-check.md`） |
+| T6 | 在线配置页（按 key 一条、形态维度在 `rows[]`；`DEFAULT`/`DB`/`ORPHAN` 三态不混；41009 给"切到本形态"出口；40000 不清空表单） | 6（`config-view`） | 计划里的载荷形状与真实 DTO 不符，按代码回改 spec §6（修正 #6） |
+| T7 | 活动页（状态机只裁剪可用动作、不当校验用；41008 乐观锁冲突给"重新加载并对比"出路） | 5（`activities`） | 浏览器真写：改预算后列表看到新值，版本 +1 |
+| T8 | 券模板 / 优惠规则 / 秒杀三页（端点路径写死不约定式拼装；非 ONLINE 改库存的口径直接写进界面文案） | 7（`resource-views`） | 浏览器真写：秒杀总库存 5000→5010 → 直读 Redis 求和 4725 == 5010-285，分桶真重建了 |
+| T9 | 重预热页（`DONE`/`DISPATCHED`/`FAILED` 三态，`DISPATCHED` 既不是成功也不是失败）+ 账号页 + 会话页 | 5（`reheat` 首版） | 变异：把 `DISPATCHED` 渲染成"完成" → 红 |
+| T10 | 审计页（读 `/api/admin/audits`，`-1` 走 `TriState`）+ 导航按 `router.hasRoute` 裁剪 | 3（`audits`） | 侧栏 10 项与路由表逐一对上 |
+| T11 | dist 一致性三道闸：`UiDistIntegrityTest` 扩到 3 条（index 在 / 指纹齐全 / 缺一个就红）、`scripts/check-ui-dist.sh`（jar ⇄ 仓库 sha256 双向）、`build-ui.sh` 的过期闸 | 3→Java 计 3 条（含扩写） | 变异：删掉一个 assets 文件 → `mvn test` 立刻红；`check-ui-dist.sh` 在jar 落后时 exit 1 |
+| T12 | 冒烟链路 8（6 条）、`routes.js` 拆分 + `test/routes.spec.js`（导航 ⇄ 路由配成回归测试）、重预热页类型清单并入 ④ 面板上报那一份、README/spec/母版收口、五形态复跑 | 9（`routes` 2 + `reheat` 扩 7） | 浏览器旅程抓到"点大盘整页空白"这个真 bug（`evidence/6-browser-journey.md`）；FULL 容器档界面重预热 `DISPATCHED → DONE` 见 `evidence/6-reheat-full-container.md`；冒烟 **C 96/96、A 95/95、D 95/95**（全绿，链路 8 逐档复跑） |
+| — | 全仓回归：Java **358 用例 / 76 类** 绿（④ 收口时 347，+11 全来自 ⑥ 的三道闸与网关断言）；前端 **46 用例 / 9 个文件** 绿 | 46 前端 + 11 Java | `mvn -q install` exit 0；`npm test` exit 0；`bash scripts/check-ui-dist.sh` exit 0 |
 
 ## 落地时对计划的修正
 
@@ -1711,3 +1723,16 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
    打出来的 jar 里因此躺着一份仓库已经没有的 css。修在唯一写这份 dist 的地方——
    `build-ui.sh` 构建后清掉 `target/classes/static/ui`，让下一次 package 拷一份干净的。
    这条不在计划里，是闸自己抓出来的（也正是它存在的理由）。
+9. **T5 把大盘注册在空路径上，计划没写错、是计划与导航各说各话**：导航早就写着 `/ops`，
+   而计划 Step 只说"加一条子路由"。`hasRoute('ops')` 为真 → 链接渲染 → 点下去匹配不到 → 整页空白。
+   修在 `1acedf0`，并补 `test/routes.spec.js` 把"侧栏 href ⇄ 路由叶子"配成回归测试。
+   教训：**跨文件配对的约定必须有横跨两侧的断言**，两侧的单元测试可以同时绿。
+10. **T9 的类型清单只问了本进程，FULL 下那一页是空的**：`/api/admin/cache/types` 在 FULL 的 admin 进程
+    实测返回 `[]`（类型注册在 owning 进程），页面成了空下拉。修在 `5f149d9`：并上 ④ 面板的
+    `consistency[].type`，标签写清"由谁上报"。计划里那条"读 `/cache/types` 而不是猜环境变量"没错，
+    错在它只在 LITE 成立——**这一档两进程装配不同，判据不能只问一侧**。
+11. **T12 的两条计划外交付**：链路 8 从 3 条加到 6 条（补深链回退、缺文件必须 404）；
+    以及浏览器实测在 FULL 容器档顺出两处只能"被人看见"的东西——
+    面板 `coupon-stock` 有 1 条真实不符（界面走完发现→定位→修→复核：`CT2026001 92788 → 92796`），
+    以及 ④/⑤ 的判活口径缺陷（无可改参数的进程被读成"没在跑"，已记 TODO #82，没在 ⑥ 里越段改）。
+    证据都在 `docs/superpowers/evidence/6-reheat-full-container.md`。

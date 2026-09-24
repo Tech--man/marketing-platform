@@ -315,7 +315,7 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏
 `cannot find symbol: log / setXxx`。
 
-## 四、六条核心链路（"写入口收口"是横切边界，见第五节的写入口矩阵）
+## 四、七条核心链路（"写入口收口"是横切边界，见第五节的写入口矩阵）
 
 ### 1. 领券（削峰 + 最终一致）
 
@@ -467,6 +467,54 @@ Redis + MySQL，Prometheus 只是可选的第二消费者。
 LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `mem_limit` 阈值。
 保留策略与历史趋势（Prometheus 抓取、告警）**刻意推迟**：那是"看得更久"，不是"现在能看见"。
 
+### 7. 后台界面（⑥：同源挂在 `/ui/`，零新增进程）
+
+**形态**：`marketing-admin-ui/`（Vue3 + Vite + Element Plus，**不进 root pom、不进 maven 生命周期**）
+构建出的 `dist` **入仓**到 `marketing-admin/src/main/resources/static/ui/`。
+所以 clone 下来 `mvn package` 就能跑出一个带界面的 jar，机器上没有 node 也一样——
+这是这个仓库给"常态服役档"留的确定性，代价是产物必须由人重建（见下面的三道闸）。
+
+**为什么同源**：仓库零 CORS 配置，也不打算加。`/ui/**` 由网关新增的 `ui-route` 转给 admin
+（local 与 nacos **两套 profile 各一条**，LITE 复用同一对 `ADMIN_HOST/ADMIN_PORT` 指到 standalone:8085），
+并且必须同时进 `whitelist` 与 `rate-limit` map——**route 不在 map 里 = 完全不限流且不报错**，
+而不在白名单里的后果是"打开后台得先有一个 C 端 demo token"。
+
+**history 回退在 admin，不在网关**：`UiWebMvcConfig` 给 `/ui/**` 注册资源并回退 `index.html`，
+网关不该懂前端路由。两个只起进程才看得见的坑（都是真栈实测抓的，纯函数单测两次都绿）：
+空路径时 `createRelative("")` 返回的是**目录**且 `exists()` 为真；而即便跳过它，
+`ResourceHttpRequestHandler.processPath` 对空路径也直接判 404——最后用 `addViewController`
+把 `/ui` 与 `/ui/` 显式转发到 `index.html`。
+
+**缓存头只能有一个主人**：`/ui/index.html` 是 `no-store`（旧索引配上新的指纹文件名就是白屏），
+`/ui/assets/**` 是 `max-age=31536000, immutable`（文件名带内容指纹）。
+所以**不能**用 `ResourceHandlerRegistry.setCacheControl(...)`——它会在 handler 里再写一次
+`Cache-Control`，把 `immutable` 覆盖成 `no-store`，看起来"更保守"实际让每发 assets 都回源。
+另外整个 `/ui/*` 带 CSP `script-src 'self'; object-src 'none'; base-uri 'self'`。
+
+**token 存 localStorage**：`Authorization: Bearer` 是网关唯一识别路径，改 cookie 要么动 ③ 的鉴权链
+要么加反代；不写 cookie 就没有 CSRF。三个鉴权码在界面上走**三条**路——40101 跳登录并带
+`?next=`（这次没写进去，回得去）、**40102 不回原页也绝不自动重放**（那一发可能已经落库）、
+40100 只清 token。倒计时用登录响应的 `expiresInSeconds`，不前端写死 TTL。不做 refresh token。
+
+**dist 的三道闸**（仓库没有 CI，所以只有第三道会被自动跑到）：
+① `scripts/build-ui.sh` 是唯一重建入口（并把 `rev`/时间注进 `index.html` 指纹）；
+② `scripts/check-ui-dist.sh` 比对 jar 与仓库的逐项 sha256，双向；
+③ `UiDistIntegrityTest`（不连库、不起上下文）断言索引页存在、它引用的指纹资源都在、
+**且 dist 里没有没被引用的孤儿文件**。第三道已经在第一次跑时抓到真漂移：Maven 的资源拷贝
+只覆盖不删除，`target/classes/static/ui` 会攒下上一版的 `assets/*` 被打进 jar——
+所以现在 `build-ui.sh` 构建后顺手清掉那个目录。
+
+**界面只把后端已有的判断显示出来，不复制一份权限**：角色只用来灰化入口，
+真正的判定在每个写端点（operator 改阈值仍是 40300）。前端那张状态机表也只裁按钮不当校验，
+非法流转照样显示后端的 41001 原文。
+
+**实测**：dist **252 KiB**（未压缩，JS 96KB + CSS ~52KB），全量注册 Element Plus 时要 1388 KiB——
+按需引入是必要的而不是洁癖，因为这份产物进的是常态服役档那个 jar。
+冒烟链路 8 六条（首页 200、索引 `no-store`、深链回退、指纹 `immutable`、缺文件必须 404、
+无凭证打 `/api/admin/users` 仍 40100）在 LITE 与 FULL 容器档各全绿；
+真浏览器走了一遍登录 → 十页渲染 → 界面改秒杀库存并核对 Redis 分桶真的按 `total-sold` 重建
+（证据 `docs/superpowers/evidence/6-browser-journey.md`）。
+
 ## 五、API 速查（经网关 8090；C 端需 `Authorization: Bearer demo-token-123`，后台需登录换来的 admin token）
 
 | Method | Path | 说明 |
@@ -487,6 +535,7 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 | PUT/DELETE | /api/admin/config（body `cfgKey`+`form`+`value`+`remark` / `?cfgKey=&form=`） | 写在线覆盖 · 删行=恢复出厂。**只有 `admin` 角色**（operator 在网关可写运维，但改不动阈值），未声明的键与越界值一律 40000 |
 | POST | /api/admin/config/rebroadcast | 按 DB 现状重发快照（幂等）：修 `41009 配置已落库但未广播` 的那个窗口 |
 | GET | /api/admin/ops | **运维只读总览（④，仅 `admin`）**：`mode` 与逐 target 的抓取路径/样本数、进程存活三态、`local_message` 跨库未排空合计、Stream 通道深度、缓存与账的不符条数、审计量与前几个动作、限流拒绝数（带 route）。读不到的一律 `-1`/`ERROR`/`applicable=false`，**不填 0**；这个面里没有任何写 |
+| GET | /ui/** | **后台界面（⑥）**：入仓的 Vue3 构建产物，由 admin 提供、网关 `ui-route` 转发。静态资源本身匿名可读（不含数据），索引页 `no-store`、指纹资源 `immutable`、整个 `/ui/*` 带 CSP `script-src 'self'`；深链（`/ui/audits`）由 admin 回退 `index.html`。所有数据仍走下面那些 `/api/admin/**` 并要 admin token |
 | GET/POST | /api/admin/activities · POST /api/admin/activities/{no}/transition?event= | 活动列表 / 创建（DRAFT）/ 状态机流转（仅 `admin`）。乐观锁 `version` 不匹配回 `41008` |
 | PUT | /api/admin/activities/{no}/budget · /gray | 改预算（同事务重预热，立刻反映到 C 端余额）· 改灰度（只写 DB，由每 5s 回源生效，不刷缓存） |
 | GET/POST | /api/admin/discount/rules | 规则列表 / upsert（仅 `admin`；启停也走这条，body 里带 `status`）。写与快照 bump 在同一事务，规则版本号变了 C 端计算秒级跟随 |
@@ -527,13 +576,16 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 347 个单测 / 73 个类：见下
-./scripts/smoke-test.sh  # 端到端 89 条断言（LITE/dev）/ 90 条（FULL 两种形态与每服务一库），
-                         # 七条链路，需服务已启动；差的正是跨进程重预热回执那条
+mvn test                 # 358 个单测 / 76 个类：见下
+cd marketing-admin-ui && npm test    # 46 条前端用例 / 9 个文件（vitest + jsdom，见 ⑥）
+./scripts/build-ui.sh    # ⑥ 唯一的前端重建入口（产物入仓，机器上没 node 也能跑 jar）
+./scripts/check-ui-dist.sh  # jar 与仓库的 static/ui 逐项 sha256 比对（前提：已 package）
+./scripts/smoke-test.sh  # 端到端 95 条断言（LITE/dev）/ 96 条（FULL 两种形态与每服务一库），
+                         # 八条链路，需服务已启动；差的正是跨进程重预热回执那条
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（347 用例 / 73 类）**分八族：
+**单测（358 用例 / 76 类）**分九族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
@@ -573,6 +625,16 @@ mvn test                 # 347 个单测 / 73 个类：见下
   三个 owning 模块的 `mismatchCount()` 各自被测（预算按流水对账、券按 `remainOf`、秒杀分桶求和
   + 缺桶计入不符），判定刻意与重预热同式。变异检查覆盖解析器静默少报、`-1` 被换成 0、
   白名单退化成"能解析就行"等最贵的那几类；
+- **后台界面（⑥，vitest 那一套）**：api 客户端（凭证注入、业务码非 0 抛错并带整份响应、
+  **三个 401 类码走三条路**、被吊销的会话绝不自动重放、42900 把 `Retry-After` 带出来）、
+  会话 store（TTL 只取登录响应、角色→按钮、退出失败也清本地）、`TriState`
+  （-1/"不适用"/真 0 三种画法，绝不归一化）、`UiResourceSupport`（回退判据 + 缓存头 + CSP，
+  用 `MockHttpServletResponse` 测）、`GatewayUiRouteConfigTest`（按 `---` 拆 yml 文档，
+  逐段断言 local 与 nacos 都有 `ui-route`、白名单、限流桶，并钉住"探针自己的分段假设"）、
+  `UiDistIntegrityTest`（产物自洽与孤儿检测）、`routes.spec`（侧栏每个链接都必须
+  resolve 到带组件的记录——大盘一度只在空路径上注册，点进去整页空白而单测全绿）。
+  变异检查逐条做过，并且**先证明文件真的被改了再跑**：第一版有一条 perl 锚点写错，
+  变异没落地却报"没抓到"——那比漏红更坏。
 - **装配层回归**：聚合形态扫描边界 + common 条件装配矩阵（含重预热注册表），
   用 ApplicationContextRunner + H2 + `127.0.0.1:1` 永不连接的 Lettuce 满足类型条件，
   不依赖中间件。这族把"预览栈起不来"这类装配 bug 从 2-3 分钟的构建+部署排查压到秒级。
@@ -634,7 +696,13 @@ H2（`MODE=MySQL`）把未加引号的标识符折成**大写**。所以 ④ 的
 （`WHERE LOWER(table_name) = LOWER(?)`），单测里第一版只写了一边，表现为"容器里查得到、单测里查不到"，
 而失败模式是**静默少一个库**（积压少报），不是报错。
 
-**冒烟（89 条断言 / FULL 分进程 90 条，七条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+**已知噪音 ⑧（换了镜像才看得见）**：`SKIP_BUILD=1 ./scripts/deploy-full.sh` 复用**已有镜像**，
+⑥ 之前构建的那批镜像里没有 `static/ui/`，于是 `/ui/` 回 404 而其余七条链路全绿——症状长得像
+"网关 `ui-route` 没配对"，实际是镜像里根本没这个包。⑥ 的产物随 admin jar 一起打进镜像，
+所以**只有源码变了又跳过构建**才会踩到。要验 ⑥ 那一格，别带 `SKIP_BUILD=1`；
+分不清手上镜像新旧时，直接看索引页里的 `build-ui: rev=` 注释，它比 `docker ps` 的启动时间诚实。
+
+**冒烟（95 条断言 / FULL 分进程 96 条，八条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、超预算 41003、灰度命中、可参与位切换）+ **预算算术守卫**：
 被拒扣减不留痕、重复扣减在 `data` 里标 `REPLAYED`、同 bizKey 换活动仍真扣 `DEDUCTED`；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖；
@@ -644,7 +712,7 @@ H2（`MODE=MySQL`）把未加引号的标识符折成**大写**。所以 ④ 的
 业务侧的写动作跑完必须从 `mkt:audit:pending` 全部 drain 落表（`XLEN` 归 0 且本轮那条活动在表里查得到））。
 链路 4 的重预热按形态分岔判据（读 `/cache/types` 而不是猜环境变量）：
 LITE/dev 验"本进程同步刷成功"，FULL 分进程验"投给 owning 服务 → 轮询回执到 `DONE` →
-C 端余额等于新口径"。**多的那一条断言就是这个回执轮询，所以两档的总数不同（89 / 90）**，
+C 端余额等于新口径"。**多的那一条断言就是这个回执轮询，所以两档的总数不同（95 / 96）**，
 两边都是真断言，没有跳过。
 
 **链路 5 在线配置下发**：本档形态自证（`ownForm=LITE`）、写 GLOBAL 阈值 3/s **不重启**就吃 429、
@@ -678,6 +746,13 @@ URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己�
 另外 FULL 档的修是**投给 owning 服务**的，回执要等一个消费轮询，脚本必须等 `status:DONE`
 而不是 `sleep 2`——不然红点会指向"③ 修不动"，而其实只是没等。
 
+**链路 8 后台界面（⑥）**：六条都是"错了也不会响"的那类。首页 200 且**不带任何 token**（证明
+`ui-route` 与白名单成对配好了）；索引页 `no-store`（缓存它就会拿旧索引去要新指纹 → 白屏）；
+深链 `/ui/audits` 回退到索引页（history 路由直接刷新才打得开）；指纹资源给一年 `immutable`；
+**缺文件必须 404 而不是回退成一份 HTML**（否则 js 报的是"模块加载失败"，把人支去查构建）；
+最后一条是这段的边界所在——`无凭证 GET /api/admin/users` 仍是 `40100`：**加了界面不等于加了口子**。
+
+
 **脚本两条不变式**（都是踩过才写下的）：① `poll` 的针必须与紧随其后的断言针一致——轮询超时照样把
 最后一次响应打出来，只查 `"couponCode"` 这个键名会让 `PROCESSING`（`"couponCode":null`）蒙过断言，
 于是红点落在下一行的"核销 40000 couponCode 必填"上，看着像核销坏了（FULL 进程形态首跑那 1 条红就是它）；
@@ -688,17 +763,17 @@ URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己�
 
 **五套形态入口的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
 断言集在长（S2 加了 5 条预算/消息守卫，后台那批加了链路 4 的 13 条，⑤ 又加了链路 5 的 20 条，
-③ 加了 drain 落表 2 条 + 链路 6 的 7 条，④ 加了链路 7 的 8 条），
+③ 加了 drain 落表 2 条 + 链路 6 的 7 条，④ 加了链路 7 的 8 条，⑥ 加了链路 8 的 6 条），
 所以标了跑时的断言数——**低于当前基数的格子只代表"当时那一版全绿"，不等于已在新断言下复跑过**。
 
-| 形态 | 最近一次 | 通道证据 | ④ 读数证据 |
+| 形态 | 最近一次 | 通道证据 | ④ 读数 / ⑥ 界面证据 |
 |---|---|---|---|
-| LITE 服役档（容器） | **89/89**（2026-09-24，七条链路全集） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 517-599 MiB/768MiB（本轮跑完 551.6） | `mode=local+proxy`：`self` 走 local、`marketing-gateway` 走 proxy（网关在这一档仍是独立进程）；Stream 六条（两个业务 topic + 审计 + 三个 reheat type）全 `applicable=true`；恒等式基线 0 |
-| dev 开发档（本机 2 JVM） | **89/89**（2026-09-24） | 同上；`ownForm=DEV`；`reset-demo-data.sh` 在这一档实测（复位后恒等式 `分桶余量+已售==总库存` 自洽） | 同上（`mode=local+proxy`、判活里 `marketing-standalone=true`、四个业务进程名 `null`=本档不适用）；standalone 本机 RSS 175 MiB |
-| FULL · 本机进程形态 | **90/90**（2026-09-24；从每服务一库档换回来时按脚本注释跑了一次 `reset-demo-data.sh`，未做任何 SQL 清理。"A→B 原地切换零清理"的那条证据仍是第一轮那趟） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支；裸头直连 `:8081` 被拒而带 token 放行（这一档端口真的绑 `*`，是最需要这条的形态） | `mode=proxy` 六目标全 OK（每份 150-320 样本）；两个业务 topic 显式 `applicable=false` + RocketMQ 说明、`mkt:audit:pending` 仍 `true`；恒等式的"修"走 ack 轮询到 `DONE` 才要求面板回落 |
+| LITE 服役档（容器） | **95/95**（2026-09-24，八条链路全集，⑥ dist 入镜像后复跑） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 517-599 MiB/768MiB（本轮跑完 550.4） | `mode=local+proxy`：`self` 走 local、`marketing-gateway` 走 proxy（网关在这一档仍是独立进程）；Stream 六条（两个业务 topic + 审计 + 三个 reheat type）全 `applicable=true`；恒等式基线 0。**⑥ 的真浏览器旅程就在这档**（`evidence/6-browser-journey.md`）：十页逐屏渲染核对 + 一次真写（秒杀总库存改 5010 → 直读 Redis 求和 4725==5010-285，分桶真的重建了），并抓到"点大盘整页空白"那个只有真人点才看见的 bug |
+| dev 开发档（本机 2 JVM） | **95/95**（2026-09-24，八条链路全集，⑥ dist 由 `start-dev.sh` 现场 `mvn package` 打进 standalone） | 同上；`ownForm=DEV`；`reset-demo-data.sh` 在这一档实测（复位后恒等式 `分桶余量+已售==总库存` 自洽） | 同上（`mode=local+proxy`、判活里 `marketing-standalone=true`、四个业务进程名 `null`=本档不适用）；standalone 本机 RSS 175 MiB 是**上一轮（89 条那趟）的读数，本轮复跑没重测**。**⑥ 在这一档验的是"同一份 dist 换一种装配"**：`/ui/` 由 standalone 里的 admin 模块发出，六条链路 8 断言全绿（含 `no-store`、深链回退、缺文件 404） |
+| FULL · 本机进程形态 | **90/90**（2026-09-24；⑥ 未在此档复跑，同一份 jar 已由容器档与 dev 档两头夹住。从每服务一库档换回来时按脚本注释跑了一次 `reset-demo-data.sh`，未做任何 SQL 清理。"A→B 原地切换零清理"的那条证据仍是第一轮那趟） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支；裸头直连 `:8081` 被拒而带 token 放行（这一档端口真的绑 `*`，是最需要这条的形态） | `mode=proxy` 六目标全 OK（每份 150-320 样本）；两个业务 topic 显式 `applicable=false` + RocketMQ 说明、`mkt:audit:pending` 仍 `true`；恒等式的"修"走 ack 轮询到 `DONE` 才要求面板回落 |
 | FULL · 本机进程 · 每服务一库隔离档 | **90/90**（2026-09-24） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`（这一档实测：`marketing_seckill` 里 `sold=0` → 复位后分桶合计 5000 自洽）。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）| 跨库发现唯一被真正用到的一档：`backlog.schemas` 一次列出 5 个库并逐库独立（缺表的库不进列表、某库查询失败只让那一行 `-1`）。**④ 在这里抓到了真漂移**：面板开局报 budget=1/coupon=1/seckill=1，那是上一套布局留在 Redis 里的缓存对不上本布局的 DB——`information_schema` 那段 SQL 存在的意义就是让这种偏差看得见 |
-| FULL · 容器化 1 副本 | **90/90**（2026-09-24） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 `mkt-full-marketing-activity-1` 写回（消费组 `owning-exec` 实测 2 consumers、pending 0）；链路 6 的直连探测走 `docker exec` 进容器这条路 | `mode=proxy` 且 target 主机名是 **compose service 名**（`http://marketing-activity:8081/...` 六条全 OK）——这一档的清单由 `OPS_T_*` 覆写，admin 的 yml 默认值是进程拓扑的 `127.0.0.1`，在容器里指向自己 |
-| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 89 复跑） | 第三节的多副本三条证据 | 未跑（面板没验过多副本；两副本时 `liveness` 与 `jobs` 的持锁者分布是这一格唯一的新信息） |
+| FULL · 容器化 1 副本 | **96/96**（2026-09-24，八条链路全集，镜像含 ⑥ dist） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 `mkt-full-marketing-activity-1` 写回（消费组 `owning-exec` 实测 2 consumers、pending 0）；链路 6 的直连探测走 `docker exec` 进容器这条路。**⑥ 在这一档只这一格能验**：`ui-route` 的 `lb://` 那条、以及重预热页的类型清单（admin 自己 `/cache/types` 实测返回 `[]`，靠 ④ 面板并集才有得选），见 `docs/superpowers/evidence/6-reheat-full-container.md` | `mode=proxy` 且 target 主机名是 **compose service 名**（`http://marketing-activity:8081/...` 六条全 OK）——这一档的清单由 `OPS_T_*` 覆写，admin 的 yml 默认值是进程拓扑的 `127.0.0.1`，在容器里指向自己。**面板的"进程存活"在这一档不可信**：activity/coupon/admin 显示"没在跑"而 `docker ps` 说它们在，因为判活读的是 ⑤ 的 schema 自述键、而"无可改参数的服务不写自述"（已记 TODO，界面只是忠实渲染） |
+| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 95 复跑） | 第三节的多副本三条证据 | 未跑（面板没验过多副本；两副本时 `liveness` 与 `jobs` 的持锁者分布是这一格唯一的新信息。⑥ 也没验过——两副本时 `ui-route` 只会落到其中一个 admin，界面写动作的审计归属值得单独走一趟） |
 
 ## 七、扩展点（占位 → 生产的升级路径）
 

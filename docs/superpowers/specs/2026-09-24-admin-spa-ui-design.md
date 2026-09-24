@@ -94,6 +94,21 @@
 - **真浏览器旅程**（按记忆里那条"全流程验证要双层证据"）：LITE 起栈 → 浏览器登录 → 逐页截图 → 做一次真写（改一个活动的预算，回列表看到新值）→ 大盘看到 ④ 的读数 → 退出后回看 `/ui/users` 应被踢回登录。这一趟走 `browser-use`，不是可选项。
 - **形态复跑**：LITE + dev（dist 同一份，因此这两档验的是"静态资源在两种装配下都在"）；FULL 两档只验 `ui-route` 在 nacos profile 下可达（同一份 jar，没必要五档全刷）。
 
+**实测回写（2026-09-24，实施后填）**
+
+- 后端面：`UiDistIntegrityTest` 3 条 + `UiResourceSupportTest` 4 条 + 网关 `GatewayUiRouteConfigTest` 4 条，全绿。
+  本节的 `AdminWebMvcConfigTest` 实际落成 `UiResourceSupportTest` + 真栈冒烟链路 8 两层
+  （纯判定与接线分开的理由见 §5 与计划修正 #4）。
+- smoke 链路 8 **从计划的 3 条长成 6 条**：除首页 200+`no-store`、资源 `immutable`、无凭证仍 40100 之外，
+  补了"深链回退到索引页"和"缺文件必须 404 而不是回退成 HTML"两条——后者是这一段最容易做错、
+  而做错了表现是"浏览器只报模块加载失败"的那一条。
+- 真浏览器旅程：LITE 一趟（`evidence/6-browser-journey.md`）+ FULL 容器一趟（`evidence/6-reheat-full-container.md`）。
+  两趟各抓到一个单测抓不到的东西：一个"点大盘整页空白"的路由/导航不配对，一个"FULL 下重预热页没有类型可选"。
+- 形态复跑实测：LITE 95/95、dev 95/95、FULL 容器 96/96（含链路 8）。FULL 进程档与每服务一库档
+  **没按 95/96 复跑**（同一份 jar、同一个 `ui-route` 直连形态，矩阵里按"当时那一版全绿"标注）。
+- 风险 2 的答案：**252 KiB / 3 个文件**（未压缩，含按需引入返工后的结果），远低于 2 MiB 阈值，
+  不启用 gzip 变体。
+
 ## 10. 明确不做
 
 refresh token / cookie 会话 / OAuth2 / SSO；把 SPA 构建挂进 maven 生命周期；放开 CORS；nginx 容器；`marketing-admin-ui` 进 root pom；给 ④ 的大盘加图表库（表格 + 三态标记够用，图表是"看得更久"那一批，与保留 job 一起推迟）；前端角色矩阵（后端已判，前端只按 `/auth/me` 的 role 灰化按钮，**不**当成安全边界）。
