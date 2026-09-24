@@ -84,6 +84,16 @@ services:
     environment:
       <<: *app-env
       JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
+      # ④ 的抓取清单在容器形态下改成 compose service 名（admin 的 yml 默认值是 127.0.0.1，
+      # 那是进程形态的拓扑，容器里指向的是自己）。self 保持回环：8086 就是本容器的 actuator。
+      # 只覆写这五个键是有意的——正面清单（OpsTargets）与"清单不来自注册中心"这两条纪律
+      # 由代码守，不靠 compose 写对；写错时启动即失败，不会等到点大盘才发现。
+      OPS_T_ACTIVITY: marketing-activity:8081
+      OPS_T_COUPON: marketing-coupon:8082
+      OPS_T_DISCOUNT: marketing-discount:8083
+      OPS_T_SECKILL: marketing-seckill:8084
+      OPS_T_GATEWAY: marketing-gateway:8090
+      OPS_T_SELF: 127.0.0.1:8086
 
   marketing-gateway:
     <<: *app-defaults

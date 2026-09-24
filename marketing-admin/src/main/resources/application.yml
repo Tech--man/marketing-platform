@@ -48,6 +48,22 @@ marketing:
     # 登录口单独限速（网关的 RL_ADMIN 管的是整个后台，不是撞库）
     login-ip-limit: ${ADMIN_LOGIN_IP_LIMIT:10}
     login-ip-window-seconds: ${ADMIN_LOGIN_IP_WINDOW:60}
+    # ④ 运维只读面。admin 作为独立进程（FULL）时手里没有任何业务模块的 MeterRegistry，只能抓别人；
+    # 聚进 standalone 的那一档由该模块的 yml 覆成 local。
+    # targets 是**正面清单**（host 与端口都限死，见 OpsTargets）：它是 ④ 唯一的 SSRF 面。
+    # 清单来自配置而不是注册中心——"任何注册进来的服务都能被发现"本身就是问题，
+    # 而 LITE/dev 根本没有 nacos。默认值对应本机进程形态（都在 127.0.0.1 上）；
+    # 容器形态由 compose 覆写 OPS_T_*（那边主机名是 compose service 名）。
+    ops:
+      metrics-mode: ${ADMIN_METRICS_MODE:proxy}
+      consistency-sample-size: ${OPS_CONSISTENCY_SAMPLE:20}
+      targets:
+        marketing-activity: ${OPS_T_ACTIVITY:127.0.0.1:8081}
+        marketing-coupon: ${OPS_T_COUPON:127.0.0.1:8082}
+        marketing-discount: ${OPS_T_DISCOUNT:127.0.0.1:8083}
+        marketing-seckill: ${OPS_T_SECKILL:127.0.0.1:8084}
+        marketing-gateway: ${OPS_T_GATEWAY:127.0.0.1:8090}
+        self: ${OPS_T_SELF:127.0.0.1:8086}
 
 management:
   endpoints:

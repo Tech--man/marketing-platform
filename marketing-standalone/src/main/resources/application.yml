@@ -56,6 +56,14 @@ marketing:
   admin:
     jwt-secret: ${ADMIN_JWT_SECRET:}
     access-ttl-seconds: ${ADMIN_TOKEN_TTL:900}
+    # ④：本档四个业务模块与后台同在这一个 JVM 里，指标就在手边——必须是 local。
+    # 留 proxy 的后果不是"读不到"，而是去抓 8081-8084 那几个**根本不存在**的进程，
+    # 于是大盘上永远挂着四条 error，而"某个 target 抓不到"正是 ④ 要人当回事的信号。
+    # 清单只给 self（本进程 8085）：这一档没有兄弟进程可抓。
+    ops:
+      metrics-mode: local
+      targets:
+        self: 127.0.0.1:8085
 
 management:
   endpoints:

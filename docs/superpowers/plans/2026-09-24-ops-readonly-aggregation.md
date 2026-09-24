@@ -178,7 +178,7 @@ private final HttpClient http = HttpClient.newBuilder()
 - Test: `marketing-admin/src/test/java/com/example/marketing/admin/observe/OpsAssemblyTest.java`
   （`ApplicationContextRunner`）
 
-- [ ] **Step 1** 属性形状（照 `AdminProperties` 的写法：字段 + 默认值，不用 `@DefaultValue` 注解）：
+- [x] **Step 1** 属性形状（照 `AdminProperties` 的写法：字段 + 默认值，不用 `@DefaultValue` 注解）：
 
 ```yaml
 marketing:
@@ -198,14 +198,16 @@ standalone 那份的差异：**只有 `self` 一个 target**（`127.0.0.1:8085`�
 因为四个业务模块 + admin 全在这个 JVM 里，写五条 8081-8084 就是在制造 5 条假 error。
 （母版 §7 的"目标清单照抄 prometheus.yml"作废：那两个 job 都没有 8085，见 spec §1.6。）
 
-- [ ] **Step 2** `OpsAssemblyTest` 三条断言（先红）：
+- [x] **Step 2** `OpsAssemblyTest` 三条断言（先红）：
   ① `ADMIN_METRICS_MODE` 缺省时注入的是 `ProxyMeterSource`；
   ② 设成 `local` 时是 `LocalMeterSource`，且 **proxy bean 不存在**（两套同时在 = LITE 下必然一半读数假）；
   ③ yml 里出现白名单外的 target（例如 `x: evil.com:80`）时**启动期失败**，
   message 点名是哪个条目——配置错要响在启动，不是响在第一次点大盘。
-- [ ] **Step 3** 实现 + 复跑全量 `mvn -o test`（新增的 bean 不能把 ⑤ 的
-  `AdminSecurityAutoConfigurationTest`、standalone 的 `StandaloneComponentScanTest` 挤红）。
-- [ ] **Step 4** 提交：`feat(ops): ④ 指标源按属性装配，LITE 只留 self 一个 target`
+- [x] **Step 3** 实现 + 复跑全量 `mvn -o test`（新增的 bean 不能把 ⑤ 的
+  `AdminSecurityAutoConfigurationTest`、standalone 的 `StandaloneComponentScanTest` 挤红）——
+  实测 **306 用例 / 64 类** 全绿，并且**真起了一次 LITE 栈**（`deploy-preview.sh` exit 0、
+  standalone 100s 起、冒烟 81/81）：⑤ 的教训是装配测试全绿而 standalone 起不来。
+- [x] **Step 4** 提交：`feat(ops): ④ 指标源按属性装配，LITE 只留 self 一个 target`
 
 ---
 
@@ -403,6 +405,7 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 |---|---|---|---|
 | T1 | `MetricSample`/`ParseResult`、`PrometheusTextParser`（`_total`、派生线白名单后缀、引号内逗号与 `}`、坏行计数、摘 `application`）、`ScrapeException`、`MetricSource`、`LocalMeterSource`（复用 `PrometheusMeterRegistry.scrape()` 走同一个解析器） | 16 | admin 模块 54 用例全绿（原 38）；变异检查四处全咬：去 `_total`、坏行改抛异常、派生后缀不校验、不摘 `application` |
 | T2 | `TargetRef` + `OpsTargets`（正面清单：host 正则 + 七个端口 + 名称形状 + 启动期整表校验点名错项）、`ProxyMeterSource`（JDK HttpClient、1s 超时、256KB 超限即抛、非 2xx 带状态码、3xx 不跟） | 12 | admin 模块 66 用例全绿；变异检查四处全咬（跟重定向 / 端口不设限 / 超限静默截断 / host 正则收所有）；重定向断言是"目标 handler 被调 0 次"，不是只看状态码 |
+| T3 | `OpsProperties`（mode 取值与抽样数在启动期校验）、`OpsObservabilityConfig`（proxy/local 二选一 + 空清单拒启动）、admin yml 六个 target、standalone yml 覆成 `local` + 只有 `self`、full-app compose 给 admin 下发 `OPS_T_*` | 6 | 全仓 **306 用例 / 64 类** 绿；真起 LITE 栈（deploy-preview exit 0、standalone 100s 起）+ 冒烟 81/81；变异三处全咬（去掉空清单闸、把 matchIfMissing 挪到 local、去掉 mode 校验） |
 
 ## 落地时对计划的修正
 
@@ -426,3 +429,11 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 5. 两处 JDK17 的现实：`com.sun.net.httpserver.HttpServer` **不是** `AutoCloseable`
    （JDK21 才是），测试不能 try-with-resources，得显式 `stop(0)`；
    桩端口用随机口，因此上面那条分层是必需的，不是可有可无的讲究。
+6. **T3 复跑 LITE 时链路 3 红了一条"库存账实不符"，根因不在本段**：上一次跑的是
+   每服务一库档（它把**共用的** Redis 桶键按 `marketing_seckill` 的 `sold=0` 重建成 5000），
+   回到单库档后 LITE 的 `warmIfAbsent` 是 SETNX 语义，**不会覆盖上一个布局留下的键**，
+   于是桶里是 5058 而 `total - sold = 4908`。这正是 README/母版反复标的那条
+   "换库布局必须跑一次 `reset-demo-data.sh`"，我 E 档跑完没往回补。
+   跑一次复位（`4848 + 152 == 5000`）后冒烟 81/81。**这条红不是回归，是环境状态**，
+   但它是 ④ T5 最好的动机：这个漂移现在只能靠冒烟撞上来，做完之后 `GET /api/admin/ops`
+   会在被人看见之前就先被说出来。
