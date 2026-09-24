@@ -38,7 +38,7 @@ T8 收口。T2 与 T4 无依赖，但 T4 的视图字段要等 T6 定稿，所�
 - Test: `marketing-admin/src/test/java/com/example/marketing/admin/observe/PrometheusTextParserTest.java`
 - Test: `.../observe/LocalMeterSourceTest.java`
 
-- [ ] **Step 1** 先写 `PrometheusTextParserTest`（失败）：喂真样本，断言下面这些都必须成立
+- [x] **Step 1** 先写 `PrometheusTextParserTest`（失败）：喂真样本，断言下面这些都必须成立
 
 ```java
 // 关键 fixture：counter 的 _total 后缀、histogram 的派生线、# 注释、空行、坏行
@@ -70,7 +70,7 @@ private static final String SAMPLE = """
 6. `#` 注释行永远不是样本（哪怕长得像）。
 7. `application` tag 被摘掉（`byName` 的结果里不带它）：它是来源标识，不是维度。
 
-- [ ] **Step 2** 实现：`MetricSample` + 解析器
+- [x] **Step 2** 实现：`MetricSample` + 解析器
 
 ```java
 /** 一条 Prometheus 样本。tags 永不为 null，值保留原始 double（不做四舍五入：counter 差值要比对）。 */
@@ -87,7 +87,7 @@ public record MetricSample(String name, Map<String, String> tags, double value) 
 仓库已经带了 `micrometer-registry-prometheus`，但引它的 `TextFormat.parse` 会把整套
 prometheus model 拉成 admin 的直接依赖，而我们要的只是"取几个数"。
 
-- [ ] **Step 3** `MetricSource` 接口 + 本地实现
+- [x] **Step 3** `MetricSource` 接口 + 本地实现
 
 ```java
 public interface MetricSource {
@@ -107,10 +107,10 @@ public interface MetricSource {
 Prometheus 风格样本（counter → `name_total`、gauge → `name`、timer → `_count`/`_sum`/`_max`），
 **复用同一份 name/tag 约定**，这样上层只有一条取值路径。tag 名直接取 Micrometer 的 key。
 
-- [ ] **Step 4** 跑两个测试类，`mvn -o -pl marketing-admin test -Dtest='*observe*'` 全绿后，
+- [x] **Step 4** 跑两个测试类，`mvn -o -pl marketing-admin test -Dtest='*observe*'` 全绿后，
   做变异检查（至少两处）：① `byName` 去掉 `_total` 兜底 → counter 断言必红；
   ② 坏行改成"抛异常" → 容错断言必红。
-- [ ] **Step 5** 提交：`feat(ops): ④ 指标样本模型与 Prometheus 文本解析（含 _total 与坏行容错）`
+- [x] **Step 5** 提交：`feat(ops): ④ 指标样本模型与 Prometheus 文本解析（含 _total 与坏行容错）`
 
 ---
 
@@ -400,8 +400,20 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 
 | 任务 | 交付 | 新增用例 | 实测证据 |
 |---|---|---|---|
-| — | — | — | — |
+| T1 | `MetricSample`/`ParseResult`、`PrometheusTextParser`（`_total`、派生线白名单后缀、引号内逗号与 `}`、坏行计数、摘 `application`）、`ScrapeException`、`MetricSource`、`LocalMeterSource`（复用 `PrometheusMeterRegistry.scrape()` 走同一个解析器） | 16 | admin 模块 54 用例全绿（原 38）；变异检查四处全咬：去 `_total`、坏行改抛异常、派生后缀不校验、不摘 `application` |
 
 ## 落地时对计划的修正
 
-（实施中发现计划与代码不符时追加到这里，一条一段，写清"计划怎么说 / 实际怎么做 / 为什么"。）
+1. **`LocalMeterSource` 不自己渲染样本**（计划 Step 3 写的是"现场渲染成 Prometheus 风格样本"）：
+   那样就有两份"Micrometer → 线格式"的命名规则会漂，而漂的表现正是本段最不能有的"读不到"。
+   实际做法是要求注入的 registry 是 `PrometheusMeterRegistry`，拿它 `scrape()` 出来的文本
+   交给**与跨进程抓取同一个解析器**；不是这个实现就抛 `ScrapeException`（不返回空结果冒充"没指标"）。
+   顺带两枚实测坑：micrometer 1.12.5 的包名是 `io.micrometer.prometheus`（不是 1.13 的
+   `prometheusmetrics`），且 `PrometheusNamingConvention.defaultNaming()` **不存在**，
+   构造用 `new PrometheusMeterRegistry(PrometheusConfig.DEFAULT)`。
+2. **timer 的基名带单位后缀**：代码里叫 `mkt.discount.calc`，线格式是
+   `mkt_discount_calc_seconds_{count,sum,max}`。所以取 timer 必须写 `mkt.discount.calc.seconds`。
+   没有让解析器去猜后缀（猜错的表现是静默少一条线），而是加了一条断言钉住"按代码里的名字取 = 空列表"。
+3. **micrometer 1.12 在 tag 列表尾部多打一个逗号**（`mkt_job_dedup_skipped_total{task="x",}`）。
+   解析器按"引号外逗号才是分隔符"实现，天然容住，但这条单独写了 fixture 测试：
+   它一旦被当成坏行，**所有带维度的计数会静默消失**，而大盘照样是绿的。
