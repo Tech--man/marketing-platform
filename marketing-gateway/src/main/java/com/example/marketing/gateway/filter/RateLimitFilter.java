@@ -41,16 +41,19 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
     private final RateRuleResolver ruleResolver;
     private final ConfigValues configValues;
     private final org.springframework.data.redis.core.ReactiveRedisTemplate<String, String> redisTemplate;
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
     @SuppressWarnings("rawtypes")
     private final RedisScript<Long> slidingWindowScript;
 
     public RateLimitFilter(GatewayProperties properties, RateRuleResolver ruleResolver,
                            ConfigValues configValues,
-                           org.springframework.data.redis.core.ReactiveRedisTemplate<String, String> redisTemplate) {
+                           org.springframework.data.redis.core.ReactiveRedisTemplate<String, String> redisTemplate,
+                           io.micrometer.core.instrument.MeterRegistry meterRegistry) {
         this.properties = properties;
         this.ruleResolver = ruleResolver;
         this.configValues = configValues;
         this.redisTemplate = redisTemplate;
+        this.meterRegistry = meterRegistry;
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();
         script.setLocation(new ClassPathResource("lua/sliding_window.lua"));
         script.setResultType(Long.class);
@@ -93,6 +96,10 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
                         return chain.filter(exchange);
                     }
                     log.info("[rate-limit] 拦截 route={}, key={}", route.getId(), clientKey);
+                    // ④：按 route 记拒绝数。既有的 http_server_requests{status="429"} 没有 route 维度，
+                    // 答不了"哪个入口正在被打爆"，而那正是限流唯一需要被看懂的问题。
+                    meterRegistry.counter("marketing.gateway.rate.limit.rejected",
+                            "route", route.getId()).increment();
                     Map<String, Object> body = new LinkedHashMap<>();
                     body.put("code", 42900);
                     body.put("message", "请求过于频繁，请稍后再试");
