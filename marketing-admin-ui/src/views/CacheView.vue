@@ -1,5 +1,5 @@
 <script setup>
-import { onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { api, E } from '@/api/client'
 import { useSession } from '@/stores/session'
 
@@ -12,7 +12,23 @@ import { useSession } from '@/stores/session'
  * 因为回执键有 10 分钟 TTL，静默放弃等于让人以为消息丢了。</p>
  */
 const s = useSession()
-const types = ref([])
+const localTypes = ref([])
+/**
+ * 可选类型 = 本进程注册的 ∪ ④ 面板 consistency 行报上来的。
+ *
+ * <p>只用 `/cache/types` 会在 FULL 档把这一页废掉：那个端点回答的是"这个 JVM 里注册了什么"，
+ * 而分进程的 admin 里一个 reheater 都没有（实测返回 `[]`）——偏偏跨进程重预热才是这一页最需要
+ * 用得上的场合。consistency 行由各 owning 进程自己上报，类型名与 owning target 都是真值，
+ * 所以拿它当第二个来源，而不是在前端写死一份类型清单（那会变成第三份真相）。</p>
+ */
+const panelTypes = ref([])
+const typeOptions = computed(() => {
+  const map = new Map()
+  for (const t of localTypes.value) map.set(t, '')
+  for (const p of panelTypes.value) if (!map.has(p.type)) map.set(p.type, p.target)
+  return [...map.entries()].map(([type, target]) => ({ type, target }))
+})
+const selected = ref('')
 const key = ref('')
 const force = ref(true)
 const busy = ref(false)
@@ -21,12 +37,26 @@ const receipt = ref(/** @type {any} */ (null))
 const error = ref('')
 let timer = null
 
-api.get('/api/admin/cache/types')
-  .then((d) => {
-    types.value = d || []
-    if (types.value.length) state.value = `已注册的重预热类型：${types.value.join('、')}`
-  })
-  .catch((e) => (error.value = e.message))
+async function loadTypes() {
+  localTypes.value = (await api.get('/api/admin/cache/types')) || []
+  if (typeOptions.value.length) pickType()
+  // 面板读不到不影响本页：只是少了跨进程那半份类型清单
+  try {
+    const ops = await api.get('/api/admin/ops')
+    panelTypes.value = (ops?.consistency || []).map((c) => ({ type: c.type, target: c.target }))
+    if (!typeOptions.value.length) {
+      error.value = '本进程与面板都没报上任何重预热类型'
+    }
+    pickType()
+  } catch {
+    /* 面板不可读就只用本地清单 */
+  }
+}
+loadTypes()
+
+function pickType() {
+  if (!selected.value && typeOptions.value.length) selected.value = typeOptions.value[0].type
+}
 
 function stop() {
   clearInterval(timer)
@@ -38,9 +68,9 @@ async function run() {
   stop()
   error.value = ''
   receipt.value = null
-  const type = types.value[0]
+  const type = selected.value
   if (!type) {
-    error.value = '本进程没有注册任何重预热类型'
+    error.value = '没有可选的重预热类型（本进程与 ④ 面板都没报上来）'
     return
   }
   busy.value = true
@@ -134,6 +164,14 @@ async function pollAgain() {
 
     <form class="row" @submit.prevent="run">
       <label>
+        类型
+        <select v-model="selected" data-field="type">
+          <option v-for="o in typeOptions" :key="o.type" :value="o.type">
+            {{ o.type }}{{ o.target ? `（由 ${o.target} 上报）` : '（本进程）' }}
+          </option>
+        </select>
+      </label>
+      <label>
         key（活动号 / 模板号 / 秒杀活动号）
         <input v-model="key" data-field="key" placeholder="例如 ACT2026001" />
       </label>
@@ -141,11 +179,13 @@ async function pollAgain() {
         <input v-model="force" type="checkbox" data-field="force" />
         force（值本来就对时也强制重写一遍）
       </label>
-      <button type="button" data-act="reheat" :disabled="busy || !types.length" @click="run">
+      <button type="button" data-act="reheat" :disabled="busy || !typeOptions.length" @click="run">
         {{ busy ? '执行中…' : '重预热' }}
       </button>
     </form>
-    <p v-if="!types.length" class="hint">本进程没注册任何类型（LITE/dev 有；分进程的 admin 没有）。</p>
+    <p v-if="!typeOptions.length" class="hint">
+      一个类型都没有：本进程没注册 reheater，④ 面板也没报上 consistency 类型。
+    </p>
     <p v-if="state.startsWith('仍待回执')">
       <button type="button" data-act="poll-again" @click="pollAgain()">再查一次回执</button>
     </p>

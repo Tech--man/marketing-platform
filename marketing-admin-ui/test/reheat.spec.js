@@ -37,9 +37,15 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+/** 面板上报回来的类型清单（FULL 分进程档下 /cache/types 是空的，这一份是唯一来源） */
+const panel = (types) =>
+  ok({
+    consistency: types.map((t) => ({ target: 'marketing-activity', type: t, mismatch: 1, note: '' })),
+  })
+
 describe('CacheView', () => {
   it('LITE 同步分支：DONE 就带着 before/after 与公式说明回来', async () => {
-    mock(ok(['budget']), ok({ status: 'DONE', type: 'budget', key: 'ACT1', before: 1, after: 2 }))
+    mock(ok(['budget']), panel([]), ok({ status: 'DONE', type: 'budget', key: 'ACT1', before: 1, after: 2 }))
     const w = mount(CacheView)
     await flushPromises()
     await w.get('[data-field="key"]').setValue('ACT1')
@@ -50,9 +56,33 @@ describe('CacheView', () => {
     expect(w.find('[data-act="reheat"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('FULL 分进程：/cache/types 是空的，类型清单必须从 ④ 面板的 consistency 行取', async () => {
+    mock(
+      ok([]),
+      panel(['budget', 'coupon-stock', 'seckill-stock']),
+      ok({ status: 'DISPATCHED', type: 'budget', key: 'ACT1', id: 'r-9', before: -1, after: -1 }),
+      ok({ status: 'DONE', type: 'budget', key: 'ACT1', id: 'r-9', before: 1, after: 4242 }),
+    )
+    vi.useFakeTimers({ shouldAdvanceTime: false })
+    const w = mount(CacheView)
+    await flushPromises()
+    // 本地清单为空 ≠ 这一页没法用：三个类型都要能选，且标出是谁上报的
+    const options = w.findAll('[data-field="type"] option').map((o) => o.text())
+    expect(options.length).toBe(3)
+    expect(options.join(' ')).toContain('marketing-activity')
+    expect(w.find('[data-act="reheat"]').attributes('disabled')).toBeUndefined()
+    await w.get('[data-field="key"]').setValue('ACT1')
+    await w.get('[data-act="reheat"]').trigger('click')
+    await flushPromises()
+    vi.advanceTimersByTime(2500)
+    await flushPromises()
+    expect(w.text()).toContain('4242')
+  })
+
   it('FULL 分进程：DISPATCHED 显示"已投递、等回执"，轮到 DONE 才改口', async () => {
     mock(
       ok(['budget']),
+      panel([]),
       ok({ status: 'DISPATCHED', type: 'budget', key: 'ACT1', id: 'r-1', before: -1, after: -1 }),
       ok({ status: 'DISPATCHED', type: 'budget', key: 'ACT1', id: 'r-1', before: -1, after: -1 }),
       ok({ status: 'DONE', type: 'budget', key: 'ACT1', id: 'r-1', before: 1, after: 5100 }),
@@ -76,6 +106,7 @@ describe('CacheView', () => {
   it('轮询超时不许静默：给出"仍待回执"与手动再查一次', async () => {
     mock(
       ok(['budget']),
+      panel([]),
       ok({ status: 'DISPATCHED', type: 'budget', key: 'ACT1', id: 'r-2', before: -1, after: -1 }),
       ok({ status: 'DISPATCHED', type: 'budget', key: 'ACT1', id: 'r-2', before: -1, after: -1 }),
     )
@@ -94,6 +125,7 @@ describe('CacheView', () => {
   it('41010 说清"这一档没有认领该 type 的进程"，不是"请求失败"', async () => {
     mock(
       ok(['budget']),
+      panel([]),
       ko(41010, '本形态没有注册 budget 的重预热消费者，且集群里没有该 type 的消费组'),
     )
     const w = mount(CacheView)
