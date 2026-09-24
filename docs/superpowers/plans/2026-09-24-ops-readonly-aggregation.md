@@ -367,7 +367,8 @@ public record OpsSnapshotView(
 - Modify: `README.md`（④ 一节、API 表加 `/api/admin/ops`、覆盖矩阵、计数）
 - Modify: `docs/superpowers/specs/2026-09-23-admin-console-business-ops-ui-design.md`（§13 追加 ④ 偏离）
 
-- [ ] **Step 1** 链路 7 五条（基线 81/82 → 86/87）：
+- [x] **Step 1** 链路 7 五条（计划预期基线 81/82 → 86/87；**实际 8 条 → 89/90**，逐条见下面
+  "Step 1 实测"那条）：
 
 ```bash
 head2 "链路 7：运维只读聚合（同式对拍积压 → 不可见不许填 0 → 恒等式能看见 MISMATCH）"
@@ -387,16 +388,26 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
  再 `POST /api/admin/cache/reheat?type=budget` → 断言回 `OK`。
  这一条同时验了"④ 只读"与"③ 能修"，是本段最有价值的断言。
  ③/⑤ 的判据按形态分岔（读 `/cache/types` 那套既有做法），不猜环境变量。
-- [ ] **Step 2** `bash -n scripts/smoke-test.sh`；LITE 真跑一遍，逐条看红。
-- [ ] **Step 3** 五形态复跑：A LITE → B FULL 进程（**中间不清 SQL**）→ C FULL 容器（deploy-full 后等
-  broker 一分钟）→ D dev → E 每服务一库（`MYSQL_DB=marketing_activity`）。
-  每格记录：断言数、`mode` 取值（A/D 应 `local`，B/C/E 应 `proxy`）、standalone `docker stats`。
-- [ ] **Step 4** README：新增"运维读数（④）"一节（三问 + 五形态各自的 target/mode 差异 +
-  为什么"不可见不填 0"）；API 表加两行；覆盖矩阵五格刷新；计数改成 T8 实测值。
-- [ ] **Step 5** 母版 §13 追加 ④ 偏离（至少：`information_schema` 只在第五套形态需要、
-  网关没有 route 维度 429 计数、prometheus.yml 无 LITE 目标、桶数取列不取全局、
-  保留 job 与索引推迟、解析用 JDK HttpClient + 回环桩替掉 MockRestServiceServer）。
-- [ ] **Step 6** 提交：`docs: ④ 口径收口（运维读数一节 + 五形态复跑记录）`
+- [x] **Step 1 实测** 链路 7 落地 **8 条**（LITE/dev 89 条、FULL 三档 90 条基数）。计划里的 ⑤
+  "白名单外的 target → 40300" **没有对应可测面**：端点不收 `target`/`name` 参数（修正 #12），
+  白名单只在启动期与抓取期起作用，所以那条改成"逐 target 自报 `source` 与 URL"来验同一件事。
+  ④ 的具体做法被换掉，见修正 #15；跨进程等待见修正 #16。
+- [x] **Step 2** `bash -n` 通过；LITE 真跑：**89/89**。第一版红在恒等式那条
+  （`通过 87 / 失败 1`，面板显示三条 consistency 全 0）——排查确认是断言越出抽样，不是面板漏报。
+- [x] **Step 3** 五形态复跑全绿（2026-09-24）：A LITE **89/89**（standalone 551.6MiB/768MiB、
+  gateway 362.8MiB/448MiB，`mode=local+proxy`）→ B FULL 进程 **90/90**（`mode=proxy` 六目标全 OK）
+  → C FULL 容器 **90/90**（`mode=proxy`，target 主机名是 compose service 名）→ D dev **89/89**
+  （`ownForm=DEV`、`mode=local+proxy`、standalone RSS 175MiB）→ E 每服务一库 **90/90**
+  （`mode=proxy`，④ 在这一档抓到跨布局缓存漂移：基线 budget=1/coupon=1/seckill=1）。
+  mode 预期与实测不符，见修正 #17；C 档第一次复跑被"宿主机进程没拆干净"污染，见修正 #18。
+  A→B 的"不清 SQL 原地切换"证据仍成立（第一轮 A 之后直接起 B，中间零清理）；
+  本轮从 E 换回 B 时按 `reset-demo-data.sh` 自己的注释跑了一次分桶复位（那是业务端点写，不是清库）。
+- [x] **Step 4** README：新增"### 6. 运维读数（④）"（三问取数口径 + 为什么不可见不填 0 +
+  白名单/启动期校验 + ④ 只读 + 弱主机代价实测）；API 表加 `GET /api/admin/ops` 一行；
+  覆盖矩阵加"④ 读数证据"一列并五格全刷新；计数 272→**347** / 59→**73**、六条→**七条**、
+  81/82→**89/90**；已知噪音补 ⑥（宿主与容器同时占端口）与 ⑦（H2/MySQL 标识符大小写）。
+- [x] **Step 5** 母版 §13 追加 ④ 六条偏离（见该节）。
+- [x] **Step 6** 提交见 git log（`docs: ④ 口径收口…`）。
 
 ---
 
@@ -411,6 +422,7 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
 | T5 | `CacheConsistency` 契约 + `CacheConsistencyRegistry`（按 type 绑 gauge、重复 type 启动期失败、未注册=-1）+ 三模块各自实现（复用 reheat 那一份公式），预算自检另加一条键形断言 | 16 | 全仓 **335 用例 / 70 类** 绿；变异四处全咬（Redis 挂了报 0、键缺失当一致、缺桶不算不符、gauge 把 -1 钳成 0）；**T5 的设计被换掉**，见修正 #9 |
 | T6 | `OpsSnapshotView`/`OpsSnapshotService`/`AdminOpsController`（`GET /api/admin/ops`）、`AuditTableStore`、`RedisLeaseLock.keyOf` 暴露、liveness 三态 | 17 | admin 模块 94 用例绿；变异两处全咬（三态塌回两态、抓不到就整片抛）。**真起 LITE 后一次读盘就抓到两条真漂移**：budget 99993500 vs 期望 99993600、coupon-stock 92822 vs 92824（都是先前形态来回留下的），用 `POST /cache/reheat` 修完再读全部归 0 —— 发现→定位→修这条链第一次在真栈上走通 |
 | T7 | `RateLimitFilter` 拒绝分支补 `marketing.gateway.rate.limit.rejected{route}`；新建 `RateLimitFilterTest`（这个 filter 此前零测试） | 3 | 网关模块 38 用例绿；真栈实测：70 发打 `admin-route` → 15 次 429 → 面板读到 `{route=admin-route} 15.0`（经 HTTP 从网关进程抓来）|
+| T8 | 冒烟链路 7（8 条：可读 / 逐 target 自报 `source` / 跨库同式对拍 / 通道按形态分岔 / 恒等式基线→改错→回落 / 网关 route 计数）+ `reheat_wait`（等回执 `DONE` 而不是 `sleep 2`）+ `ops_mismatch`（读不出即判失败，空串不参与比较）；`deploy-full.sh` 补"宿主机进程活着就拒"；README 新增 ④ 一节 + 覆盖矩阵加列 + 计数收口 | — | `mvn install` 全仓 **347 用例 / 73 类** 绿；五形态复跑 **A 89/89、B 90/90、C 90/90、D 89/89、E 90/90**（A/D `mode=local+proxy`，B/C/E `proxy`）；A 档 standalone 551.6MiB/768MiB。两处红都判在脚本侧而非面板侧（抽样越界、跨进程没等回执），修正 #15/#16；E 档面板抓到跨布局真漂移（基线 budget=1/coupon=1/seckill=1），是 ④ 第一次独立说出一个此前无人能看见的事实 |
 | — | **T3 的 `metrics-mode` 被推翻重做**（见修正 #13）：`TargetSources` 按 target 分派 local/proxy，视图逐条带 `source` | — | 全仓 **347 用例 / 73 类** 绿；LITE 真栈 `mode=local+proxy`，`self` 与 `marketing-gateway` 两条都 OK |
 
 ## 落地时对计划的修正
@@ -485,3 +497,22 @@ expect "④ 的积压计数与直连 SQL 同式相等" "\"pendingSent\":${MYPEND
     改成 `marketing-gateway` 仍然连不上（那个名字不在 `mkt-data` 的别名里，实测 `getent` 只有
     `mkt-preview-gateway` 与 `gateway`）。现在默认 `127.0.0.1`（dev 两 JVM 同机）+ compose 显式
     覆 `OPS_GATEWAY_HOST: mkt-preview-gateway`。教训：**跨容器的默认值不能按同机想当然**。
+15. **T8 Step 1 那条恒等式断言按原样写不出来**（计划：改 `$ACT_NO` 的 DB 预算 → 断言面板 `MISMATCH`）。
+    两处不成立：① `ACT-SMOKE-*` 是链路 0 每轮新建的，`id` 最大，而预算自检只抽
+    `ORDER BY id LIMIT 5` —— 断言验的是一个 ④ 根本不看的活动（第一版就是这样红的，面板没错）；
+    ② 改 DB 会把链路 4 的"只改 DB 时预扣缓存不动"那条判据的现场也改掉。
+    改成**只改缓存不碰 DB**：用只读 SQL 取样本首行 → `SET activity:budget:<no> 999999999999`
+    （一个真实预算不可能等于的值）→ 断言条数**比基线大** → `POST /cache/reheat` → 断言**回落到基线**。
+    动手前先 `reheat` 一次把这一条归零，是为了让"换库布局带来的既有漂移"进基线而不是进红点
+    （每服务一库档实测基线 budget=1：④ 报的是真账，不是脚本造的）。
+16. **FULL 档读面板前必须等重预热回执 `DONE`**：跨进程投递的落账最快也要一个消费轮询，
+    计划里的 `sleep 2` 直接把"③ 修不动"这种不存在的问题写成了红。新增 `reheat_wait`：
+    响应里是 `DONE` 就走完，是 `DISPATCHED` 就按 id 轮询 ack（拿不到 id 立刻失败，不空等 30s）。
+    判据取自响应自己的 `status`，不看形态、不猜环境变量。
+17. **Step 3 的 mode 预期没跟着修正 #13 回改**：计划写"A/D 应 `local`，B/C/E 应 `proxy`"，
+    实测是 **A/D = `local+proxy`**（网关在任何形态下都是独立进程，这正是 #13 的立论点）、
+    B/C/E = `proxy`。README 的覆盖矩阵按实测写。
+18. **`deploy-full.sh` 补一道"宿主机进程形态还活着就拒"**：宿主 JVM 占着 8090 时容器发布同名端口
+    **在 macOS 上不报错**（OrbStack 走 VM 转发），复跑 C 档时冒烟其实打在了 B 档那套 JVM 上，
+    而 `docker ps` 看着一切正常 —— 五形态那张表会整列作废，只能靠 `lsof` 对端口抓。
+    现在看 `run/*.pid` 里有活进程就非零退出（与既有的 `mkt-preview-standalone` 那道对称）。

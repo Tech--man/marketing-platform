@@ -225,7 +225,7 @@ nacos 配置中心、refresh token / OAuth2 / SSO / LDAP、RBAC 角色表与权�
 ③ `2026-09-23-admin-business-console-design.md`（**已实施**，偏离见 §13；含对本文件 §6.0 身份件形状、
 §6.2 审计载荷、§6.3 重预热回执与 ⑤ §4 的修改，理由在那份里）。
 
-## 13. 实施偏离（⑤③ 落地时确认，已回写）
+## 13. 实施偏离（⑤③④ 落地时确认，已回写）
 
 ⑤ 的段内 spec 是 `2026-09-23-online-config-delivery-design.md`（含完整理由与实测证据），这里只留摘要：
 
@@ -267,3 +267,43 @@ nacos 配置中心、refresh token / OAuth2 / SSO / LDAP、RBAC 角色表与权�
 7. **`reset-demo-data.sh` 从"restart 应用 + 直连 Redis 删键"改成一次后台调用**：库存写与分桶重建
    现在在 owning 服务的同一个事务里，形态差异对脚本不再可见（三条形态分支整段删除）。
    冷栈守卫保留并加强成三处非零退出（网关不可达 / 登录失败 / 恒等式不成立）。
+### ④ 运维只读聚合
+
+④ 的段内 spec 是 `2026-09-24-ops-readonly-aggregation-design.md`（含完整理由与实测证据），这里只留摘要：
+
+1. **§4.3 的"缓存与账的恒等式"换了主语**：母版让 ④ 自己去比对缓存与 DB，落地时改成
+   **判定长在 owning 模块里**（`CacheConsistency` 契约，各模块复用自己那套重预热公式），④ 只读
+   gauge `marketing.cache.consistency{type}`。同一段代码既是修的手也是查的眼，才不会
+   "修完还报不符"；`CacheKeys` 那份 ④ 侧的键形副本随之删除（两份真相必然漂）。
+2. **指标源不是二选一，是并存**（本文件事实 #2 我之前只写没当真）：计划里 `metrics-mode:
+   local|proxy` 一个开关，实测会让**单机服役档恰好看不到限流拒绝数**——网关在任何形态下都是
+   独立进程。改成 `local-targets` 名单 + 两个源同时装配、按 target 名分派，`mode` 变成
+   "本次真正用到的源"（LITE/dev = `local+proxy`，FULL 三档 = `proxy`），每个 target 自带 `source`。
+3. **`information_schema` 跨库发现只有第五套形态用得上**：另外四套都只有一个库，
+   但这一条必须写清成本——它是为"每服务一库"这一档付的常驻复杂度，不是通用需求。
+   实现上两边都套 `LOWER()`：MySQL 存小写而 H2（`MODE=MySQL`）折成大写，
+   只写一边时单测里发现 0 个库，而失败模式是**静默少报积压**。
+4. **网关原本没有带 `route` 维度的 429 计数**（母版 §7 假设它可观测）：④ 补了
+   `marketing.gateway.rate.limit.rejected{route}`，且**只在拒绝分支计数**——放行时计数会让
+   "限流有没有生效"变成减法题。这个 filter 此前零测试，新建了 3 条。
+5. **`prometheus.yml` 里根本没有 LITE 目标**（母版把 Prometheus 当默认在跑）：所以 ④ 的取数路径
+   只有 JDK HttpClient + Redis + MySQL，Prometheus 降级成"可选的第二消费者"。
+   抓取清单是**启动期整表校验的正面白名单**（host 正则 + 端口枚举 + 常量路径 + `Redirect.NEVER`
+   + 256KB 超限即失败），端点不收任何 `target`/`name` 参数——母版计划的
+   `GET /ops/metrics?target=&name=` 因此没做：多一个请求期参数就多一道 SSRF 面。
+6. **秒杀分桶数取活动自己的列，不取全局常量**（母版按固定 16 桶写死过一处）：桶数是在建活动/
+   改库存时按当次配置算的，历史活动可能不是 16。缺桶**计入不符**而不是忽略。
+   另有一条风险留档未修：分桶键的 TTL 复用 `boughtMarkTtlSeconds`（86400），
+   长活动可能出现桶键先过期而活动仍在售——那是 ④ 会看见但解释不了的一种红。
+7. **保留 job（审计/积压的历史裁剪）与 DB 索引推迟**：④ 只出瞬时读数，裁剪需要的是"读多少次"
+   这个还没有的数据；先加索引等于给一个没被证明的查询买保险。
+8. **"不可见"一律不填 0**：FULL 的 RocketMQ 队列深度、判不了的自检、抓不到的 target 分别落成
+   `applicable=false` / `-1` / `ERROR`，且积压合计里有任一未知就把总数也报 `-1`。
+   这是本段唯一一条"宁可盘面上缺一块也不说假话"的纪律，冒烟与单测各钉了一遍。
+9. **测试替身换了实现**：母版设想用 `MockRestServiceServer`（Spring 的），但 ④ 走的是 JDK
+   `HttpClient` 而非 `RestTemplate`，改成 `com.sun.net.httpserver.HttpServer` 起回环真端口——
+   顺带把"1s 超时""非 2xx 带状态码""超 256KB 不给半份"这三条测成了真网络行为。
+10. **两处只有真起进程才暴露的装配缺件**：Spring Boot 不默认给 `Clock` bean（单测注入固定时钟
+    看不见这种失败）；`StreamDepth` 刻意**不是**组件扫描出来的 bean——它要知道"本形态走哪条通道"
+    与"本进程注册了哪些 reheat type"，这两件事只有装配层知道，所以显式 `@Bean` 喂进去，
+    通道判据直接复用 `marketing.mq.type` 这个属性本身而不是新加一个 ④ 专属开关。

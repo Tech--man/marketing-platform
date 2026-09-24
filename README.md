@@ -225,8 +225,8 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 
 | 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
-| **LITE 服役档** | standalone 517-599 + gateway 323-361 MiB | mysql 172-266 + redis 8-13 MiB | **≈ 1.09-1.24 GiB** | `docker stats`；standalone 内含管理后台模块。区间是同日多次采样的跨度 —— JVM 常驻集随负载与运行时长爬升，单点数字会骗人。**加后台没触到调 `mem_limit` 的阈值（640 MiB）**，最高一次 599 MiB；⑤ 复跑当天两次采样 517 / 526 MiB（区间下沿因此放宽） |
-| **dev 开发档** | 2 个本机 JVM ≈ 180-244 MiB | 数据层 184-256 MiB | **≈ 0.36-0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比；区间是两次实测，差值主要是 MySQL 缓冲池预热程度 |
+| **LITE 服役档** | standalone 517-599 + gateway 323-361 MiB | mysql 172-266 + redis 8-13 MiB | **≈ 1.09-1.24 GiB** | `docker stats`；standalone 内含管理后台模块。区间是同日多次采样的跨度 —— JVM 常驻集随负载与运行时长爬升，单点数字会骗人。**加后台没触到调 `mem_limit` 的阈值（640 MiB）**，最高一次 599 MiB；⑤ 复跑当天两次采样 517 / 526 MiB（区间下沿因此放宽）；④ 复跑跑完七条链路 551.6 MiB（gateway 362.8），点大盘的抓取成本没把它顶出去 |
+| **dev 开发档** | 2 个本机 JVM ≈ 175-244 MiB | 数据层 184-256 MiB | **≈ 0.35-0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比；区间是多次实测（④ 复跑 standalone 175 MiB），差值主要是 MySQL 缓冲池预热程度 |
 | **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.7 GiB（484-689 MiB/个） | nacos 1.11 + rocketmq 1.68 + 数据层 0.26 + prometheus 0.03 GiB | **≈ 5.8 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
 | **FULL 扩容档**（本机进程，5 JVM） | 5 JVM `ps` RSS 合计 253 MiB（**刚启动即采样**；同一进程跑 10 分钟后到 309 MiB，ps RSS 随负载爬升） | rocketmq 1.77 GiB（nacos/prometheus 未起） | **≈ 2.0 GiB** | 混合口径 + 采样时点不一致，只作量级参考，别与上三行比 |
 
@@ -315,7 +315,7 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏
 `cannot find symbol: log / setXxx`。
 
-## 四、五条核心链路（第六条"写入口收口"是横切边界，见第五节的写入口矩阵）
+## 四、六条核心链路（"写入口收口"是横切边界，见第五节的写入口矩阵）
 
 ### 1. 领券（削峰 + 最终一致）
 
@@ -428,6 +428,45 @@ INFO——区分"从没取过"与"取过且为空"，否则六个进程各 12 �
 网关拒绝服务或起不来；快照 JSON 坏了则整份按空应用（退回出厂，而不是抱着陈旧值不放）；
 落库成功但广播失败返回 `41009 配置已落库但未广播`，配一个幂等的"重新广播"动作修复。
 
+### 6. 运维读数（④：不接 Prometheus 的只读大盘）
+
+**为什么自建**：这台机器上随时可能没有 Prometheus，而"服务是不是活着、异步堵了多少、
+缓存和账对不对"这三个问题在**故障时**最该能问。所以读数的取数路径只有 JDK HttpClient +
+Redis + MySQL，Prometheus 只是可选的第二消费者。
+
+**三问的取数口径**：
+
+| 问题 | 读数来自 | 判据长在哪儿 |
+|---|---|---|
+| 进程活着吗 | 各进程 `mkt:cfg:schema:{process}` 的 TTL（⑤ 的 schema 键每 60s 重投、TTL 180s） | 三态：有键=在跑 / 无键但**本档该有**=没在跑 / 本档压根没这个进程=**不适用**（`null`，不参与判活） |
+| 异步堵了多少 | `local_message` 的 `PENDING+SENT` 跨库求和 + Redis Stream 的 `XLEN`/`XPENDING` | 跨库靠 `information_schema` 发现哪张库里有 `local_message`（H2/MySQL 大小写敏感差异见第六节噪音 ⑦） |
+| 缓存和账对不对 | gauge `marketing.cache.consistency{type}` | **判定长在 owning 模块里**：`CacheConsistency` 契约由各模块用自己那套重预热公式实现（预算 `Σ流水` 对账、券 `remainOf`、秒杀分桶求和），④ 只读那个数——同一段代码既是修的手也是查的眼，才不会"修完还报不符" |
+
+**为什么"不可见"绝不填 0**：FULL 档的消息通道是 RocketMQ，队列深度只在 broker 里，客户端读
+不到 → 那一行是 `applicable=false` + `len/pending=-1` + 一句说明，而不是 0。`-1` 在这张盘上
+只有一个意思：**判定不了**。把"读不到"画成 0，就是让大盘在最该说话的时候说"一切正常"——
+积压合计里有任一来源不可见，总数也一并报 `-1`，不装作知道。
+
+**抓谁由清单说了算，清单在启动时校验**：`marketing.admin.ops.targets` 是
+`name → host:port` 的正面白名单（host 只接受 `marketing-*` / `standalone` / `127.0.0.1` /
+`mkt-*`，端口只接受 8081-8086 与 8090，路径是常量 `/actuator/prometheus`），请求期不再接受
+任何外部输入；`Redirect.NEVER`、1s 超时、响应超过 256KB 直接判失败（半份指标比没指标更坏）。
+清单里任意一条不合法 → **启动即失败**，而不是点大盘时才发现。
+
+**模式不是开关，是清单算出来的**（`mode` 字段自证）：本进程内的模块走 `local`（直接读
+`MeterRegistry`），其余进程走 `proxy`（HTTP 抓）。所以 LITE/dev 是 `local+proxy`——网关在**任何
+形态**下都是独立进程，没有哪种形态能"本地读到它"；FULL 三种入口是 `proxy`。抓不到的那一条
+标 `ERROR` 并保留面板，整片大盘不会因为一个进程死了而不可读。
+
+**④ 只读**：这个面里没有任何写。发现不符时的修法是 ③ 的 `POST /api/admin/cache/reheat`，
+面板的 `note` 里直接把这句话写给看盘的人。冒烟链路 7 钉的就是这条闭环：先把自己要碰的那条
+预热成一致（拿基线），再把缓存改错 → 断言条数**涨了**，重预热 → 断言**回落到基线**。
+只改缓存不碰 DB，所以红了不可能是数据坏了。
+
+**弱主机代价**（实测）：一次点盘 = 六次 1 秒超时的 HTTP + 六次文本解析（每份 150-340 条样本），
+LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `mem_limit` 阈值。
+保留策略与历史趋势（Prometheus 抓取、告警）**刻意推迟**：那是"看得更久"，不是"现在能看见"。
+
 ## 五、API 速查（经网关 8090；C 端需 `Authorization: Bearer demo-token-123`，后台需登录换来的 admin token）
 
 | Method | Path | 说明 |
@@ -447,6 +486,7 @@ INFO——区分"从没取过"与"取过且为空"，否则六个进程各 12 �
 | GET | /api/admin/config | 在线配置总览：本档形态、当前生效值与来源（FORM/GLOBAL/DEFAULT）、每个形态的行、ORPHAN 与未上报服务、本进程被忽略的键 |
 | PUT/DELETE | /api/admin/config（body `cfgKey`+`form`+`value`+`remark` / `?cfgKey=&form=`） | 写在线覆盖 · 删行=恢复出厂。**只有 `admin` 角色**（operator 在网关可写运维，但改不动阈值），未声明的键与越界值一律 40000 |
 | POST | /api/admin/config/rebroadcast | 按 DB 现状重发快照（幂等）：修 `41009 配置已落库但未广播` 的那个窗口 |
+| GET | /api/admin/ops | **运维只读总览（④，仅 `admin`）**：`mode` 与逐 target 的抓取路径/样本数、进程存活三态、`local_message` 跨库未排空合计、Stream 通道深度、缓存与账的不符条数、审计量与前几个动作、限流拒绝数（带 route）。读不到的一律 `-1`/`ERROR`/`applicable=false`，**不填 0**；这个面里没有任何写 |
 | GET/POST | /api/admin/activities · POST /api/admin/activities/{no}/transition?event= | 活动列表 / 创建（DRAFT）/ 状态机流转（仅 `admin`）。乐观锁 `version` 不匹配回 `41008` |
 | PUT | /api/admin/activities/{no}/budget · /gray | 改预算（同事务重预热，立刻反映到 C 端余额）· 改灰度（只写 DB，由每 5s 回源生效，不刷缓存） |
 | GET/POST | /api/admin/discount/rules | 规则列表 / upsert（仅 `admin`；启停也走这条，body 里带 `status`）。写与快照 bump 在同一事务，规则版本号变了 C 端计算秒级跟随 |
@@ -487,13 +527,13 @@ INFO——区分"从没取过"与"取过且为空"，否则六个进程各 12 �
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 272 个单测 / 59 个类：见下
-./scripts/smoke-test.sh  # 端到端 81 条断言（LITE/dev）/ 82 条（FULL 两种形态与每服务一库），
-                         # 六条链路，需服务已启动；差的正是跨进程重预热回执那条
+mvn test                 # 347 个单测 / 73 个类：见下
+./scripts/smoke-test.sh  # 端到端 89 条断言（LITE/dev）/ 90 条（FULL 两种形态与每服务一库），
+                         # 七条链路，需服务已启动；差的正是跨进程重预热回执那条
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（272 用例 / 59 类）**分七族：
+**单测（347 用例 / 73 类）**分八族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
@@ -523,6 +563,16 @@ mvn test                 # 272 个单测 / 59 个类：见下
   `FAILED`，否则后台只能把没回音猜成排队中）。T1-T8 逐批做了 20 处变异检查，全部咬人 ——
   其中三处专门用来防止"看起来实现了其实没实现"：去掉 controller 的同步分支、把投递顺序反过来、
   把建组 offset 改回默认最新位置。
+- **运维只读聚合（④）**：Prometheus 文本解析（`_total` 与 timer 的单位后缀、标签里的尾逗号、
+  畸形行计数而不是抛异常、`application` 标签剥离）、target 白名单的**启动期**整表校验
+  （SSRF 正面清单：host 正则 + 端口枚举 + 常量路径，任一条不合格整份清单失败）、
+  `ProxyMeterSource` 用 JDK `HttpServer` 回环桩验超时/非 2xx/**超 256KB 判失败而不是给半份**、
+  跨库积压发现（`information_schema` + `LOWER()` 两边都套）、逐库失败只让那一行变 `-1`、
+  Stream 深度按"本形态走哪条通道"分岔（不适用 ≠ 0）、`CacheConsistencyRegistry` 的绑 gauge 与
+  重复注册启动即失败、快照服务的三态判活与 `mode` 推导、以及网关 429 计数带 `route` 维度。
+  三个 owning 模块的 `mismatchCount()` 各自被测（预算按流水对账、券按 `remainOf`、秒杀分桶求和
+  + 缺桶计入不符），判定刻意与重预热同式。变异检查覆盖解析器静默少报、`-1` 被换成 0、
+  白名单退化成"能解析就行"等最贵的那几类；
 - **装配层回归**：聚合形态扫描边界 + common 条件装配矩阵（含重预热注册表），
   用 ApplicationContextRunner + H2 + `127.0.0.1:1` 永不连接的 Lettuce 满足类型条件，
   不依赖中间件。这族把"预览栈起不来"这类装配 bug 从 2-3 分钟的构建+部署排查压到秒级。
@@ -573,7 +623,18 @@ Nacos 客户端有概率在 STARTING 阶段注册失败导致该 JVM 退出（`r
 这不是②/⑤的回归，但它是**托底链路第一次被实测证明有效**：MQ 通道失联时消息不丢，代价是延迟从
 秒级变成补偿周期级。要干净复跑，等 broker 起来一分钟后跑第二次；别把这一轮的红灯当成异步链路坏了。
 
-**冒烟（81 条断言 / FULL 分进程 82 条，六条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+**已知噪音 ⑥（已防护）**：容器化 FULL 与本机进程 FULL **可以同时"在跑"**——宿主 JVM 占着
+8090/8081 时，`docker compose up` 发布同名端口**在 macOS 上不报错**，于是冒烟实际打到宿主机那套
+JVM，而 `docker ps` 看着一切正常：五形态那张表里"容器档"那一格就此作废（复跑时靠 `lsof` 对端口
+才发现）。现在 `deploy-full.sh` 见到 `run/*.pid` 里有活进程就拒绝启动，`start-all.sh` 那条
+`mkt-preview-standalone` 的检查也一并生效。**换档必拆上一档**这件事，别再靠记忆。
+
+**已知噪音 ⑦（跨库探测的坑）**：`information_schema` 的表名大小写两套引擎不一样——MySQL 存小写、
+H2（`MODE=MySQL`）把未加引号的标识符折成**大写**。所以 ④ 的库发现那条 SQL 两边都套 `LOWER()`
+（`WHERE LOWER(table_name) = LOWER(?)`），单测里第一版只写了一边，表现为"容器里查得到、单测里查不到"，
+而失败模式是**静默少一个库**（积压少报），不是报错。
+
+**冒烟（89 条断言 / FULL 分进程 90 条，七条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、超预算 41003、灰度命中、可参与位切换）+ **预算算术守卫**：
 被拒扣减不留痕、重复扣减在 `data` 里标 `REPLAYED`、同 bizKey 换活动仍真扣 `DEDUCTED`；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖；
@@ -583,7 +644,7 @@ Nacos 客户端有概率在 STARTING 阶段注册失败导致该 JVM 退出（`r
 业务侧的写动作跑完必须从 `mkt:audit:pending` 全部 drain 落表（`XLEN` 归 0 且本轮那条活动在表里查得到））。
 链路 4 的重预热按形态分岔判据（读 `/cache/types` 而不是猜环境变量）：
 LITE/dev 验"本进程同步刷成功"，FULL 分进程验"投给 owning 服务 → 轮询回执到 `DONE` →
-C 端余额等于新口径"。**多的那一条断言就是这个回执轮询，所以两档的总数不同（81 / 82）**，
+C 端余额等于新口径"。**多的那一条断言就是这个回执轮询，所以两档的总数不同（89 / 90）**，
 两边都是真断言，没有跳过。
 
 **链路 5 在线配置下发**：本档形态自证（`ownForm=LITE`）、写 GLOBAL 阈值 3/s **不重启**就吃 429、
@@ -601,6 +662,22 @@ operator 越权改阈值 40300、给另一档写 199999 **不污染**本档、�
 少了配对的那条，`40100` 也可能只是"端口不通"的另一种写法。直连地址按形态自适应：LITE/FULL 进程形态
 打宿主 `:8081`/`:8085`，FULL 容器形态不发布应用端口，就 `docker exec` 进容器打它自己的 8081。
 
+**链路 7 运维只读聚合（④）**：面板可读（200）且**自报这次读的是谁**（`mode` + 逐 target 的
+URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己按同一口径直连 MySQL 求和**逐库对拍**
+（断言"两处相等"而不是"等于 0"——断 0 会把"没查到"和"没积压"混成同一种绿）、通道差异按面板自己
+说的判据分岔（聚合档 `MKT_STREAM_*` 有值 / 分进程档显式 `applicable=false` 且不带 0）、
+恒等式闭环（见下）、以及链路 5 制造过的 429 必须带 `route` 维度从**网关那个独立进程**里读得回来
+（母版事实"网关永远独立进程"的正面证据）。④ 没有新增任何写入口，所以写入口矩阵一行都不用改。
+
+恒等式那三条是这段最有价值也最容易写假的，踩过的两个坑都留在这儿：
+**坑一，必须改 ④ 真在读的那 5 条**——判定是 `activity ORDER BY id LIMIT 5` 的抽样，链路 0 每轮新建的
+`ACT-SMOKE-*` id 最大、永远落在样本之外，第一版就是这样红的（面板没错，断言在验一个没人看的活动）；
+现在用只读 SQL 取样本首行。**坑二，动手前先把自己要碰的那条预热成一致**——换库布局时抽样里本来就
+带着上一套布局的缓存漂移（每服务一库档实测基线 budget=1），所以断言写成"与基线比涨跌"
+（`BASE → BASE+1 → ≤BASE`）而不是"等于 0"：既不被环境噪声左右，也不可能靠"面板恒 0"蒙过去。
+另外 FULL 档的修是**投给 owning 服务**的，回执要等一个消费轮询，脚本必须等 `status:DONE`
+而不是 `sleep 2`——不然红点会指向"③ 修不动"，而其实只是没等。
+
 **脚本两条不变式**（都是踩过才写下的）：① `poll` 的针必须与紧随其后的断言针一致——轮询超时照样把
 最后一次响应打出来，只查 `"couponCode"` 这个键名会让 `PROCESSING`（`"couponCode":null`）蒙过断言，
 于是红点落在下一行的"核销 40000 couponCode 必填"上，看着像核销坏了（FULL 进程形态首跑那 1 条红就是它）；
@@ -611,17 +688,17 @@ operator 越权改阈值 40300、给另一档写 199999 **不污染**本档、�
 
 **五套形态入口的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
 断言集在长（S2 加了 5 条预算/消息守卫，后台那批加了链路 4 的 13 条，⑤ 又加了链路 5 的 20 条，
-③ 加了 drain 落表 2 条 + 链路 6 的 7 条，FULL 分进程再多 1 条跨进程重预热回执），
+③ 加了 drain 落表 2 条 + 链路 6 的 7 条，④ 加了链路 7 的 8 条），
 所以标了跑时的断言数——**低于当前基数的格子只代表"当时那一版全绿"，不等于已在新断言下复跑过**。
 
-| 形态 | 最近一次 | 通道证据 |
-|---|---|---|
-| LITE 服役档（容器） | **81/81**（2026-09-24，含链路 5 在线配置与链路 6 收口） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 532.5MiB/768MiB |
-| dev 开发档（本机 2 JVM） | **81/81**（2026-09-24） | 同上；`ownForm=DEV`；`reset-demo-data.sh` 在这一档实测（复位后恒等式 `分桶余量+已售==总库存` 自洽） |
-| FULL · 本机进程形态 | **82/82**（2026-09-24，含链路 6；紧接 LITE 那轮之后**不做任何 SQL 清理**原地切换） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支；裸头直连 `:8081` 被拒而带 token 放行（这一档端口真的绑 `*`，是最需要这条的形态） |
-| FULL · 本机进程 · 每服务一库隔离档 | **82/82**（2026-09-24） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`（这一档实测：`marketing_seckill` 里 `sold=0` → 复位后分桶合计 5000 自洽）。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）|
-| FULL · 容器化 1 副本 | **82/82**（2026-09-24） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 `mkt-full-marketing-activity-1` 写回（消费组 `owning-exec` 实测 2 consumers、pending 0）；链路 6 的直连探测走 `docker exec` 进容器这条路 |
-| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 81 复跑） | 第三节的多副本三条证据 |
+| 形态 | 最近一次 | 通道证据 | ④ 读数证据 |
+|---|---|---|---|
+| LITE 服役档（容器） | **89/89**（2026-09-24，七条链路全集） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 517-599 MiB/768MiB（本轮跑完 551.6） | `mode=local+proxy`：`self` 走 local、`marketing-gateway` 走 proxy（网关在这一档仍是独立进程）；Stream 六条（两个业务 topic + 审计 + 三个 reheat type）全 `applicable=true`；恒等式基线 0 |
+| dev 开发档（本机 2 JVM） | **89/89**（2026-09-24） | 同上；`ownForm=DEV`；`reset-demo-data.sh` 在这一档实测（复位后恒等式 `分桶余量+已售==总库存` 自洽） | 同上（`mode=local+proxy`、判活里 `marketing-standalone=true`、四个业务进程名 `null`=本档不适用）；standalone 本机 RSS 175 MiB |
+| FULL · 本机进程形态 | **90/90**（2026-09-24；从每服务一库档换回来时按脚本注释跑了一次 `reset-demo-data.sh`，未做任何 SQL 清理。"A→B 原地切换零清理"的那条证据仍是第一轮那趟） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支；裸头直连 `:8081` 被拒而带 token 放行（这一档端口真的绑 `*`，是最需要这条的形态） | `mode=proxy` 六目标全 OK（每份 150-320 样本）；两个业务 topic 显式 `applicable=false` + RocketMQ 说明、`mkt:audit:pending` 仍 `true`；恒等式的"修"走 ack 轮询到 `DONE` 才要求面板回落 |
+| FULL · 本机进程 · 每服务一库隔离档 | **90/90**（2026-09-24） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`（这一档实测：`marketing_seckill` 里 `sold=0` → 复位后分桶合计 5000 自洽）。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）| 跨库发现唯一被真正用到的一档：`backlog.schemas` 一次列出 5 个库并逐库独立（缺表的库不进列表、某库查询失败只让那一行 `-1`）。**④ 在这里抓到了真漂移**：面板开局报 budget=1/coupon=1/seckill=1，那是上一套布局留在 Redis 里的缓存对不上本布局的 DB——`information_schema` 那段 SQL 存在的意义就是让这种偏差看得见 |
+| FULL · 容器化 1 副本 | **90/90**（2026-09-24） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 `mkt-full-marketing-activity-1` 写回（消费组 `owning-exec` 实测 2 consumers、pending 0）；链路 6 的直连探测走 `docker exec` 进容器这条路 | `mode=proxy` 且 target 主机名是 **compose service 名**（`http://marketing-activity:8081/...` 六条全 OK）——这一档的清单由 `OPS_T_*` 覆写，admin 的 yml 默认值是进程拓扑的 `127.0.0.1`，在容器里指向自己 |
+| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 89 复跑） | 第三节的多副本三条证据 | 未跑（面板没验过多副本；两副本时 `liveness` 与 `jobs` 的持锁者分布是这一格唯一的新信息） |
 
 ## 七、扩展点（占位 → 生产的升级路径）
 
