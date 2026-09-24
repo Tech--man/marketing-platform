@@ -4,6 +4,7 @@ import AppLayout from '@/AppLayout.vue'
 import LoginView from '@/views/LoginView.vue'
 import OpsView from '@/views/OpsView.vue'
 import ConfigView from '@/views/ConfigView.vue'
+import ActivitiesView from '@/views/ActivitiesView.vue'
 
 /**
  * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T6 配置、T7 活动…）。
@@ -21,6 +22,7 @@ const routes = [
     children: [
       { path: '', name: 'ops', component: OpsView },
       { path: 'config', name: 'config', component: ConfigView },
+      { path: 'activities', name: 'activities', component: ActivitiesView },
     ],
   },
 ]

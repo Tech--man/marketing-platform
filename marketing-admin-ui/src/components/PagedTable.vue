@@ -85,7 +85,7 @@ load()
           <tr v-if="!rows.length">
             <td :colspan="columns.length" class="empty">没有符合条件的行</td>
           </tr>
-          <tr v-for="(r, i) in rows" :key="i" data-testid="row">
+          <tr v-for="(r, i) in rows" :key="i" data-row>
             <td v-for="c in columns" :key="c.prop" :data-prop="c.prop">
               <slot v-if="c.slot" :name="c.slot" :row="r" :value="r[c.prop]" />
               <template v-else>{{ cell(r, c) }}</template>
