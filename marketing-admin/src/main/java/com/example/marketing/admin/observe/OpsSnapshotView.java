@@ -12,6 +12,7 @@ import java.util.Map;
  * 整体降级有 {@code notes}。一张缺了某个进程但看着完全正常的大盘，比一行报错更坏。</p>
  */
 public record OpsSnapshotView(
+        /** 本次快照用到的源：{@code local} / {@code proxy} / {@code local+proxy} */
         String mode,
         String ownForm,
         Instant takenAt,
@@ -24,11 +25,12 @@ public record OpsSnapshotView(
         List<String> notes) {
 
     /**
-     * 一个进程的抓取结果。{@code status} 取 {@code OK | ERROR | NOT_APPLICABLE}；
-     * 抓取失败时样本数为 0 <b>并且</b> error 非空，两件事一起才不构成误导。
+     * 一个进程的抓取结果。{@code status} 取 {@code OK | ERROR}；抓取失败时样本数为 0
+     * <b>并且</b> error 非空，两件事一起才不构成误导。{@code source} 是这一条实际走的路
+     * （{@code local} 读本 JVM / {@code proxy} 走 HTTP）——同一次快照里两者可以并存。
      */
-    public record TargetView(String name, String url, String status, String error, int sampleCount,
-                             int malformedLines) {
+    public record TargetView(String name, String url, String source, String status, String error,
+                             int sampleCount, int malformedLines) {
     }
 
     /** 未排空条数合计；-1 = 有任何一个来源读不到，此时不能报一个看似健康的总数 */

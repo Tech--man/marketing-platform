@@ -33,6 +33,10 @@ services:
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
       # 预览形态消息通道：Redis Stream 替代 RocketMQ
       MQ_TYPE: redis-stream
+      # ④ 的运维面要抓网关的指标：容器里 127.0.0.1 是本站点自己，必须按网络名走。
+      # 本编排里服务名是 gateway / standalone，网络别名是 container_name —— 可解析的名字
+      # 是 mkt-preview-gateway（实测 marketing-gateway 不在 mkt-data 的别名里）。
+      OPS_GATEWAY_HOST: mkt-preview-gateway
       # 形态标识：在线配置按它取 form=LITE 的覆盖（没配则只认 GLOBAL 的行）。
       # 与下面 gateway 的 RL_* 是同一件事的两条路：env 是出厂值，DB 是在线覆盖。
       DEPLOY_FORM: LITE

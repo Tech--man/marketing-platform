@@ -46,7 +46,6 @@ class OpsSnapshotServiceTest {
         when(redis.opsForValue()).thenReturn(values);
         when(redis.hasKey(anyString())).thenReturn(true);
         when(redis.getExpire(anyString(), any())).thenReturn(42L);
-        properties.setMetricsMode(OpsProperties.MODE_PROXY);
         properties.setTargets(Map.of(
                 "marketing-activity", "marketing-activity:8081",
                 "marketing-coupon", "marketing-coupon:8082"));
@@ -57,8 +56,13 @@ class OpsSnapshotServiceTest {
                 new StreamDepth.Depth("mkt:audit:pending", "admin-drain", 0L, 0L, true, "", null)));
         when(auditStore.stats()).thenReturn(new OpsSnapshotView.AuditTableView(
                 1234L, "2026-09-20T00:00:00", List.of(Map.of("action", "cache.reheat", "n", 40L)), null));
-        service = new OpsSnapshotService(metrics, backlogStore, streamDepth, auditStore, redis,
+        service = new OpsSnapshotService(sources(), backlogStore, streamDepth, auditStore, redis,
                 properties, ConfigValues.empty(), "FULL", Clock.fixed(WHEN, ZoneOffset.UTC));
+    }
+
+    /** 两个源都用同一个 mock：本测试关心的是"按 target 分派之后视图长什么样"，不是分派本身 */
+    private TargetSources sources() {
+        return new TargetSources(metrics, metrics, properties.getLocalTargets());
     }
 
     @Test
@@ -169,7 +173,8 @@ class OpsSnapshotServiceTest {
     @DisplayName("聚合形态下模块名不参与存活判定：不适用 ≠ 没在跑（两档各验一次）")
     void aggregatedFormFlipsWhichNamesApply() {
         when(metrics.scrape(anyString())).thenReturn(parse());
-        OpsSnapshotService lite = new OpsSnapshotService(metrics, backlogStore, streamDepth, auditStore,
+        properties.setLocalTargets(List.of("marketing-activity"));
+        OpsSnapshotService lite = new OpsSnapshotService(sources(), backlogStore, streamDepth, auditStore,
                 redis, properties, ConfigValues.empty(), "LITE", Clock.fixed(WHEN, ZoneOffset.UTC));
 
         Map<String, Boolean> inLite = lite.snapshot().liveness().processes();

@@ -87,7 +87,7 @@ public class OpsSnapshotService {
             "marketing-activity", "marketing-coupon", "marketing-discount", "marketing-seckill",
             "marketing-admin");
 
-    private final MetricSource metrics;
+    private final TargetSources sources;
     private final BacklogStore backlogStore;
     private final StreamDepth streamDepth;
     private final AuditTableStore auditStore;
@@ -97,13 +97,13 @@ public class OpsSnapshotService {
     private final String deployForm;
     private final Clock clock;
 
-    public OpsSnapshotService(MetricSource metrics, BacklogStore backlogStore, StreamDepth streamDepth,
+    public OpsSnapshotService(TargetSources sources, BacklogStore backlogStore, StreamDepth streamDepth,
                              AuditTableStore auditStore, StringRedisTemplate redis, OpsProperties properties,
                              ConfigValues values,
                              @org.springframework.beans.factory.annotation.Value(
                                      "${marketing.config.form:${DEPLOY_FORM:}}") String deployForm,
                              Clock clock) {
-        this.metrics = metrics;
+        this.sources = sources;
         this.backlogStore = backlogStore;
         this.streamDepth = streamDepth;
         this.auditStore = auditStore;
@@ -121,7 +121,7 @@ public class OpsSnapshotService {
             scrapeOne(ref, targets, scraped);
         }
         OpsSnapshotView.BacklogView backlog = backlog();
-        return new OpsSnapshotView(metrics.mode(), ConfigForm.resolve(deployForm), Instant.now(clock),
+        return new OpsSnapshotView(modeOf(targets), ConfigForm.resolve(deployForm), Instant.now(clock),
                 List.copyOf(targets), backlog, consistency(scraped), whitelist(scraped),
                 liveness(), auditStore.stats(), notes(backlog, targets));
     }
@@ -136,13 +136,15 @@ public class OpsSnapshotService {
     /** 单个 target 的抓取。异常只影响这一条 */
     private void scrapeOne(TargetRef ref, List<OpsSnapshotView.TargetView> targets, List<MetricEntry> scraped) {
         try {
-            PrometheusTextParser.ParseResult result = metrics.scrape(ref.name());
-            targets.add(new OpsSnapshotView.TargetView(ref.name(), ref.url(), "OK", null,
+            String source = sources.sourceOf(ref.name());
+            PrometheusTextParser.ParseResult result = sources.source(ref.name()).scrape(ref.name());
+            targets.add(new OpsSnapshotView.TargetView(ref.name(), ref.url(), source, "OK", null,
                     result.samples().size(), result.malformedLines()));
             result.samples().forEach(sample -> scraped.add(new MetricEntry(ref.name(), sample)));
         } catch (ScrapeException e) {
             log.warn("[ops] target {} 抓取失败: {}", ref.name(), e.getMessage());
-            targets.add(new OpsSnapshotView.TargetView(ref.name(), ref.url(), "ERROR", e.getMessage(), 0, 0));
+            targets.add(new OpsSnapshotView.TargetView(ref.name(), ref.url(), sources.sourceOf(ref.name()),
+                    "ERROR", e.getMessage(), 0, 0));
         }
     }
 
@@ -242,11 +244,17 @@ public class OpsSnapshotService {
         return "LITE".equals(form) || "DEV".equals(form);
     }
 
+    /** 这次到底走了几条路：一张盘里 local 与 proxy 并存是 LITE 的正常形态，不是配置错了 */
+    static String modeOf(List<OpsSnapshotView.TargetView> targets) {
+        List<String> used = targets.stream().map(OpsSnapshotView.TargetView::source).distinct().sorted().toList();
+        return String.join("+", used);
+    }
+
     private List<String> notes(OpsSnapshotView.BacklogView backlog,
                                List<OpsSnapshotView.TargetView> targets) {
         List<String> notes = new ArrayList<>();
-        notes.add("指标源模式 " + metrics.mode() + "：LITE/dev 读本 JVM，FULL 抓各进程。"
-                + "被点的 target 抓不到时那一条是 ERROR，不是 0。");
+        notes.add("指标源 " + modeOf(targets) + "：本 JVM 里的模块走 local，其余进程走 HTTP 抓。"
+                + "抓不到的那一条是 ERROR，不是 0。");
         notes.add("积压与一致性都是抽样/瞬时读数；-1 一律表示\"判定不了\"，不等于 0。");
         notes.add(isAggregatedForm()
                 ? "本档是聚合形态：四个业务模块与后台都在 standalone 里，"

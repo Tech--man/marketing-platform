@@ -41,28 +41,27 @@ class OpsAssemblyTest {
     }
 
     @Test
-    @DisplayName("缺省是 proxy，且只有一个 MetricSource")
-    void defaultsToProxy() {
+    @DisplayName("LITE 形态：self 走本地，网关仍走 HTTP（一条盘里两种源并存）")
+    void localAndProxyCoexist() {
         runner().withPropertyValues(
-                "marketing.admin.ops.targets.marketing-activity=marketing-activity:8081",
-                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8090")
+                "marketing.admin.ops.targets.self=127.0.0.1:8085",
+                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8090",
+                "marketing.admin.ops.local-targets[0]=self")
                 .run(ctx -> {
-                    MetricSource source = ctx.getBean(MetricSource.class);
-                    assertEquals("proxy", source.mode());
-                    assertTrue(source.serves("marketing-activity"));
-                    assertEquals(1, ctx.getBeanNamesForType(MetricSource.class).length);
+                    TargetSources sources = ctx.getBean(TargetSources.class);
+                    assertEquals("local", sources.sourceOf("self"));
+                    assertEquals("proxy", sources.sourceOf("marketing-gateway"),
+                            "网关在每种形态下都是独立进程，LITE 也必须抓它");
                 });
     }
 
     @Test
-    @DisplayName("mode=local 时 proxy 那份不存在（不是'装了但不用'）")
-    void localModeHasNoProxy() {
-        runner().withPropertyValues("marketing.admin.ops.metrics-mode=local")
-                .run(ctx -> {
-                    assertEquals("local", ctx.getBean(MetricSource.class).mode());
-                    assertEquals(1, ctx.getBeanNamesForType(MetricSource.class).length);
-                    assertEquals(0, ctx.getBeanNamesForType(ProxyMeterSource.class).length);
-                });
+    @DisplayName("FULL 形态：local-targets 留空 = 全部走 HTTP")
+    void fullModeIsAllProxy() {
+        runner().withPropertyValues(
+                "marketing.admin.ops.targets.marketing-activity=marketing-activity:8081")
+                .run(ctx -> assertEquals("proxy",
+                        ctx.getBean(TargetSources.class).sourceOf("marketing-activity")));
     }
 
     @Test
@@ -86,21 +85,25 @@ class OpsAssemblyTest {
     }
 
     @Test
-    @DisplayName("mode 拼错必须炸，不能静默退回 proxy")
-    void unknownModeFailsStartup() {
-        runner().withPropertyValues("marketing.admin.ops.metrics-mode=localol")
+    @DisplayName("local-targets 里的名字不在清单内 → 启动失败（否则它静默走 proxy 并永远抓不到）")
+    void unknownLocalTargetFailsStartup() {
+        runner().withPropertyValues(
+                "marketing.admin.ops.targets.self=127.0.0.1:8085",
+                "marketing.admin.ops.local-targets[0]=marketing-activity")
                 .run(ctx -> {
-                    assertNotNull(ctx.getStartupFailure(),
-                            "拼错的 mode 若静默按 proxy 处理，LITE 就会长出一堆假 error");
-                    assertTrue(rootMessage(ctx.getStartupFailure()).contains("localol"),
+                    assertNotNull(ctx.getStartupFailure(), "名字漂了必须炸");
+                    assertTrue(rootMessage(ctx.getStartupFailure()).contains("marketing-activity"),
                             rootMessage(ctx.getStartupFailure()));
                 });
     }
 
     @Test
-    @DisplayName("local 模式没有清单也能起（LITE 只有 self）")
-    void localModeNeedsNoTargets() {
-        runner().withPropertyValues("marketing.admin.ops.metrics-mode=local")
+    @DisplayName("清单齐备就能起（LITE 的最小配置：self + 网关）")
+    void minimalLiteConfigStarts() {
+        runner().withPropertyValues(
+                "marketing.admin.ops.targets.self=127.0.0.1:8085",
+                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8090",
+                "marketing.admin.ops.local-targets[0]=self")
                 .run(ctx -> assertNull(ctx.getStartupFailure()));
     }
 

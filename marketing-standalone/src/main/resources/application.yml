@@ -56,14 +56,19 @@ marketing:
   admin:
     jwt-secret: ${ADMIN_JWT_SECRET:}
     access-ttl-seconds: ${ADMIN_TOKEN_TTL:900}
-    # ④：本档四个业务模块与后台同在这一个 JVM 里，指标就在手边——必须是 local。
-    # 留 proxy 的后果不是"读不到"，而是去抓 8081-8084 那几个**根本不存在**的进程，
-    # 于是大盘上永远挂着四条 error，而"某个 target 抓不到"正是 ④ 要人当回事的信号。
-    # 清单只给 self（本进程 8085）：这一档没有兄弟进程可抓。
+    # ④：本档四个业务模块与后台都在这一个 JVM 里，它们的指标不必绕 HTTP；
+    # 但网关仍是独立进程（母版事实 #2），所以清单里必须有它，且它走 proxy。
+    # 清单不给全会怎样：LITE 的运维面读不到限流拒绝数，而单机服役档最该看的就是它。
     ops:
-      metrics-mode: local
+      # 本 JVM 里有的：self（四个业务模块 + 后台的指标全在这）。
+      # 网关不在这里——它是独立进程，只能 HTTP 抓，所以留在 targets 里走 proxy。
+      local-targets: [self]
       targets:
         self: 127.0.0.1:8085
+        # 网关在 LITE 也是独立进程，只能抓它。默认 127.0.0.1 是 dev（本机两 JVM）的形状；
+        # 预览容器形态由 compose 用 OPS_GATEWAY_HOST 覆成服务名——同机不同容器时
+        # 127.0.0.1 指的是自己，那条读数会变成一条 ERROR 而不是假绿。
+        marketing-gateway: ${OPS_GATEWAY_HOST:127.0.0.1}:8090
 
 management:
   endpoints:

@@ -55,7 +55,6 @@ marketing:
     # 而 LITE/dev 根本没有 nacos。默认值对应本机进程形态（都在 127.0.0.1 上）；
     # 容器形态由 compose 覆写 OPS_T_*（那边主机名是 compose service 名）。
     ops:
-      metrics-mode: ${ADMIN_METRICS_MODE:proxy}
       consistency-sample-size: ${OPS_CONSISTENCY_SAMPLE:20}
       targets:
         marketing-activity: ${OPS_T_ACTIVITY:127.0.0.1:8081}
