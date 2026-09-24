@@ -61,6 +61,43 @@ LITE 的省内存**一律不靠牺牲可靠性换**，四条不可退让：淘�
 容器要有 restart 与 json-file 日志轮转（默认 json-file 不限量，长期跑撑爆磁盘）；
 GC 用 G1 而非 SerialGC（SerialGC 的 Full GC 停全部线程，表现为结算秒级尖峰）。
 
+### 形态 × 入口 × profile：三个词别混
+
+上面那张表里有三套名字在同时被用，它们是**多对一**的，不是正交的两轴——
+"LITE 能不能跑 prod"这类问题问出来，通常是因为把这三层叠成了一层：
+
+| 层 | 它是什么 | 取值 |
+|---|---|---|
+| **`DEPLOY_FORM`** | **形态的唯一定义处**。⑤ 用它决定在线配置读哪一行（`admin_config.form`），④ 用它决定"standalone 是不是不适用" | `DEV` / `LITE` / `FULL`（配置表里另有一档 `GLOBAL`=全形态共用） |
+| **入口脚本 / compose 文件** | "从哪儿起"。历史上叫 dev / preview / prod 三套环境档位，**它们不是 Spring profile** | `start-dev.sh`、`deploy-preview.sh`、`start-all.sh`、`deploy-full.sh`；`docker-compose.{data,preview,prod,full-app}.yml` |
+| **Spring profile** | 代码里真实的开关，只管一件事：要不要注册发现与配置中心 | **只有 `nacos`**（其余走默认文档，即 local 静态路由）。没有 `dev`/`preview`/`prod` 这三个 profile |
+
+映射表（每条入口脚本自己写死一个 `DEPLOY_FORM`，没有第二处会改它）：
+
+| 入口 | `DEPLOY_FORM` | 应用侧装配 | 消息通道 | 中间件 compose |
+|---|---|---|---|---|
+| `start-dev.sh` | `DEV` | 本机 2 JVM（standalone 8085 + gateway 8090），四业务模块与后台**聚进一个进程** | Redis Stream | data |
+| `deploy-preview.sh` | `LITE` | 全栈容器，**聚合方式与 dev 相同**（compose 里 standalone 与 gateway 各写一份） | Redis Stream | preview |
+| `start-all.sh` | `FULL` | 本机 6 个独立 JVM（默认无 profile=local 静态路由，`PROFILES=nacos` 才走注册发现） | RocketMQ | prod |
+| `deploy-full.sh` | `FULL` | 6 个应用容器 + `lb://`（`full-app.yml` 里同时下发 `SPRING_PROFILES_ACTIVE=nacos`） | RocketMQ | prod + full-app |
+| `MYSQL_DB_PER_SERVICE=1` | 仍是 `FULL` | 同上，只把数据层拆成 5 库 | RocketMQ | 同上 |
+
+所以 `LITE × prod` 这种组合在本仓**不成立**，理由不是硬件不够：`prod` 那套中间件给的是
+RocketMQ + Nacos，而"LITE"这个词的定义里就含"四模块聚进一个进程 + 消息走 Redis Stream"——
+换过去它就不是 LITE 了。硬件只决定"这一档跑不跑得动"（第三节末的容量口径与
+`load-probe.sh` 的读数），**不决定它是哪一档**。
+
+同一层还有个容易读错的点：**dev 与 LITE 概念上不互斥**（同一轴的三个取值而已），
+互斥的只是这台机器上抢宿主 `8090` 的那两组进程。OrbStack 在 macOS 上重复发布同一端口**不报错**，
+于是"两套都在跑"看着成立、实际打到同一套（见第六节 已知噪音 ⑥，`deploy-full.sh` 有 pid 闸拒启）。
+
+**一处已知的静默风险（还没补闸）**：`DEPLOY_FORM` 只是个字符串，**没有任何启动期校验**拿它和真实装配对拍。
+取值不认识时 `ConfigSnapshotPoller` 只 WARN 一条"按 GLOBAL 解析"，未设置时在线配置只对
+`form=GLOBAL` 的行生效；而标签写错的表现是安静的——⑤ 会去读另一档的真值，④ 的 `liveness`
+会把该在的进程标成"不适用"或"没在跑"（`OpsSnapshotService.isAggregatedForm()` 的判据就是这个标签）。
+修法很直白：启动时断言"聚合形态 ⇒ 本 JVM 里能看到四业务模块且 `marketing.mq.type=stream`、
+分进程形态 ⇒ 只装一个模块且走 RocketMQ"，不匹配就启动失败点名，而不是留一本人能读错的面板。
+
 ### 快速开始
 
 ```bash
