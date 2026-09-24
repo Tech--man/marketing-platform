@@ -57,7 +57,7 @@
 |---|---|---|---|---|
 | `/login` | 登录 | `POST /api/admin/auth/login` | — | 40100（账号不存在≡口令错）、42900（LoginGuard 每 IP 10 次/分钟且**含成功尝试**，倒计时按 `Retry-After` 给） |
 | `/ops` | 运维大盘（④） | `GET /api/admin/ops` | 任意后台角色 | 只读；`-1`/`applicable=false`/`ERROR` 三种"看不见"要**画成不同形状**，不许显示成 0 |
-| `/config` | 在线配置（⑤） | `GET/PUT/DELETE /api/admin/config`、`POST /config/rebroadcast` | 读任意 / 写仅 admin | 40000（未声明键、越界值）、404（删不中）、41009（已落库未广播 → 界面上就该有"重新广播"这个按钮） |
+| `/config` | 在线配置（⑤） | `GET /api/admin/config` → `ConfigOverviewView{ownForm, appliedVersion, entries[{key,service,type,min,max,defaultValue,description,effectiveValue,source,rows[{form,value,version,updatedBy,remark}]}], orphans[], unreportedServices[], degradedKeys[]}`；`PUT /api/admin/config`（body `cfgKey/form/value/remark`）、`DELETE /api/admin/config?cfgKey=&form=`、`POST /config/rebroadcast` | 读任意 / 写仅 admin | **载荷形状以代码为准**（写这份 spec 时我按"entries 按 form 分组"描述，实际是**按 key 一条**、形态维度在 `rows` 里）；40000（未声明键、越界值）、404（删不中）、41009（已落库未广播 → 界面上就该有"重新广播"这个动作） |
 | `/activities` | 活动 | `GET/POST /api/admin/activities`、`POST .../transition?event=`、`PUT .../budget`、`PUT .../gray` | 写仅 admin | 41008（乐观锁撞号：别人先存过了，界面给"重新加载并对比"）、41000/41001（状态机拒绝） |
 | `/coupons` | 券模板 | `GET/POST /api/admin/coupon/templates`、`PUT /{no}/stock`、`PUT /{no}/status` | 写仅 admin | 40000（改小低于已发数） |
 | `/rules` | 优惠规则 | `GET/POST /api/admin/discount/rules` | 写仅 admin | 启停与新建同一条 upsert，`status` 在 body 里 |

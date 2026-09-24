@@ -1695,3 +1695,14 @@ expect "界面是同源静态资源，不给未授权的数据通路" '"code":40
    spec 已回改。副作用是好的：界面阈值从此也能在线调，与其他五条路同一套裁决。
    注：修在 e51ddfd 之后的一个单独提交里（fix-forward），因为那一条提交时套件是 1 红——
    不 amend，让"红过一次"留在历史里。
+6. **T6 的配置载荷按 spec §6 写会写错**：spec 原文把 `entries` 描述成"按 form 分组"，
+   实际 `ConfigOverviewView.entries` 是**按 key 一条**、形态维度在每条的
+   `rows[{form,value,version,updatedBy,remark}]` 里；其余字段也叫
+   `orphans`（不是 orphan）、`unreportedServices`（不是 unreported）、
+   `degradedKeys`（不是 ignored），另有 `appliedVersion`。spec §6 已按代码回改。
+7. **T6-T10 的"浏览器实测"合并成 T12 的一趟完整旅程**（逐条偏离计划，不是省步骤）：
+   每页各跑一次"重建 dist + 重建镜像 + 登录 + 点开"约 4 分钟，而 T12 本来就要在
+   LITE 与 FULL 上各走一遍全链路。合并后每页仍有两层证据：
+   vitest（用真后端 DTO 形状的 mock）+ T12 旅程里的真实点击。
+   触发这条决定的实测很直白：T6 那次浏览器打开 `/ui/config` 是空白页——
+   没有 JS 报错，只是容器还在跑上一任务的 dist。

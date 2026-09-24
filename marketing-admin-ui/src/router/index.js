@@ -3,6 +3,7 @@ import { useSession } from '@/stores/session'
 import AppLayout from '@/AppLayout.vue'
 import LoginView from '@/views/LoginView.vue'
 import OpsView from '@/views/OpsView.vue'
+import ConfigView from '@/views/ConfigView.vue'
 
 /**
  * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T6 配置、T7 活动…）。
@@ -17,7 +18,10 @@ const routes = [
   {
     path: '/',
     component: AppLayout,
-    children: [{ path: '', name: 'ops', component: OpsView }],
+    children: [
+      { path: '', name: 'ops', component: OpsView },
+      { path: 'config', name: 'config', component: ConfigView },
+    ],
   },
 ]
 
