@@ -7,3 +7,9 @@ run/
 *.iml
 .vscode/
 .DS_Store
+
+# ⑥ 的前端依赖与中间产物。注意 static/ui/** 是**故意入仓**的构建产物
+# （clone 下来 mvn package 就能跑出带界面的 jar），所以这里只忽略 node_modules
+# 与 vite 的默认 dist，绝不忽略 static/ui。
+marketing-admin-ui/node_modules/
+marketing-admin-ui/dist/
