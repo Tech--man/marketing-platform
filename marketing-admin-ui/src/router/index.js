@@ -11,6 +11,7 @@ import SeckillView from '@/views/SeckillView.vue'
 import CacheView from '@/views/CacheView.vue'
 import UsersView from '@/views/UsersView.vue'
 import SessionsView from '@/views/SessionsView.vue'
+import AuditsView from '@/views/AuditsView.vue'
 
 /**
  * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T6 配置、T7 活动…）。
@@ -40,6 +41,7 @@ const routes = [
       },
       { path: 'users', name: 'users', component: UsersView },
       { path: 'sessions', name: 'sessions', component: SessionsView },
+      { path: 'audits', name: 'audits', component: AuditsView },
     ],
   },
 ]
