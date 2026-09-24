@@ -56,5 +56,26 @@ PY
 
 FILES=$(find "$OUT" -type f | wc -l | tr -d ' ')
 KB=$(du -sk "$OUT" | cut -f1)
+
+# 产物必须比源码新。这条堵的是"构建其实失败了但报告照样打印"：
+# 一旦把本脚本接进管道（`./build-ui.sh | tail`），set -e 的退出码被管道尾端吃掉，
+# vite 报完 SFC 语法错、这里仍会自信地报出"产物 N 个文件"——实测这样骗过一次。
+python3 - "$UI" "$OUT" <<'PY'
+import pathlib
+import sys
+
+ui, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+sources = [p for p in (ui / 'src').rglob('*') if p.is_file()]
+sources += [p for p in (ui / 'index.html', ui / 'vite.config.js') if p.is_file()]
+artifacts = [p for p in out.rglob('*') if p.is_file()]
+if not artifacts:
+    sys.exit('!! 产物目录是空的：vite build 没落地')
+newest_src = max(p.stat().st_mtime for p in sources)
+newest_art = max(p.stat().st_mtime for p in artifacts)
+if newest_src > newest_art:
+    stale = max(sources, key=lambda p: p.stat().st_mtime)
+    sys.exit(f'!! 源码比产物新（{stale}）：上面的 vite 步骤失败过，这份体积报告是旧的')
+PY
+
 echo "==> 产物：$FILES 个文件，${KB} KiB（未压缩）→ $OUT"
 grep -q "build-ui" "$OUT/index.html" || { echo "!! 指纹没进去：检查上面的 python 步骤" >&2; exit 1; }

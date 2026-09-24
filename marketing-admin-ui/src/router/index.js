@@ -1,21 +1,23 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useSession } from '@/stores/session'
 import AppLayout from '@/AppLayout.vue'
-import HomeView from '@/views/HomeView.vue'
 import LoginView from '@/views/LoginView.vue'
+import OpsView from '@/views/OpsView.vue'
 
 /**
- * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T5 大盘、T6 配置…）。
+ * 路由表。⑥ 的页面清单在 spec §6，这里一个任务加一条子路由（T6 配置、T7 活动…）。
  *
  * <p>基座用 history，所以 {@code /ui/audits} 直接刷新也要能开——回退由 admin 侧的
  * {@code UiWebMvcConfig} 负责，网关只按 {@code /ui/**} 转发，不懂前端路由。</p>
+ *
+ * <p>落地页是运维大盘：它是只读的，误进来不会改到任何东西。</p>
  */
 const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
   {
     path: '/',
     component: AppLayout,
-    children: [{ path: '', name: 'home', component: HomeView }],
+    children: [{ path: '', name: 'ops', component: OpsView }],
   },
 ]
 
@@ -38,7 +40,7 @@ router.beforeEach(async (to) => {
       return { name: 'login', query: { next: to.fullPath } }
     }
   }
-  if (to.meta.roles && !to.meta.roles.includes(s.role)) return { name: 'home' }
+  if (to.meta.roles && !to.meta.roles.includes(s.role)) return { name: 'ops' }
   return true
 })
 
