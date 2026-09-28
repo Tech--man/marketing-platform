@@ -113,7 +113,11 @@
   --control-h: 44px;
   --nav-h: 56px; /* 移动端底部栏 */
   --header-h: 52px;
-  --sidebar-w: 244px; /* 桌面侧栏 */
+  --topbar-h: 52px; /* 桌面顶部导航条（移动端不渲染） */
+  /* 粘性元素要躲开的顶部遮挡高度。默认只有页面工具条；桌面再叠一条顶部导航。
+     收成一个 token 是为了让 sticky 偏移只有一处真相 —— 之前 76px 这类数字是手调出来的，
+     顶部条一改高就悄悄错位。 */
+  --chrome-h: var(--header-h);
   --measure: 44rem;
   --shell-max: 1180px; /* 桌面内容容器 */
   --shell-wide: 1400px;

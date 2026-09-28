@@ -5,13 +5,19 @@
 /* ============================================================
  * 布局层：桌面/移动两套骨架。
  *
- * 这一层是"PC 版不是放宽的移动版"的落点：
- *  - ≥1024px 走 左侧固定侧栏 + 右侧内容列 + 顶部毛玻璃工具条 的桌面骨架
- *    （Apple Music / App Store 在 macOS 上的形状），内容用满宽度、多列栅格、
- *    主从分栏；
- *  - <1024px 才退回底部 Tab 的移动骨架。
+ * 这一层是"PC 版不是放宽的移动版"的落点，但**桌面原生 ≠ 加一条左侧栏**：
+ * 左侧栏是后台/工具的 IA（本仓库 marketing-admin-ui 的 AppLayout 就是那个形状），
+ * 消费者界面套上它就变成了"给商店装了个控制台壳子"。
+ * 所以桌面的形状是：顶部横向导航（品牌 + 入口 + 账号）+ 全宽内容 + 多列栅格 +
+ * 主从分栏（详情/购物车/结算 = 内容列 + 粘性摘要列）—— 和 Apple.com / 京东 / 淘宝一致。
+ *  <1024px 才退回底部 Tab 的移动骨架。
  * 两套 IA 都渲染在同一份 DOM 里，靠媒体查询切换显示，避免两套路由。
  * ============================================================ */
+
+/* 桌面顶部多一条导航，粘性偏移的真相就换成两条的高度之和 */
+@media (min-width: 1024px) {
+  :root { --chrome-h: calc(var(--topbar-h) + var(--header-h)); }
+}
 
 .app-shell {
   min-height: 100vh;
@@ -20,20 +26,9 @@
   flex-direction: column;
 }
 
-/* 桌面：侧栏 + 内容列 */
-@media (min-width: 1024px) {
-  .app-shell {
-    flex-direction: row;
-    align-items: stretch;
-  }
-  .app-sidebar { display: flex; }
-  .app-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-}
-
-.app-sidebar { display: none; }
 .app-body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 
-/* 顶部工具条：移动/桌面都用，毛玻璃 */
+/* 顶部工具条：移动/桌面都用，毛玻璃。桌面贴在顶部导航下面，所以 sticky 偏移不是 0 */
 .app-toolbar {
   position: sticky;
   top: 0;
@@ -55,14 +50,13 @@
   font-weight: 600;
   letter-spacing: var(--tracking-head);
 }
-.app-toolbar__sub { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); font-weight: 400; }
 .app-toolbar__actions { display: flex; align-items: center; gap: var(--space-2); }
 
 @media (min-width: 1024px) {
   .app-toolbar {
-    min-height: 60px;
+    top: var(--topbar-h);
+    min-height: var(--header-h);
     padding: var(--space-3) var(--space-7);
-    background: var(--material-bg);
   }
   .app-toolbar__title { font-size: var(--fs-lg); }
 }
@@ -132,7 +126,7 @@
     align-items: start;
   }
   .split--wide { grid-template-columns: minmax(0, 1fr) 420px; }
-  .split__aside { position: sticky; top: calc(var(--header-h) + var(--space-5)); }
+  .split__aside { position: sticky; top: calc(var(--chrome-h) + var(--space-5)); }
 }
 
 /* 票据接缝：把上下两张卡接成一张券，中间是可撕的虚线 + 两侧打孔缺口。

@@ -218,7 +218,7 @@ RouterLink.me__row:hover { background: var(--c-surface-2); text-decoration: none
 @media (min-width: 1024px) {
   .me { max-width: 1000px; }
   .me__cols { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-7); align-items: start; }
-  .me__side { display: flex; flex-direction: column; gap: var(--space-4); position: sticky; top: calc(var(--header-h) + var(--space-5)); }
+  .me__side { display: flex; flex-direction: column; gap: var(--space-4); position: sticky; top: calc(var(--chrome-h) + var(--space-5)); }
 }
 @media (max-width: 1023px) {
   .me__side { display: flex; flex-direction: column; gap: var(--space-4); margin-top: var(--space-6); }

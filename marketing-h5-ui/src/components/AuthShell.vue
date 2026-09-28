@@ -124,7 +124,7 @@ defineProps({
   .auth__panel {
     padding: var(--space-6);
     position: sticky;
-    top: calc(var(--header-h) + var(--space-5));
+    top: calc(var(--chrome-h) + var(--space-5));
   }
   .auth__title { font-size: var(--fs-xl); margin-bottom: var(--space-6); }
 }

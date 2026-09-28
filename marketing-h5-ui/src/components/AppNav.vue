@@ -11,23 +11,17 @@ const route = useRoute();
 const session = useSession();
 const theme = ref(getTheme());
 
-const groups = [
-  {
-    label: "逛一逛",
-    items: [
-      { key: "home", to: "/home", label: "首页", icon: "house" },
-      { key: "coupons", to: "/coupons", label: "领券中心", icon: "ticket" },
-      { key: "seckill", to: "/seckill", label: "限时秒杀", icon: "bolt" },
-    ],
-  },
-  {
-    label: "我的",
-    items: [
-      { key: "cart", to: "/cart", label: "购物车", icon: "cart", badge: true },
-      { key: "wallet", to: "/wallet", label: "我的卡包", icon: "wallet" },
-      { key: "me", to: "/me", label: "账户", icon: "person" },
-    ],
-  },
+/* 桌面顶部导航：文字入口，不放图标。
+   消费者网站的桌面导航（Apple / 京东 / 淘宝 / Nike）都是文字横排 + 右侧账号，
+   而"图标 + 文字 + 分组标题"的竖排列表是后台工具的形。侧栏那一版就是照抄了
+   marketing-admin-ui 的 AppLayout，所以看着像给商店装了个控制台。
+   wallet 只在桌面出现（移动端从领券中心的"我的卡包"与账户页进），别在重构时弄丢。 */
+const links = [
+  { key: "home", to: "/home", label: "首页" },
+  { key: "coupons", to: "/coupons", label: "领券中心" },
+  { key: "seckill", to: "/seckill", label: "限时秒杀" },
+  { key: "cart", to: "/cart", label: "购物车", badge: true },
+  { key: "wallet", to: "/wallet", label: "我的卡包" },
 ];
 
 /* 移动端底部栏只放 5 个主入口 */
@@ -46,45 +40,44 @@ function flip() {
 </script>
 
 <template>
-  <!-- 桌面侧栏 -->
-  <aside class="side" aria-label="主导航">
-    <RouterLink to="/home" class="side__brand">
-      <span class="side__mark"><Icon name="sparkles" :size="17" /></span>
-      <span class="side__brand-t">营销中心</span>
-    </RouterLink>
+  <!-- 桌面顶部导航（<1024px 不渲染） -->
+  <header class="topnav">
+    <div class="topnav__inner">
+      <RouterLink to="/home" class="topnav__brand">
+        <span class="topnav__mark"><Icon name="sparkles" :size="15" /></span>
+        <span class="topnav__brand-t">营销中心</span>
+      </RouterLink>
 
-    <nav class="side__nav">
-      <div v-for="g in groups" :key="g.label" class="side__group">
-        <div class="side__label">{{ g.label }}</div>
+      <nav class="topnav__links" aria-label="主导航">
         <RouterLink
-          v-for="it in g.items"
-          :key="it.to"
-          :to="it.to"
-          class="side__item"
-          :class="{ 'is-active': active() === it.key }"
-          :aria-current="active() === it.key ? 'page' : undefined"
+          v-for="l in links"
+          :key="l.to"
+          :to="l.to"
+          class="topnav__link"
+          :class="{ 'is-active': active() === l.key }"
+          :aria-current="active() === l.key ? 'page' : undefined"
         >
-          <Icon :name="it.icon" :size="19" :fill="active() === it.key" />
-          <span class="grow">{{ it.label }}</span>
-          <span v-if="it.badge && badge > 0" class="side__badge">{{ badge > 99 ? "99+" : badge }}</span>
+          <span>{{ l.label }}</span>
+          <span v-if="l.badge && badge > 0" class="topnav__badge">{{ badge > 99 ? "99+" : badge }}</span>
         </RouterLink>
-      </div>
-    </nav>
+      </nav>
 
-    <div class="side__foot">
-      <RouterLink v-if="session.isLoggedIn" to="/me" class="side__user">
-        <MAvatar :hue="session.avatarHue" :label="session.display" :size="30" />
-        <span class="grow truncate small">{{ session.display }}</span>
-      </RouterLink>
-      <RouterLink v-else to="/login" class="side__user">
-        <span class="side__anon"><Icon name="person" :size="16" /></span>
-        <span class="grow truncate small">登录</span>
-      </RouterLink>
-      <button class="icon-btn side__theme" :aria-label="theme === 'dark' ? '切换到浅色' : '切换到深色'" @click="flip">
-        <Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="18" />
-      </button>
+      <div class="topnav__side">
+        <RouterLink v-if="session.isLoggedIn" to="/me" class="topnav__user"
+                    :class="{ 'is-active': active() === 'me' }">
+          <MAvatar :hue="session.avatarHue" :label="session.display" :size="26" />
+          <span class="truncate">{{ session.display }}</span>
+        </RouterLink>
+        <RouterLink v-else to="/login" class="topnav__user">
+          <span class="topnav__anon"><Icon name="person" :size="14" /></span>
+          <span>登录</span>
+        </RouterLink>
+        <button class="icon-btn" :aria-label="theme === 'dark' ? '切换到浅色' : '切换到深色'" @click="flip">
+          <Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="17" />
+        </button>
+      </div>
     </div>
-  </aside>
+  </header>
 
   <!-- 移动端底部 Tab -->
   <nav class="tabbar" aria-label="主导航">
@@ -106,89 +99,126 @@ function flip() {
 </template>
 
 <style scoped>
-/* ---------- 桌面侧栏 ---------- */
-.side {
+/* ---------- 桌面顶部导航 ---------- */
+.topnav {
   display: none;
   position: sticky;
   top: 0;
-  height: 100vh;
-  height: 100dvh;
-  width: var(--sidebar-w);
-  flex: none;
-  flex-direction: column;
-  padding: var(--space-5) var(--space-3) var(--space-4);
-  background: var(--c-surface-2);
-  border-right: 1px solid var(--hairline);
+  z-index: calc(var(--z-sticky) + 1);
+  height: var(--topbar-h);
+  background: var(--material-bg);
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+  border-bottom: 1px solid var(--hairline);
 }
 @media (min-width: 1024px) {
-  .side { display: flex; }
+  .topnav { display: block; }
 }
-.side__brand {
+.topnav__inner {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-3) var(--space-5);
-  color: var(--c-text);
+  gap: var(--space-6);
+  height: 100%;
+  max-width: var(--shell-wide);
+  margin: 0 auto;
+  padding: 0 var(--space-7);
 }
-.side__mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  display: grid;
-  place-items: center;
-  background: var(--c-brand);
-  color: #fff;
-}
-.side__brand-t { font-weight: 600; font-size: var(--fs-base); letter-spacing: var(--tracking-head); }
-.side__nav { flex: 1; overflow-y: auto; }
-.side__group + .side__group { margin-top: var(--space-5); }
-.side__label {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--c-text-faint);
-  letter-spacing: 0.02em;
-  padding: 0 var(--space-3) var(--space-2);
-}
-.side__item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 8px var(--space-3);
-  border-radius: var(--radius-sm);
-  color: var(--c-text-2);
-  font-size: var(--fs-base);
-  font-weight: 500;
-  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-.side__item:hover { background: var(--c-surface-3); color: var(--c-text); text-decoration: none; }
-.side__item.is-active { background: var(--c-surface-3); color: var(--c-brand); font-weight: 600; }
-.side__badge {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: var(--radius-pill);
-  background: var(--c-brand);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  display: grid;
-  place-items: center;
-}
-.side__foot {
+.topnav__brand {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding-top: var(--space-4);
-  margin-top: var(--space-4);
-  border-top: 1px solid var(--hairline);
+  color: var(--c-text);
+  flex: none;
 }
-.side__user { display: flex; align-items: center; gap: var(--space-2); flex: 1; min-width: 0; color: var(--c-text); }
-.side__user:hover { text-decoration: none; }
-/* 未登录时没有头像可用：给一个同尺寸的中性占位圆，脚部布局不因此跳动 */
-.side__anon {
-  width: 30px; height: 30px; border-radius: 50%; flex: none;
-  display: grid; place-items: center;
-  background: var(--c-surface-3); color: var(--c-text-muted);
+.topnav__mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: var(--c-text);
+  color: var(--c-surface);
+}
+.topnav__brand-t {
+  font-weight: 600;
+  font-size: var(--fs-base);
+  letter-spacing: var(--tracking-head);
+}
+.topnav__links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+.topnav__link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px var(--space-3);
+  border-radius: var(--radius-pill);
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.topnav__link:hover { background: var(--c-surface-3); color: var(--c-text); text-decoration: none; }
+.topnav__link.is-active { color: var(--c-text); font-weight: 600; }
+/* 选中态靠字重与一条下划线，不靠整块底色：顶部导航里塞满蓝色药丸会立刻变回工具味 */
+.topnav__link.is-active::after {
+  content: "";
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--c-brand);
+}
+.topnav__badge {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--c-danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+.topnav__side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+.topnav__user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 168px;
+  padding: 4px var(--space-2) 4px 4px;
+  border-radius: var(--radius-pill);
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.topnav__user:hover { background: var(--c-surface-3); text-decoration: none; }
+.topnav__user.is-active { font-weight: 600; }
+/* 未登录时没有头像可用：给一个同尺寸的中性占位圆，账号区不因此跳动 */
+.topnav__anon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--c-surface-3);
+  color: var(--c-text-muted);
 }
 
 /* ---------- 移动端底部 Tab ---------- */

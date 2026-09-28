@@ -79,10 +79,33 @@ describe("启动：本地会话先恢复，守卫才判导航", () => {
     expect(session.display).toBe("演示消费者");
   });
 
-  it("壳子渲染出来了，侧栏脚部用的是真实账号名（不再是手填 UID）", () => {
+  it("壳子渲染出来了，顶部导航的账号区用的是真实账号名（不再是手填 UID）", () => {
     expect(document.querySelector(".app-shell")).toBeTruthy();
-    expect(document.querySelector(".side__foot").textContent).toContain("演示消费者");
+    expect(document.querySelector(".topnav__user").textContent).toContain("演示消费者");
     expect(document.body.textContent).not.toContain("切换演示身份");
+  });
+
+  // C 端桌面导航的形状是一条硬要求：左侧栏是后台/工具的 IA（marketing-admin-ui 的
+  // AppLayout 就是那个形状），消费者界面套上它就成了"给商店装控制台"。
+  // 这条断言存在的意义就是防止下次"让 PC 更像桌面端"时又把侧栏加回来。
+  it("桌面导航是顶部横栏，不是左侧栏", () => {
+    const top = document.querySelector(".topnav");
+    expect(top).toBeTruthy();
+    expect(top.tagName).toBe("HEADER");
+    // 侧栏的三个特征：竖排容器、aside 元素、以及照抄后台的 .side__* 类名
+    expect(document.querySelector("aside")).toBeNull();
+    expect(document.querySelector('[class*="side__"]')).toBeNull();
+    expect(document.querySelector(".app-sidebar")).toBeNull();
+    // 顶部导航里的入口是横排文字链接，不是"图标 + 分组标题"的任务式列表
+    expect(document.querySelectorAll(".topnav__link").length).toBeGreaterThanOrEqual(4);
+    expect(document.querySelector(".topnav__label")).toBeNull();
+  });
+
+  // wallet 只在桌面顶部导航里有全局入口（移动端靠领券中心与账户页进）。
+  // 换导航时最容易静默丢掉的就是它。
+  it("卡包在桌面导航里有入口，不会因为改版掉出去", () => {
+    const hrefs = [...document.querySelectorAll(".topnav__link")].map((a) => a.getAttribute("href"));
+    expect(hrefs.some((h) => h && h.includes("/wallet"))).toBe(true);
   });
 
   it("每个请求都带着恢复出来的 access token 出网", async () => {

@@ -39,7 +39,8 @@ const ICON = { success: "check", error: "alert", info: "info" };
   pointer-events: none;
 }
 @media (min-width: 1024px) {
-  .toaster { bottom: auto; top: 76px; }
+  /* 顶部遮挡高度由 --chrome-h 说，不再手调 76px：顶部条一改高这里就悄悄错位 */
+  .toaster { bottom: auto; top: calc(var(--chrome-h) + var(--space-4)); }
 }
 .toast {
   pointer-events: auto;
