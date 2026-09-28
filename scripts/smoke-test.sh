@@ -1,16 +1,85 @@
 #!/usr/bin/env bash
 # ============================================================
-# 五条核心链路冒烟测试（全部经网关 8090。C 端演示 token 用于运行时读与交易写；
+# 九条链路冒烟测试（全部经网关 8090。C 端身份 = 真账号登录拿到的 JWT，用于运行时读与交易写；
 # 配置类写自 ③ 起只存在于 /api/admin/**，链路 0 的创建/流转因此也用后台 token —— 脚本开头登录一次全脚本共用）
 # 前置：./scripts/start-all.sh 已就绪；种子数据已由 docker init.sql 写入
-# 用法：GATEWAY_TOKEN=xxx ./scripts/smoke-test.sh
+# 用法：./scripts/smoke-test.sh          （消费者口令可用 CONSUMER_IDENTIFIER/CONSUMER_PASSWORD 覆写）
+#
+# C 端不再有共享 demo token：脚本开头用种子账号 demo/demo123456 登录一次，全脚本共用那枚
+# access token。业务请求体里也不再带 userId —— 归属由那枚 token 决定，这正是本轮要验的事。
 # ============================================================
 set -uo pipefail
 
 GW="${GW:-http://127.0.0.1:8090}"
-TOKEN="${GATEWAY_TOKEN:-demo-token-123}"
-AUTH="Authorization: Bearer $TOKEN"
 JSON="Content-Type: application/json"
+CID="${CONSUMER_IDENTIFIER:-demo}"
+CPWD="${CONSUMER_PASSWORD:-demo123456}"
+LOGIN_BODY=$(curl -s -m 25 -X POST "$GW/api/auth/login" -H "$JSON" \
+  -d "{\"identifier\":\"$CID\",\"password\":\"$CPWD\"}")
+TOKEN=$(echo "$LOGIN_BODY" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+# refresh 也留一份：链路 9 要验的是"轮换过的旧 refresh 再出现 = 整条会话作废"，
+# 那是账号体系里唯一一条"错了不会有人立刻发现"的语义，只能留到最后一条链路做。
+REFRESH=$(echo "$LOGIN_BODY" | sed -n 's/.*"refreshToken":"\([^"]*\)".*/\1/p')
+# 取不到 token 必须立刻停：后面 60+ 条断言全都会拿到 40100，
+# 那会表现为"C 端整片坏"，而真因只是这一步的登录没成
+if [ -z "$TOKEN" ]; then
+  echo "❌ C 端登录失败（$GW/api/auth/login，identifier=$CID）—— 冒烟无法继续"; exit 1
+fi
+[ -n "$REFRESH" ] || echo "⚠️ 登录响应里没有 refreshToken：链路 9 的轮换断言会红" >&2
+AUTH="Authorization: Bearer $TOKEN"
+
+# 需要一个"全新的人"的链路，注册一个临时账号换它的 token。
+# 为什么必须这样：券模板 per_user_limit=1、秒杀有防重购标记，而归属现在由登录身份决定 ——
+# 旧的写法是每次随机一个 userId 塞进请求体，那等于让脚本自己给自己发身份。
+# 复用 demo 那枚 token 的话，链路 1/3 从第二轮起恒红（实测：41000 已超过单人限领 /
+# 41000 您已参与过该场秒杀），那不是链路坏了，是同一个人在反复吃同一份额度。
+# 注意 account 侧注册有每 IP 限速（默认 10 次/小时），全脚本共注册 4 个，连跑两次
+# 冒烟之间要留出窗口，否则这里先撞 42900。
+new_consumer() { #  echoes "<identifier>\t<accessToken>\t<uid>"（失败时 token 段为空并打印原因到 stderr）
+  local id body t uid
+  id="smoke-$1-$(date +%s)-$RANDOM"
+  body=$(curl -s -m 25 -X POST "$GW/api/auth/register" -H "$JSON" \
+    -d "{\"identifier\":\"$id\",\"password\":\"Smoke123456\",\"nickname\":\"$2\"}")
+  t=$(echo "$body" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+  uid=$(echo "$body" | sed -n 's/.*"uid":\([0-9]*\).*/\1/p')
+  if [ -z "$t" ]; then
+    # 把失败原因原样带出来：42900（每 IP 注册限速，默认 10 次/小时）和"账号服务没起来"
+    # 长得一样（都是空 token），但处置完全不同 —— 前者等一小时，后者查进程
+    echo "  (注册 $2 失败: $(echo "$body" | head -c 160))" >&2
+  fi
+  # 标识符要一起带回去：链路 9 的"改密作废全部会话"必须落在一个**自己的**账号上，
+  # 改 demo 的口令会污染种子（下一轮登录直接红）。子 shell 里的赋值取不出来，
+  # 所以走 stdout 传，由 require_consumer 拆开后写进 $1_ID。
+  # uid 也要带回去，理由见 wipe_new_identity。
+  printf '%s\t%s\t%s\n' "$id" "$t" "$uid"
+}
+# "全新的人"必须真的是全新的。限领与"每人一场"的判定在 **Redis**，而键里带的是 userId：
+# 两套库布局（单库 marketing / 每服务一库 marketing_account）共用同一个 Redis 时，
+# 各自的 auto_increment 会撞号 —— 本轮实测：单库那套里 70002-70008 已被上午的探针占过，
+# 每服务一库档的 marketing_account 又从 70002 开始，于是刚注册的账号一出生就"已经领过一张"，
+# 链路 1 与链路 6 六条断言一起红在 41000 上（红得很像"限领逻辑坏了"，其实两个人共用了一个号码）。
+# 只清这个刚出生的 uid 自己的键，不扫别人的。
+wipe_new_identity() { # $1=uid
+  local uid=$1 k
+  [ -n "$uid" ] || return 0
+  for k in $(redis_admin --scan --pattern "coupon:user:*:$uid" 2>/dev/null) \
+            $(redis_admin --scan --pattern "seckill:bought:*:$uid" 2>/dev/null); do
+    redis_admin DEL "$k" >/dev/null 2>&1 || true
+  done
+}
+require_consumer() { # $1=token 变量名 $2=用途 $3=昵称；顺带把 ${1}_ID 设成注册用的标识符
+  local line id t uid
+  line=$(new_consumer "$2" "$3")
+  id=$(printf '%s' "$line" | cut -f1)
+  t=$(printf '%s' "$line" | cut -f2)
+  uid=$(printf '%s' "$line" | cut -f3)
+  if [ -z "$t" ]; then
+    echo "❌ 注册临时账号失败（$3）—— 后续断言全部不可信"; exit 1
+  fi
+  wipe_new_identity "$uid"
+  printf -v "$1" 'Authorization: Bearer %s' "$t"
+  printf -v "${1}_ID" '%s' "$id"
+}
 PASS=0; FAIL=0
 
 stock_raw() { curl -s -H "$AUTH" "$GW/api/seckill/stock/SK2026001" | sed -n 's/.*"data":\[\([^]]*\)\].*/\1/p'; }
@@ -138,9 +207,9 @@ R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transiti
 expect "PROMOTE → ONLINE" '"status":"ONLINE"' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
 expect "上线后可参与" '"data":true' "$R"
-R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70001")
+R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit")
 expect "未配灰度规则按全量放行" '"data":true' "$R"
-R=$(curl -s -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit?userId=70001")
+R=$(curl -s -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit")
 expect "已配灰度活动（ACT2026001 percent=100）命中" '"data":true' "$R"
 R=$(curl -s -X POST "$GW/api/activity/$ACT_NO/budget/deduct" -H "$AUTH" -H "$JSON" \
   -d "{\"amountCents\":3000,\"bizKey\":\"$ACT_NO-B1\"}")
@@ -182,10 +251,10 @@ expect "终态后不可参与" '"data":false' "$R"
 
 head2 "链路 1：领券（网关 → 风控 → Lua 预扣 → MQ → 幂等落库 → 轮询 → 核销）"
 REQ_ID="SMOKE-$(date +%s)-$RANDOM"
-# 每次冒烟用随机用户，避免历史数据触发单人限领
-USER_ID=$((880000 + RANDOM % 10000))
+# 每次冒烟换一个全新登录身份，避免历史数据触发单人限领（见 new_consumer 的注释）
+require_consumer AUTH coupon-j1 领券用户
 R=$(curl -s -X POST "$GW/api/coupon/grant" -H "$AUTH" -H "$JSON" \
-  -d "{\"requestId\":\"$REQ_ID\",\"userId\":$USER_ID,\"templateNo\":\"CT2026001\"}")
+  -d "{\"requestId\":\"$REQ_ID\",\"templateNo\":\"CT2026001\"}")
 expect "领券受理（requestId=${REQ_ID}）" '"code":0' "$R"
 # 断言针必须与 poll 针一致：poll 超时后照样把最后一次响应打出来，若这里只查
 # "couponCode" 这个键名，PROCESSING（couponCode:null）会蒙过去，接着券码取空、
@@ -194,13 +263,13 @@ expect "领券受理（requestId=${REQ_ID}）" '"code":0' "$R"
 R=$(poll "$GW/api/coupon/grant/result/$REQ_ID" '"couponCode":"CP' 30)
 expect "轮询到领券 SUCCESS 并返回券码" '"couponCode":"CP' "$R"
 COUPON_CODE=$(echo "$R" | sed -n 's/.*"couponCode":"\([^"]*\)".*/\1/p')
-R=$(curl -s -H "$AUTH" "$GW/api/coupon/usable?userId=$USER_ID")
+R=$(curl -s -H "$AUTH" "$GW/api/coupon/usable")
 expect "用户可用券列表包含新券" "$COUPON_CODE" "$R"
 R=$(curl -s -X POST "$GW/api/coupon/consume" -H "$AUTH" -H "$JSON" \
-  -d "{\"couponCode\":\"$COUPON_CODE\",\"userId\":$USER_ID,\"orderNo\":\"SO-$(date +%s)\"}")
+  -d "{\"couponCode\":\"$COUPON_CODE\",\"orderNo\":\"SO-$(date +%s)\"}")
 expect "核销成功" '"code":0' "$R"
 R=$(curl -s -X POST "$GW/api/coupon/grant" -H "$AUTH" -H "$JSON" \
-  -d "{\"requestId\":\"$REQ_ID\",\"userId\":$USER_ID,\"templateNo\":\"CT2026001\"}")
+  -d "{\"requestId\":\"$REQ_ID\",\"templateNo\":\"CT2026001\"}")
 expect "同 requestId 重复领券幂等回放原受理凭证（不重复扣库存）" 'ACCEPTED' "$R"
 
 head2 "链路 2：优惠计算（满200减30 与 8.5 折叠加 + 行级分摊）"
@@ -209,7 +278,7 @@ head2 "链路 2：优惠计算（满200减30 与 8.5 折叠加 + 行级分摊）
 # 探针预热是无效的——它不触发本请求要走的规则匹配路径。
 # 只重试预热调用，断言仍打最后一次真实响应；重试耗尽仍降级则由 expect 如实判失败。
 CALC_BODY='{
-  "userId": 88001, "activityNo": null, "userTags": [],
+  "activityNo": null, "userTags": [],
   "items": [
     {"lineId":"L1","skuId":9001,"itemId":7001,"tags":["DIGITAL"],"unitPrice":199.90,"quantity":1},
     {"lineId":"L2","skuId":9002,"itemId":7002,"tags":["CLOTHES"],"unitPrice":100.00,"quantity":1}
@@ -224,12 +293,13 @@ expect "总价 299.90 > 满减门槛 200，命中优惠" '"degraded":false' "$R"
 expect "返回行级分摊" '"shares"' "$R"
 
 head2 "链路 3：秒杀（预热 → 抢购 → MQ 建单 → 轮询 → 支付）"
-# 随机用户段，避免历史防重购标记干扰
-SK_BASE=$(( (RANDOM * 32768 + RANDOM) % 8000000 + 1000000 ))
+# 抢购用的是链路 1 起就换上的那个全新身份：秒杀有"每人一场"的防重购标记，
+# 而复用 demo 账号从第二轮起会恒吃 41000（旧写法是每轮随机一个 userId 绕开，
+# 现在自报 userId 不改变得了，随机性只能落在身份本身）
 R=$(curl -s -H "$AUTH" "$GW/api/seckill/activities")
 expect "在线秒杀活动 SK2026001" 'SK2026001' "$R"
 R=$(curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
-  -d "{\"activityNo\":\"SK2026001\",\"userId\":$SK_BASE}")
+  -d "{\"activityNo\":\"SK2026001\"}")
 expect "抢购受理返回排队 token" '"code":0' "$R"
 TK=$(echo "$R" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 R=$(poll "$GW/api/seckill/grab/result/$TK" 'SUCCESS:' 40)
@@ -238,7 +308,7 @@ ORDER_NO=$(echo "$R" | sed -n 's/.*SUCCESS:\([^",]*\).*/\1/p')
 R=$(curl -s -X POST "$GW/api/seckill/pay/$ORDER_NO" -H "$AUTH")
 expect "模拟支付回调成功" '"status":"PAID"' "$R"
 R=$(curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
-  -d "{\"activityNo\":\"SK2026001\",\"userId\":$SK_BASE}")
+  -d "{\"activityNo\":\"SK2026001\"}")
 expect "同用户重复抢购被拒绝" '"code":[1-9]' "$R"
 
 head2 "链路 3+：并发防超卖（按当前余量自适应并发）"
@@ -258,7 +328,7 @@ fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"; config_cleanup' EXIT
 for i in $(seq 1 "$CONC"); do
   ( curl -s -X POST "$GW/api/seckill/grab" -H "$AUTH" -H "$JSON" \
-      -d "{\"activityNo\":\"SK2026001\",\"userId\":$((SK_BASE + 100 + i))}" > "$TMP/$i.resp" ) &
+      -d "{\"activityNo\":\"SK2026001\"}" > "$TMP/$i.resp" ) &
 done
 wait
 ACCEPTED=$(grep -l '"code":0' "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' ')
@@ -471,19 +541,37 @@ HITS=$(throttle_hits 6)
 [ "$HITS" = "0" ] && ok "删行后回到本档出厂阈值" \
   || bad "删行没有恢复出厂" "hits=$HITS"
 
-# 7) 灰度：真值在 DB 列，改 5% 后 ≤8s 生效；删光 Redis 键也不会变成意外全量
+# 7) 灰度：真值在 DB 列，改阈值后 ≤8s 生效；删光 Redis 键也不会变成意外全量
+#
+# 这一组原来是"一个尾号命中的 userId + 一个尾号不命中的 userId"两条对照。
+# 身份改成从 token 取之后那种写法在结构上就不成立了 —— 同一枚 token 打两次，
+# 不可能一次 true 一次 false。改成按"阈值"取对照而不是按"人"取对照：
+# 人固定，阈值动。这样既保住了"DB 列是真值来源"这条主断言，也不再需要挑选身份。
 if mysql_admin -e "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=5 \
      WHERE activity_no='$ACT_NO'" >/dev/null 2>&1; then
   wait_cfg
-  expect "灰度 5% 时尾号命中的用户放行" '"data":true' \
-    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70001")"
-  expect "灰度 5% 时尾号不命中的用户被拒" '"data":false' \
-    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70050")"
+  G5=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit")
+  G5B=$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit")
+  if [ "$G5" = "$G5B" ] && echo "$G5" | grep -q '"data":'; then
+    ok "灰度 5% 下同一身份的判定是确定的（两次一致，不是每次掷骰子）"
+  else
+    bad "同一身份的灰度判定不稳定" "first=$G5 second=$G5B"
+  fi
+  mysql_admin -e "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=100 \
+    WHERE activity_no='$ACT_NO'" >/dev/null 2>&1
+  wait_cfg
+  expect "灰度 100% 时本人放行" '"data":true' \
+    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit")"
+  mysql_admin -e "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=0 \
+    WHERE activity_no='$ACT_NO'" >/dev/null 2>&1
+  wait_cfg
+  expect "灰度 0% 时本人被拒" '"data":false' \
+    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit")"
   redis_admin DEL mkt:cfg:snapshot:$OWN_FORM mkt:cfg:version:$OWN_FORM \
     mkt:cfg:snapshot:GLOBAL mkt:cfg:version:GLOBAL >/dev/null
   wait_cfg
-  expect "删光 Redis 键后灰度仍是 5%（不是全量放行）" '"data":false' \
-    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit?userId=70050")"
+  expect "删光 Redis 键后灰度仍按 DB 列判（0%，不是全量放行）" '"data":false' \
+    "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/$ACT_NO/gray-hit")"
   mysql_admin -e "UPDATE ${MYSQL_DB:-marketing}.activity SET gray_percent=NULL \
     WHERE activity_no='$ACT_NO'" >/dev/null 2>&1
 else
@@ -491,7 +579,7 @@ else
 fi
 # ACT2026001 的种子灰度必须还在：链路 0 那两条断言靠的是 DB 列而不是 yml
 expect "种子活动 ACT2026001 的灰度仍是 100%" '"data":true' \
-  "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit?userId=70001")"
+  "$(curl -s -m 10 -H "$AUTH" "$GW/api/activity/ACT2026001/gray-hit")"
 
 head2 "链路 6：写入口收口（配置类写只剩 /api/admin/**，绕过网关等于没有凭证）"
 # ① 旧的 C 端配置类写路径必须"真的没了"：命中 40400 而不是被静默转发到某个还在听的进程
@@ -502,18 +590,19 @@ R=$(curl -s -m 10 -X PUT -H "$AUTH" -H "$JSON" \
 expect "C 端改预算路径已收口（40400）" '"code":40400' "$R"
 
 # ② 收口不能误伤交易写：C 端领券仍要照常受理。
-# 用户段必须每轮随机（券模板 per_user_limit=1，写死一个 userId 会让第二轮起
-# 恒吃 41000「已超过单人限领数量」—— 那是状态残留，不是收口把路径写坏了）；
-# 980000 段避开链路 1 用的 880000 段，同一轮里两个用户不互相抢额度。
+# 这一轮必须是**新注册的账号**：券模板 per_user_limit=1，复用脚本开头那枚 demo token
+# 会让第二轮起恒吃 41000「已超过单人限领数量」—— 那是状态残留，不是收口把路径写坏了。
+# 上一版靠"每轮随机一个 userId"绕开；userId 现在由登录身份决定、自报不改变得了，
+# 所以随机性只能上移到账号本身。
 REQ6="SMOKE6-$(date +%s)-$RANDOM"
-USER6=$((980000 + RANDOM % 10000))
-R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AUTH" -H "$JSON" \
-  -d "{\"requestId\":\"$REQ6\",\"userId\":$USER6,\"templateNo\":\"CT2026001\"}")
+require_consumer AUTH6 coupon-j6 冒烟用户
+R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AUTH6" -H "$JSON" \
+  -d "{\"requestId\":\"$REQ6\",\"templateNo\":\"CT2026001\"}")
 expect "C 端交易写路径未被收口误伤（领券受理）" '"code":0' "$R"
 # 两套凭证不互通是双向的：后台 token 打 C 端交易路径同样被拒。
 # 只在"打后台被拒"这一侧设防的话，收口就等于给后台凭证开了一条 C 端写入口。
 R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AAUTH" -H "$JSON" \
-  -d "{\"requestId\":\"$REQ6-B\",\"userId\":$USER6,\"templateNo\":\"CT2026001\"}")
+  -d "{\"requestId\":\"$REQ6-B\",\"templateNo\":\"CT2026001\"}")
 expect "后台 token 打 C 端交易路径被拒（40100）" '"code":40100' "$R"
 
 # ③ 部署级回归锚（③ 段内 spec §3.2）：只带裸 X-Admin-* 头、**绕过网关**直连业务进程，
@@ -522,7 +611,10 @@ expect "后台 token 打 C 端交易路径被拒（40100）" '"code":40100' "$R"
 FORGE_PATH="/api/admin/activities/$ACT_NO/budget"
 forge_to() { # $@ = 额外身份参数（不带就是裸头）；返回首个可直连进程的响应
   local body port c base
-  for base in http://127.0.0.1:8081 http://127.0.0.1:8085; do
+  # 候选端口写成可覆写的：默认值是"本机进程形态"的拓扑（activity:8081 / standalone:8085），
+  # 而冒烟经常要在自定义端口上验一套刚改完的代码 —— 那时 8085 上是另一份旧构建，
+  # 这条断言测的就不是本轮改动了。
+  for base in ${FORGE_BASES:-http://127.0.0.1:8081 http://127.0.0.1:8085}; do
     body=$(curl -s -m 5 -X PUT "$@" -H "X-Admin-Role: admin" -H "X-Admin-Name: attacker" -H "$JSON" \
       -d '{"budgetAmount":1.00,"version":1}' "$base$FORGE_PATH" 2>/dev/null || true)
     echo "$body" | grep -q '"code"' && { echo "$body"; return; }
@@ -545,6 +637,49 @@ fi
 # 少了这条，上面的 40100 也可能只是"端口不通/路由不存在"的另一种写法。
 FORGED_OK=$(forge_to -H "X-Admin-Token: $ADMIN_TOKEN")
 expect "同一发直连请求带合法 token 时身份放行（拒的是凭证不是路由）" '"code":41008' "$FORGED_OK"
+
+# 账号体系的对偶断言：C 端也一样，裸 X-User-* 头不等于身份。
+# 少这条的话，"业务服务只认签名 token"这件事就只在后台那一侧被钉住，
+# 而 C 端这次改动恰恰是把 userId 从请求体里拿掉 —— 最容易被"改成读头"糊过去的位置。
+# 探针必须自己挑一个"真能直连"的进程：早先的写法是取候选清单第一项（8081），
+# 而 LITE 形态只有 standalone:8085 在听 → curl 空响应 → 红的是探针不是安全边界（本轮实测踩过）。
+forged_user_probe() { # $1 = 额外身份头（空 = 只带裸头）
+  # 候选端口是**券服务**的：8082（FULL 进程形态）/ 8085（LITE 与 dev 的聚合进程）。
+  # 这里不能沿用后台那条断言的 8081 优先 —— 打的是 /api/coupon/usable，
+  # 而 8081 是 activity：它答 40400"资源不存在"，也是一段带 "code" 的 JSON，
+  # 于是两条断言一起红在错误的进程上（本轮 FULL 进程形态实测踩过）。
+  # 接受条件也收紧成"0 或 401xx"：404 说明这里根本没这条路由，换下一个候选。
+  local base c body
+  for base in ${FORGE_USER_BASES:-http://127.0.0.1:8082 http://127.0.0.1:8085}; do
+    body=$(curl -s -m 5 ${1:+-H "$1"} -H "X-User-Id: 70001" "$base/api/coupon/usable" 2>/dev/null || true)
+    echo "$body" | grep -qE '"code":(0|401[0-9][0-9])' && { echo "$body"; return; }
+  done
+  # FULL 容器形态不发布应用端口，只能进 coupon 容器打它自己的 8082
+  c=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 -E '(^|-)marketing-coupon-[0-9]+$' || true)
+  [ -n "$c" ] || return
+  docker exec "$c" curl -s -m 5 ${1:+-H "$1"} -H "X-User-Id: 70001" \
+    "http://127.0.0.1:8082/api/coupon/usable" 2>/dev/null || true
+}
+FORGED_USER=$(forged_user_probe)
+expect "只带裸 X-User-Id 直连业务端口被拒（C 端与后台同一条理由）" '"code":40100' "$FORGED_USER"
+# 配对断言，与后台那条同一纪律：同一个口换成正牌签名 token 必须过身份这一关。
+# 少了它，上面的 40100 也可能只是"端口不通/路由不存在"的另一种写法。
+FORGED_USER_OK=$(forged_user_probe "Authorization: Bearer $TOKEN")
+expect "同一发直连请求带签名 token 时身份放行（拒的是凭证不是路由）" '"code":0' "$FORGED_USER_OK"
+# 旧的共享 demo token 必须彻底失效：它当年是"C 端万事通行"的那把钥匙，
+# 留着任何一种认它的路径，账号体系就等于被旁路
+LEGACY=$(curl -s -m 8 -H "Authorization: Bearer demo-token-123" "$GW/api/coupon/usable")
+expect "旧的 C 端共享 demo token 不再通 anywhere（40100）" '"code":40100' "$LEGACY"
+# 交易请求体不再接受调用方自报的 userId：先领成功、再换新 requestId 领就该撞 41000。
+# 必须用一个**全新的**账号打这一对（链路 6 那个账号已经吃掉一张了，复用它会
+# 让"首领成功"恒红）：账号自带额度，断言才不依赖任何前序状态。
+require_consumer AUTH7 coupon-j7 归属探针
+R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AUTH7" -H "$JSON" \
+  -d "{\"requestId\":\"SMOKE-DUP1-$(date +%s)-$RANDOM\",\"templateNo\":\"CT2026001\"}")
+expect "新账号首领限领=1 的模板成功（受理）" '"code":0' "$R"
+R=$(curl -s -m 15 -X POST "$GW/api/coupon/grant" -H "$AUTH7" -H "$JSON" \
+  -d "{\"requestId\":\"SMOKE-DUP2-$(date +%s)-$RANDOM\",\"templateNo\":\"CT2026001\"}")
+expect "同一身份换 requestId 再领被按本人拦下（41000，证明归属跟着 token 走）" '"code":41000' "$R"
 
 # ④ discount 唯一的 GET 收进了后台前缀：冒烟此前一次都没打过它，
 # 结果这条路径的红只能被部署探针抓到（修正 #31）
@@ -660,6 +795,55 @@ expect "缺文件就是 404，不许回退成一份 HTML（否则浏览器只报
   '^HTTP/[0-9.]* 404' "$(curl -sI -m 15 --path-as-is "$GW/ui/definitely-not-here.js" | tr -d '\r')"
 expect "界面不给数据开旁路：无凭证打后台读接口仍是 40100" '"code":40100' \
   "$(curl -s -m 15 "$GW/api/admin/users")"
+
+head2 "链路 9：消费者身份语义（旧 refresh 重放 = 整条会话作废；登出与改密当场生效）"
+# 这一段刻意留在最后：它会把主 TOKEN 那条会话烧掉，而前面八条链路全在用 $AUTH。
+# 之所以必须有这一段：这些语义单靠单测盖不住——旧实现里"按 refresh 摘要找受害会话"
+# 在轮换之后必然查不到（rotate 是同一行就地换摘要），于是重放只被拒、会话不被吊销，
+# 而当时的 mock 恰好 stub 成"查得到"，两边各自绿着把洞盖住。端到端要断的是
+# "连刚换到的新 access 都进不来"，那是唯一有分辨力的形状。
+me_with() { curl -s -m 10 -H "$1" "$GW/api/auth/me"; }
+# ⚠️ 请求体一律先收成变量再交给 curl。写成 `-d "{\"k\":\"$V\"}"` 嵌在
+# `"$(curl ...)"` 里（也就是 expect 的第三个参数位置）时，那两层引号会被解析掉，
+# 服务侧收到的是残缺 JSON → 40000"请求体不是可解析的 JSON"。本轮实测：同一条命令
+# 拆成变量就好，且失败时每个请求还炸出两条解析错误。顶层赋值（R=$(curl -d "{...}")）
+# 不受影响 —— 这就是仓里其他链路一直写得对、而这一段新代码写错的原因。
+DEMO_AUTH="Authorization: Bearer $TOKEN"      # 注意不能用 $AUTH：链路 1 起它已被 require_consumer 覆写
+expect "当前身份可读，归属取自签名 token（不是请求体自报）" '"identifier":"demo' "$(me_with "$DEMO_AUTH")"
+R_BODY="{\"refreshToken\":\"$REFRESH\"}"
+ROT=$(curl -s -m 15 -X POST "$GW/api/auth/refresh" -H "$JSON" -d "$R_BODY")
+expect "refresh 换到一对新凭证" '"refreshToken"' "$ROT"
+NEW_ACCESS=$(echo "$ROT" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+expect "轮换后的新 access 可用" '"code":0' "$(me_with "Authorization: Bearer $NEW_ACCESS")"
+ROT_REPLAY=$(curl -s -m 15 -X POST "$GW/api/auth/refresh" -H "$JSON" -d "$R_BODY")
+expect "旧 refresh 第二次出现被拒（40100）" '"code":40100' "$ROT_REPLAY"
+# 上面那条 40100 分不出"只拒了这一次刷新"和"吊销了整条会话"，所以两条都要断：
+expect "重放把整条会话吊销：刚换到的新 access 当场失效（40102）" '"code":40102' \
+  "$(me_with "Authorization: Bearer $NEW_ACCESS")"
+expect "同一条会话上轮换前的旧 access 一起失效（jti 在轮换中不变）" '"code":40102' \
+  "$(me_with "$DEMO_AUTH")"
+
+# 登出：另开一条会话（链路 9 一共只用 3 次登录，登录口是每 IP 5 次/分钟）
+L_BODY="{\"identifier\":\"$CID\",\"password\":\"$CPWD\"}"
+T2=$(curl -s -m 25 -X POST "$GW/api/auth/login" -H "$JSON" -d "$L_BODY" \
+  | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+expect "重新登录后又有了一条有效会话" '"code":0' "$(me_with "Authorization: Bearer $T2")"
+curl -s -m 10 -X POST -H "Authorization: Bearer $T2" "$GW/api/auth/logout" >/dev/null
+expect "登出后那枚 access 立即失效（40102，不是等 15 分钟自然过期）" '"code":40102' \
+  "$(me_with "Authorization: Bearer $T2")"
+
+# 改密：落在链路 6 那个探针账号上。不能拿 demo 做——改种子口令会让下一轮登录直接红。
+NEWPW="Smoke-Rot-$(date +%s)"
+CP_BODY="{\"oldPassword\":\"Smoke123456\",\"newPassword\":\"$NEWPW\"}"
+NEWPW_BODY="{\"identifier\":\"$AUTH7_ID\",\"password\":\"$NEWPW\"}"
+OLDPW_BODY="{\"identifier\":\"$AUTH7_ID\",\"password\":\"Smoke123456\"}"
+CP_RES=$(curl -s -m 10 -X PUT "$GW/api/auth/password" -H "$AUTH7" -H "$JSON" -d "$CP_BODY")
+expect "改密请求被接受" '"code":0' "$CP_RES"
+expect "改密作废该账号全部会话：手里那枚 access 当场 40102" '"code":40102' "$(me_with "$AUTH7")"
+LOGIN_NEW=$(curl -s -m 25 -X POST "$GW/api/auth/login" -H "$JSON" -d "$NEWPW_BODY")
+expect "新口令能登录（改的是哈希，不只是把人踢下线）" '"accessToken"' "$LOGIN_NEW"
+LOGIN_OLD=$(curl -s -m 25 -X POST "$GW/api/auth/login" -H "$JSON" -d "$OLDPW_BODY")
+expect "旧口令不再能登录，且对外仍是同一句话" '账号或口令不正确' "$LOGIN_OLD"
 
 head2 "收尾：清理在线配置、登出与会话吊销（链路 5 之后才做，全脚本只登录这几次）"
 # 清理放在登出之前：登出之后 ADMIN_TOKEN 就作废了，trap 里再删只会静默失败

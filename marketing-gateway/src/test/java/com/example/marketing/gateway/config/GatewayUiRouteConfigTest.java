@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,6 +62,11 @@ class GatewayUiRouteConfigTest {
         return (Map<String, Object>) mkt.get("gateway");
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> consumerSection() {
+        return (Map<String, Object>) gatewaySection().get("consumer");
+    }
+
     @Test
     void 探针的分段依据仍然成立_yml还是两段且第二段是nacos() {
         // 这条不是凑数：上面三条断言全部按"第 0 段=local、第 1 段=nacos"取数。
@@ -77,11 +83,18 @@ class GatewayUiRouteConfigTest {
     }
 
     @Test
-    void ui路径必须在白名单里否则静态资源会要C端token() {
-        Object wl = gatewaySection().get("whitelist");
-        assertNotNull(wl, "whitelist 段没了");
-        assertTrue(((List<?>) wl).contains("/ui/**"),
-                "/ui/** 不在白名单：AuthFilter 会按 C 端口径要 demo token，后台页面根本打不开");
+    void 静态资源不能被消费者托管清单罩住否则打开界面先得登录() {
+        // 旧的写法是断言 /ui/** 在 AuthFilter 的 whitelist 里。AuthFilter 删除后，
+        // 同一条保证换了机制：托管清单只罩 /api/**，界面路径天然不在里面。
+        // 断言跟着机制走，才不会出现"测试绿着但保证已经不成立"。
+        List<?> managed = (List<?>) consumerSection().get("managed-paths");
+        org.springframework.util.AntPathMatcher m = new org.springframework.util.AntPathMatcher();
+        for (String p : List.of("/ui/index.html", "/h5/index.html", "/ui/assets/x.js")) {
+            for (Object pattern : managed) {
+                assertFalse(m.match(String.valueOf(pattern), p),
+                        p + " 被托管清单的 " + pattern + " 罩住了：后台/H5 页面会要求登录态");
+            }
+        }
     }
 
     @Test

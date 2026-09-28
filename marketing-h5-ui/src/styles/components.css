@@ -1,0 +1,421 @@
+/* ============================================================
+ * 组件层 · Apple 口径。全部只引用 tokens.css 的语义名。
+ * 关键取向：
+ *  - 按钮是胶囊，主按钮只用系统蓝；
+ *  - 卡片靠"白底压在 #f5f5f7 上"分层，描边只是发丝；
+ *  - 价格不是红色促销字，是近黑正文色，优惠才用颜色；
+ *  - 浮层用毛玻璃材质。
+ * ============================================================ */
+
+/* ---------- 按钮 ---------- */
+.btn {
+  --_h: var(--control-h);
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--_h);
+  padding: 0 var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tracking-body);
+  white-space: nowrap;
+  user-select: none;
+  transition: background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.42;
+  cursor: default;
+  pointer-events: none;
+}
+
+.btn--primary {
+  background: var(--c-brand);
+  color: var(--c-brand-contrast);
+}
+.btn--primary:hover { background: var(--c-brand-hover); }
+.btn--primary:active { background: var(--c-brand-active); }
+
+/* Apple 的"次按钮"是淡蓝底 + 蓝字，不是灰底 */
+.btn--soft {
+  background: var(--c-brand-soft);
+  color: var(--c-brand);
+}
+.btn--soft:hover { filter: brightness(0.985); }
+
+.btn--ghost {
+  background: var(--c-surface);
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+.btn--ghost:hover { background: var(--c-surface-2); border-color: var(--c-border-strong); }
+
+.btn--quiet {
+  background: transparent;
+  color: var(--c-brand);
+  padding-inline: var(--space-3);
+}
+.btn--quiet:hover { text-decoration: underline; }
+
+.btn--danger {
+  background: var(--c-danger);
+  color: #fff;
+}
+.btn--danger:hover { filter: brightness(1.05); }
+
+.btn--block { display: flex; width: 100%; }
+.btn--sm { --_h: 34px; padding-inline: var(--space-4); font-size: var(--fs-sm); }
+.btn--lg { --_h: 52px; padding-inline: var(--space-6); font-size: var(--fs-md); }
+
+/* 图标按钮：圆形，Apple 工具栏常见 */
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--c-text);
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.icon-btn:hover { background: var(--c-surface-3); }
+.icon-btn--solid { background: var(--c-surface-3); }
+
+.spinner {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  opacity: 0.85;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- 卡片 ---------- */
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+}
+.card--pad { padding: var(--space-5); }
+.card--flush { overflow: hidden; }
+.card--lift {
+  box-shadow: var(--shadow-1);
+  transition: box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.card--pressable {
+  cursor: pointer;
+  transition: box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+.card--pressable:hover {
+  box-shadow: var(--shadow-2);
+  transform: translateY(-2px);
+}
+/* 桌面 hover 才做位移，触屏不抖 */
+@media (hover: none) {
+  .card--pressable:hover { transform: none; box-shadow: none; }
+}
+
+/* ---------- 徽章 ---------- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0;
+  background: var(--c-surface-3);
+  color: var(--c-text-2);
+}
+.pill--brand { background: var(--c-brand-soft); color: var(--c-brand); }
+.pill--success { background: var(--c-success-soft); color: var(--c-success); }
+.pill--warning { background: var(--c-warning-soft); color: var(--c-warning); }
+.pill--danger { background: var(--c-danger-soft); color: var(--c-danger); }
+.pill--info { background: var(--c-info-soft); color: var(--c-info); }
+.pill--gold { background: var(--c-gold-soft); color: var(--c-gold); }
+.pill--outline { background: transparent; border: 1px solid var(--c-border); color: var(--c-text-muted); }
+
+.dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.dot--pulse { position: relative; }
+.dot--pulse::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: pulse 1.8s var(--ease) infinite;
+}
+@keyframes pulse {
+  0% { transform: scale(0.6); opacity: 0.4; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+/* ---------- 价格：近黑正文色，优惠才上色 ---------- */
+.price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  color: var(--c-text);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.price__cur { font-size: 0.58em; font-weight: 500; color: var(--c-text-2); }
+.price__int { font-size: var(--fs-xl); }
+.price__dec { font-size: 0.58em; font-weight: 500; color: var(--c-text-2); }
+.price--sm .price__int { font-size: var(--fs-md); }
+.price--lg .price__int { font-size: var(--fs-2xl); }
+.price--accent { color: var(--c-brand); }
+.price--accent .price__cur,
+.price--accent .price__dec { color: var(--c-brand); }
+.price__strike {
+  color: var(--c-text-faint);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  text-decoration: line-through;
+  margin-left: var(--space-2);
+}
+/* 减免金额：Apple 的小票是"黑色正文 + 减号"，不用红色喊优惠。
+   红色只留给真正的错误/告急（库存告罄、失败态）。 */
+.amount-cut { color: var(--c-text); font-weight: 600; }
+/* 真正的告急（库存告罄、失败）才用红 */
+.text-danger { color: var(--c-danger); font-weight: 600; }
+
+/* ---------- 分段控件（Apple segmented control） ---------- */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--c-surface-3);
+  border-radius: var(--radius-sm);
+}
+.segmented__item {
+  border: 0;
+  background: transparent;
+  color: var(--c-text-2);
+  padding: 6px 16px;
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  transition: background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.segmented__item[aria-selected="true"] {
+  background: var(--c-surface);
+  color: var(--c-text);
+  box-shadow: var(--shadow-1);
+  font-weight: 600;
+}
+
+/* ---------- 浮层：毛玻璃遮罩 + 底部面板（桌面居中 modal） ---------- */
+.mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: var(--z-mask);
+  animation: fade var(--dur) var(--ease);
+}
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-sheet);
+  background: var(--c-surface);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding-bottom: var(--safe-b);
+  max-height: 86vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-3);
+  animation: sheet-up var(--dur) var(--ease);
+}
+.sheet__grab {
+  width: 36px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--c-border);
+  margin: var(--space-3) auto var(--space-1);
+}
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  position: sticky;
+  top: 0;
+  background: var(--material-bg-solid);
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+  z-index: 1;
+}
+.sheet__head h3 { font-size: var(--fs-md); }
+.sheet__body { padding: 0 var(--space-5) var(--space-5); }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes fade { from { opacity: 0; } }
+
+@media (min-width: 768px) {
+  .sheet {
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    top: 10vh;
+    transform: translateX(-50%);
+    width: min(620px, 92vw);
+    border-radius: var(--radius-xl);
+    max-height: 80vh;
+    animation: modal-in var(--dur) var(--ease);
+  }
+  .sheet__grab { display: none; }
+  @keyframes modal-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.985); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  }
+}
+
+/* ---------- 骨架 / 空态 / 错误态 ---------- */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--c-surface-3);
+  border-radius: var(--radius-md);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  animation: shimmer 1.6s infinite;
+}
+[data-theme="dark"] .skeleton::after {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+}
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+  padding: var(--space-8) var(--space-5);
+  color: var(--c-text-muted);
+}
+.state__icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--c-surface-3);
+  color: var(--c-text-faint);
+}
+.state__title { color: var(--c-text); font-weight: 600; font-size: var(--fs-md); }
+.state__hint { font-size: var(--fs-sm); max-width: 26rem; line-height: 1.5; }
+
+/* ---------- 提示条 ---------- */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.banner--info { background: var(--c-info-soft); color: var(--c-info); }
+.banner--warning { background: var(--c-warning-soft); color: var(--c-warning); }
+.banner--danger { background: var(--c-danger-soft); color: var(--c-danger); }
+.banner--success { background: var(--c-success-soft); color: var(--c-success); }
+
+/* ---------- 进度条 ---------- */
+.bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--c-surface-3);
+  overflow: hidden;
+}
+.bar__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c-brand);
+  transition: width var(--dur) var(--ease);
+}
+.bar__fill--success { background: var(--c-success); }
+.bar__fill--danger { background: var(--c-danger); }
+.bar__fill--gold { background: var(--c-gold); }
+
+/* ---------- 行 / 分割 ---------- */
+.row { display: flex; align-items: center; gap: var(--space-3); }
+.row--between { justify-content: space-between; }
+.divider { height: 1px; background: var(--c-border); border: 0; margin: var(--space-5) 0; }
+
+/* ---------- 表单 ---------- */
+.field { width: 100%; }
+.field__label {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  margin-bottom: var(--space-2);
+  font-weight: 500;
+}
+.input {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  color: var(--c-text);
+  font-size: var(--fs-md);
+  font-family: inherit;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.input:focus { outline: none; border-color: var(--c-brand); box-shadow: var(--ring); }
+.input::placeholder { color: var(--c-text-faint); }
+
+/* 数量步进：Apple 的圆形 +/- */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.stepper__btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-md);
+  line-height: 0;
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.stepper__btn:hover { background: var(--c-surface-3); }
+.stepper__btn:disabled { opacity: 0.35; cursor: default; }
+.stepper__val {
+  min-width: 30px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}

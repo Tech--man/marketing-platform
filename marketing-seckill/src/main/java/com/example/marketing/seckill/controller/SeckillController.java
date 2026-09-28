@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.api.Result;
 import com.example.marketing.common.exception.BizException;
+import com.example.marketing.common.security.ConsumerRequestIdentity;
 import com.example.marketing.seckill.config.SeckillRuntimeConfig;
 import com.example.marketing.seckill.dto.GrabRequest;
 import com.example.marketing.seckill.dto.GrabTicket;
@@ -13,6 +14,7 @@ import com.example.marketing.seckill.infrastructure.mapper.SeckillActivityMapper
 import com.example.marketing.seckill.service.SeckillGrabService;
 import com.example.marketing.seckill.service.SeckillOrderService;
 import com.example.marketing.seckill.service.SeckillStockService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,11 +40,14 @@ public class SeckillController {
     private final SeckillActivityMapper activityMapper;
     private final SeckillStockService stockService;
     private final SeckillRuntimeConfig runtimeConfig;
+    private final ConsumerRequestIdentity identity;
 
     /** 抢购：占名额成功即返回排队 token，订单结果异步产生 */
     @PostMapping("/grab")
-    public Result<GrabTicket> grab(@RequestBody @Valid GrabRequest request) {
-        return Result.ok(grabService.grab(request.getActivityNo(), request.getUserId()));
+    public Result<GrabTicket> grab(@RequestBody @Valid GrabRequest request, HttpServletRequest httpRequest) {
+        // 身份只从验过签名的 token 取。请求体里那个 userId 字段已经删掉了：
+        // 留着它，任何人改一个数字就能替别人占秒杀名额
+        return Result.ok(grabService.grab(request.getActivityNo(), identity.require(httpRequest).uid()));
     }
 
     /** 轮询抢购结果：ACCEPTED / SUCCESS:{orderNo} / FAIL:{reason} / NOT_FOUND */
@@ -74,9 +79,15 @@ public class SeckillController {
         return Result.ok(stockService.currentBucketStocks(activityNo, buckets));
     }
 
-    /** 模拟支付回调（生产由支付网关异步通知触发） */
+    /**
+     * 模拟支付回调（生产由支付网关异步通知触发）。
+     *
+     * <p>带本人校验：这条路径的语义是"把一张 CREATED 的订单标成已付款"，
+     * 只按 orderNo 认单的话，任何人猜到单号就能替别人把订单置成已付 ——
+     * 而单号在同一活动下是连续生成的，猜得到。</p>
+     */
     @PostMapping("/pay/{orderNo}")
-    public Result<SeckillOrderEntity> pay(@PathVariable String orderNo) {
-        return Result.ok(orderService.pay(orderNo));
+    public Result<SeckillOrderEntity> pay(@PathVariable String orderNo, HttpServletRequest request) {
+        return Result.ok(orderService.pay(orderNo, identity.require(request).uid()));
     }
 }

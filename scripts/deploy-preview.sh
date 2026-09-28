@@ -33,6 +33,19 @@ if [ -z "${ADMIN_JWT_SECRET:-}" ]; then
   export ADMIN_JWT_SECRET
 fi
 
+# 消费者 token 密钥：与后台同一套处置（随机生成一次、0600 落盘、gitignore、复用）。
+# 刻意不复用同一个变量：两把密钥同值 = 后台 token 可被消费者侧接受，
+# "两套凭证不互通"就只剩 claim 形状这一层侥幸（见 AccountProperties 的注释）。
+if [ -z "${CONSUMER_JWT_SECRET:-}" ]; then
+  CONSUMER_SECRET_FILE="$PWD/.consumer-jwt-secret"
+  if [ ! -f "$CONSUMER_SECRET_FILE" ]; then
+    (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=' > "$CONSUMER_SECRET_FILE")
+    echo "==> 已生成消费者 JWT 密钥 → $CONSUMER_SECRET_FILE（0600，已在 .gitignore 内）"
+  fi
+  CONSUMER_JWT_SECRET="$(cat "$CONSUMER_SECRET_FILE")"
+  export CONSUMER_JWT_SECRET
+fi
+
 echo "==> 数据层常驻检查（mysql + redis，与 FULL/dev 同一份数据）"
 docker compose -f "$DATA_COMPOSE" up -d --wait
 

@@ -52,6 +52,11 @@ x-app-defaults: &app-defaults
     # 强制检查在 deploy-full.sh 的入口；真漏了就退化成"后台 40300 + admin 容器起不来"
     # （AdminSecurityConfig 空密钥直接抛），C 端流量不受牵连。
     ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
+    # 消费者 token 密钥：从这个锚点被 gateway、marketing-account 以及**四个业务服务**继承，
+    # 天然同值 —— 业务服务要用它自验网关透传的那枚签名 token（③ 对后台同一条理由：
+    # 裸 X-User-Id 头对直连端口不设防）。同样不在 compose 用 :? 拦，强制检查在
+    # deploy-full.sh 的入口。
+    CONSUMER_JWT_SECRET: ${CONSUMER_JWT_SECRET:-}
     JAVA_OPTS: "-Xmx512m -Xss512k -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
 
 services:
@@ -86,14 +91,29 @@ services:
       JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
       # ④ 的抓取清单在容器形态下改成 compose service 名（admin 的 yml 默认值是 127.0.0.1，
       # 那是进程形态的拓扑，容器里指向的是自己）。self 保持回环：8086 就是本容器的 actuator。
-      # 只覆写这五个键是有意的——正面清单（OpsTargets）与"清单不来自注册中心"这两条纪律
+      # 只覆写这几个键是有意的——正面清单（OpsTargets）与"清单不来自注册中心"这两条纪律
       # 由代码守，不靠 compose 写对；写错时启动即失败，不会等到点大盘才发现。
       OPS_T_ACTIVITY: marketing-activity:8081
       OPS_T_COUPON: marketing-coupon:8082
       OPS_T_DISCOUNT: marketing-discount:8083
       OPS_T_SECKILL: marketing-seckill:8084
+      # 账号服务在这一档是独立进程（LITE/dev 聚在 standalone 里，由 self 覆盖），
+      # 不抓它就等于七个应用里有一个在只读面上彻底隐身。
+      OPS_T_ACCOUNT: marketing-account:8087
       OPS_T_GATEWAY: marketing-gateway:8090
       OPS_T_SELF: 127.0.0.1:8086
+
+  marketing-account:
+    <<: *app-defaults
+    build: { context: ../marketing-account }
+    image: marketing-account:full
+    # 不发布端口：账号服务只经 gateway 的 /api/auth/** 暴露。
+    # 库名沿用锚点的 MYSQL_DB=marketing（与 LITE 同一份数据，原地换形态的前提）。
+    # "每服务一库"是**进程形态**的可选档：由 start-all.sh 的 MYSQL_DB_PER_SERVICE=1
+    # 逐服务注入 MYSQL_DB=marketing_account，容器形态没有那条路径，别指望这里自动分库。
+    environment:
+      <<: *app-env
+      JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
 
   marketing-gateway:
     <<: *app-defaults

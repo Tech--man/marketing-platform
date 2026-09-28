@@ -73,19 +73,26 @@ spring:
           uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
           predicates:
             - Path=/ui/**
+        # C 端 H5：与 ui-route 共用同一对占位符（静态资源同样长在 admin/standalone 里）。
+        # 漏这条的后果和当年漏 ui-route 一样：LITE 能开、升 FULL 整片 404。
+        - id: h5-route
+          uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
+          predicates:
+            - Path=/h5/**
+        # 消费者账号服务：注册/登录/刷新/会话。必须排在 admin-route 之前吗？不必 ——
+        # 它的路径是 /api/auth/**，与 /api/admin/** 不重叠，四条 admin 业务写路由也不吃它。
+        - id: account-route
+          uri: http://${ACCOUNT_HOST:127.0.0.1}:${ACCOUNT_PORT:8087}
+          predicates:
+            - Path=/api/auth/**
 
 marketing:
   # 在线配置的形态标识与轮询节拍由 common 的嵌套占位统一读 DEPLOY_FORM / CONFIG_POLL_SECONDS，
   # 不在这里复制一份（同 marketing.* 的单一来源口径）
   gateway:
-    auth:
-      enabled: true
-      token: ${GATEWAY_TOKEN:demo-token-123}
-    whitelist:
-      - /actuator/**
-      # ⑥ 的静态资源。它们本身不含任何数据（真数据仍要 admin token），
-      # 不进白名单的后果是"打开后台得先有一个 C 端 demo token"——荒谬且难排查。
-      - /ui/**
+    # 演示级静态 token 那一层已经删除（AuthFilter）：一枚所有人共用的 token 不提供任何
+    # 认证，只是把"未登录"这件事藏起来。C 端身份一律走下面的 consumer JWT。
+    # /ui/** 与 /h5/** 不需要再列白名单 —— 它们不在 /api/** 下，天然不被托管。
     # 分层限流·网关层：按路由配置滑动窗口阈值（秒杀最严格，超限返回排队码）
     rate-limit:
       # 阈值随形态给（默认值即 FULL 口径）。LITE 单机实测异步排空约 110-140 msg/s/topic，
@@ -129,11 +136,45 @@ marketing:
       ui-route:
         limit: ${RL_UI:100}
         window-seconds: 1
+      # C 端 H5 的界面：与后台同档，首屏十几个请求正常打开，挡住把 jar 当文件服务器刷。
+      h5-route:
+        limit: ${RL_H5:100}
+        window-seconds: 1
+      # 账号服务单独一桶，阈值与 admin-route 同源的一条理由但更紧：BCrypt 单次 50-100ms
+      # 且在网关之后，脚本化撞库只需几十 QPS 就能把 account 进程的 CPU 吃满；
+      # 而 LITE 下它与四个业务服务同 JVM，会连带拖垮服役档的交易入口。
+      # 登录口的每 IP 细粒度限速在 account 服务内部（ConsumerLoginGuard），两层不同职责。
+      account-route:
+        limit: ${RL_ACCOUNT:20}
+        window-seconds: 1
 
     admin:
       # 与 admin 服务同值；留空=后台整片 40300，C 端不受影响（见 AdminAuthFilter）
       jwt-secret: ${ADMIN_JWT_SECRET:}
       clock-skew-seconds: 30
+    consumer:
+      # 与 account 服务同值，且必须是**另一个**值：一把密钥两种用途，
+      # 后台 token 就能被消费者侧接受，"两套凭证不互通"只剩 claim 形状的侥幸。
+      # 留空 = 受保护的身份端点整片 40300，不影响后台与业务流量。
+      jwt-secret: ${CONSUMER_JWT_SECRET:}
+      clock-skew-seconds: 30
+      # 托管整片 /api/**：要登录是默认，游客可看是例外。反过来写（逐条列需要登录的路径）
+      # 的话，新增一条交易路由就默默免鉴权了。/api/admin/** 由 AdminAuthFilter 的
+      # VERIFIED 标记让开，不靠这里排除。
+      managed-paths:
+        - /api/**
+      # 免 access token 的口：判据是"游客本来就该看到"且"不落任何属于某个消费者的数据"。
+      # 券的 stock 与秒杀的 stock 是两条公开余量读数；活动详情/秒杀列表是目录页。
+      permit-paths:
+        - /api/auth/login
+        - /api/auth/register
+        - /api/auth/refresh
+        - /api/activity/*
+        - /api/activity/*/participatable
+        - /api/activity/*/budget/remain
+        - /api/coupon/stock/*
+        - /api/seckill/activities
+        - /api/seckill/stock/*
 
 management:
   endpoints:
@@ -196,3 +237,12 @@ spring:
         - id: ui-route
           uri: lb://marketing-admin
           predicates: [ Path=/ui/** ]
+        # 与上面 local 段那条 h5-route 成对：漏这条，LITE 打开 H5 一切正常，升到 FULL 整片 404。
+        - id: h5-route
+          uri: lb://marketing-admin
+          predicates: [ Path=/h5/** ]
+        # 与上面 local 段那条 account-route 成对：漏这条，LITE 登录一切正常，
+        # 升到 FULL 就是 /api/auth/** 整片 404（③ 与 ⑥ 各为这类漏项交过一次学费）。
+        - id: account-route
+          uri: lb://marketing-account
+          predicates: [ Path=/api/auth/** ]

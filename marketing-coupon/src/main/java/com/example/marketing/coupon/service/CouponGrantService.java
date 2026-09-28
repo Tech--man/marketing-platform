@@ -53,10 +53,17 @@ public class CouponGrantService {
 
     /**
      * 查询领券结果：SUCCESS 带券码；无券且未失败则 PROCESSING。
+     *
+     * <p>按 {@code uid} 一起查。requestId 是客户端生成的 UUID，只按它查的话，
+     * 拿到别人 requestId 的人就能读走那枚<b>券码</b> —— 券码是可兑付的，
+     * 这不是"看到别人的进度"而是"捡到别人的券"。
+     * 查不到时仍返回 PROCESSING：这里不区分"没这条"和"不是你的"，
+     * 免得把接口变成一个 requestId 存在性探针。</p>
      */
-    public GrantResultVO queryResult(String requestId) {
+    public GrantResultVO queryResult(String requestId, long uid) {
         UserCouponEntity coupon = userCouponMapper.selectOne(Wrappers.<UserCouponEntity>lambdaQuery()
-                .eq(UserCouponEntity::getRequestId, requestId));
+                .eq(UserCouponEntity::getRequestId, requestId)
+                .eq(UserCouponEntity::getUserId, uid));
         if (coupon != null) {
             return GrantResultVO.success(coupon.getCouponCode());
         }

@@ -1,11 +1,11 @@
 -- ============================================================
 -- 营销平台初始化脚本（docker/mysql/init 首次启动自动执行）
--- 四个业务库 + 管理后台库 + 公共幂等/本地消息表 + 演示种子数据
+-- 四个业务库 + 管理后台库 + 消费者账号库 + 公共幂等/本地消息表 + 演示种子数据
 -- 账号：marketing / marketing123（compose 已建，这里补齐其余库授权）
 -- ============================================================
 
 -- ---------- 1. 建库 ----------
--- 四个都要显式 CREATE：GRANT 只写授权表、不会建库，漏一个就会在下面第一个 USE 处报错，
+-- 每个库都要显式 CREATE：GRANT 只写授权表、不会建库，漏一个就会在下面第一个 USE 处报错，
 -- 而 docker-entrypoint-initdb.d 里任何一条 SQL 失败都会让 MySQL 容器初始化整体中断。
 -- 必须显式声明连接字符集：docker-entrypoint-initdb.d 是用容器里的 mysql 客户端执行的，
 -- 而它的默认连接字符集是 latin1 —— 服务端就算配了 utf8mb4，种子中文也会先被按 latin1
@@ -17,11 +17,15 @@ CREATE DATABASE IF NOT EXISTS marketing_coupon  DEFAULT CHARACTER SET utf8mb4 CO
 CREATE DATABASE IF NOT EXISTS marketing_discount DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_seckill  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS marketing_admin    DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- 第六个也要显式 CREATE：漏这行时下面的 USE marketing_account 会直接抛 unknown database，
+-- 整个 init 中断（而单库档看不出这个问题——它的三张表建在 marketing 里）。
+CREATE DATABASE IF NOT EXISTS marketing_account  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 GRANT ALL PRIVILEGES ON marketing_activity.* TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_coupon.*  TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_discount.* TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_seckill.*  TO 'marketing'@'%';
 GRANT ALL PRIVILEGES ON marketing_admin.*    TO 'marketing'@'%';
+GRANT ALL PRIVILEGES ON marketing_account.*  TO 'marketing'@'%';
 -- Docker Desktop 的宿主机端口映射会被 MySQL 解析为 localhost 来源，补一个同名本地账号
 CREATE USER IF NOT EXISTS 'marketing'@'localhost' IDENTIFIED WITH mysql_native_password BY 'marketing123';
 GRANT ALL PRIVILEGES ON marketing_activity.* TO 'marketing'@'localhost';
@@ -29,6 +33,7 @@ GRANT ALL PRIVILEGES ON marketing_coupon.*  TO 'marketing'@'localhost';
 GRANT ALL PRIVILEGES ON marketing_discount.* TO 'marketing'@'localhost';
 GRANT ALL PRIVILEGES ON marketing_seckill.*  TO 'marketing'@'localhost';
 GRANT ALL PRIVILEGES ON marketing_admin.*    TO 'marketing'@'localhost';
+GRANT ALL PRIVILEGES ON marketing_account.*  TO 'marketing'@'localhost';
 FLUSH PRIVILEGES;
 
 -- ---------- 2. 公共表模板说明 ----------
@@ -437,3 +442,72 @@ CREATE TABLE IF NOT EXISTS admin_config (
     PRIMARY KEY (id),
     UNIQUE KEY uk_key_form (cfg_key, form)
 ) ENGINE = InnoDB COMMENT '在线配置真值（删行即恢复出厂）';
+
+-- ============================================================
+-- 库六：marketing_account（消费者账号：账号 / 会话 / 身份事件）
+-- ============================================================
+
+USE marketing_account;
+
+CREATE TABLE IF NOT EXISTS consumer_user (
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    identifier      VARCHAR(64)  NOT NULL COMMENT '登录名；将来接手机号只是换一个值域，名字不绑死渠道',
+    password_hash   VARCHAR(100) NOT NULL COMMENT 'BCrypt，绝不存明文',
+    nickname        VARCHAR(64)  NOT NULL DEFAULT '',
+    status          VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE / DISABLED（停用不抹行：券与订单要能追到人）',
+    pwd_version     INT          NOT NULL DEFAULT 1 COMMENT '改密即 +1 的记账位；作废会话由 consumer:bump:{uid} 承担',
+    fail_count      INT          NOT NULL DEFAULT 0,
+    lock_until      DATETIME     NULL COMMENT '到点自动放行，不需要人工解锁任务',
+    last_login_time DATETIME     NULL,
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_identifier (identifier)
+) ENGINE = InnoDB COMMENT '消费者账号';
+
+-- 一行 = 一次登录，同时承载 access 的 jti 与配对的 refresh。
+-- refresh 存 SHA-256 摘要而非明文：这张表一旦被读走（备份/从库/报表），
+-- 明文 refresh 等于 30 天的完整账号访问权；access 短寿命且可吊销，才允许只存 jti。
+CREATE TABLE IF NOT EXISTS consumer_session (
+    id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    jti               VARCHAR(64)  NOT NULL COMMENT 'access token 的会话 ID，吊销按它拉黑',
+    user_id           BIGINT UNSIGNED NOT NULL,
+    identifier        VARCHAR(64)  NOT NULL DEFAULT '',
+    refresh_hash      CHAR(64)     NOT NULL COMMENT 'refresh token 的 SHA-256（hex），不落明文',
+    login_ip          VARCHAR(64)  NOT NULL DEFAULT '',
+    user_agent        VARCHAR(256) NOT NULL DEFAULT '',
+    expire_at         DATETIME     NOT NULL COMMENT 'access 到期时刻',
+    refresh_expire_at DATETIME     NOT NULL COMMENT 'refresh 到期时刻；到点必须重新登录',
+    rotated_at        DATETIME     NULL COMMENT '最近一次轮换时刻，null = 从未轮换',
+    revoke_reason     VARCHAR(32)  NULL COMMENT 'PASSWORD_CHANGED/DISABLED/FORCE_LOGOUT/LOGOUT/REFRESH_REUSED/REFRESH_EXPIRED/SESSION_QUOTA，null = 仍有效',
+    revoked_at        DATETIME     NULL,
+    create_time       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_jti (jti),
+    UNIQUE KEY uk_refresh_hash (refresh_hash) COMMENT '轮换后旧值进 Redis 黑名单，表里只留当前值',
+    KEY idx_user_active (user_id, revoked_at, expire_at)
+) ENGINE = InnoDB COMMENT '消费者会话（DB 为准，Redis 只放吊销位与整号作废时刻）';
+
+-- 身份事件独立成表，不并进 admin_audit_log：那条跨进程总线 MAXLEN 满则丢最旧，
+-- 是按"人肉点出来的后台写入"量级设计的，登录事件是机器量级，灌进去会静默挤掉更早的审计。
+CREATE TABLE IF NOT EXISTS consumer_event_log (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    action      VARCHAR(32) NOT NULL COMMENT 'REGISTER/LOGIN/LOGIN_FAILED/REFRESH/REFRESH_REUSED/LOGOUT/PASSWORD_CHANGED',
+    user_id     BIGINT UNSIGNED NULL COMMENT '注册失败或账号不存在时没有 uid',
+    identifier  VARCHAR(64)  NOT NULL DEFAULT '',
+    jti         VARCHAR(64)  NOT NULL DEFAULT '',
+    ip          VARCHAR(64)  NOT NULL DEFAULT '',
+    user_agent  VARCHAR(256) NOT NULL DEFAULT '',
+    result      VARCHAR(32)  NOT NULL DEFAULT '' COMMENT 'SUCCESS 或失败原因，不含口令与 token',
+    create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_user_time (user_id, create_time),
+    KEY idx_action_time (action, create_time)
+) ENGINE = InnoDB COMMENT '消费者身份事件流水';
+
+-- 演示账号 demo / demo123456，固定占 70001 这个 id：
+-- user_coupon / seckill_order 里的 user_id 今天是没有父表的自由整数，
+-- 冒烟与 H5 演示都在用 70001，让它第一次有一个真实账号可指，历史券数据不至于变成孤儿。
+INSERT INTO consumer_user (id, identifier, password_hash, nickname, status, pwd_version)
+SELECT 70001, 'demo', '$2a$10$sFlfmM0L8Vd7kCpBmDnVV.kwWPNAef6Nr3x/94mYj8NMlfRNWccAm', '演示消费者', 'ACTIVE', 1
+WHERE NOT EXISTS (SELECT 1 FROM consumer_user WHERE identifier = 'demo');

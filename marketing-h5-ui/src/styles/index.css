@@ -1,0 +1,214 @@
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";
+
+/* ============================================================
+ * 布局层：桌面/移动两套骨架。
+ *
+ * 这一层是"PC 版不是放宽的移动版"的落点：
+ *  - ≥1024px 走 左侧固定侧栏 + 右侧内容列 + 顶部毛玻璃工具条 的桌面骨架
+ *    （Apple Music / App Store 在 macOS 上的形状），内容用满宽度、多列栅格、
+ *    主从分栏；
+ *  - <1024px 才退回底部 Tab 的移动骨架。
+ * 两套 IA 都渲染在同一份 DOM 里，靠媒体查询切换显示，避免两套路由。
+ * ============================================================ */
+
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 桌面：侧栏 + 内容列 */
+@media (min-width: 1024px) {
+  .app-shell {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .app-sidebar { display: flex; }
+  .app-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+}
+
+.app-sidebar { display: none; }
+.app-body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+
+/* 顶部工具条：移动/桌面都用，毛玻璃 */
+.app-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--header-h);
+  padding: calc(var(--safe-t) + var(--space-2)) var(--space-4) var(--space-2);
+  background: var(--material-bg);
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+  border-bottom: 1px solid var(--hairline);
+}
+.app-toolbar__title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: var(--tracking-head);
+}
+.app-toolbar__sub { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); font-weight: 400; }
+.app-toolbar__actions { display: flex; align-items: center; gap: var(--space-2); }
+
+@media (min-width: 1024px) {
+  .app-toolbar {
+    min-height: 60px;
+    padding: var(--space-3) var(--space-7);
+    background: var(--material-bg);
+  }
+  .app-toolbar__title { font-size: var(--fs-lg); }
+}
+
+/* 内容容器 */
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4) calc(var(--nav-h) + var(--safe-b) + var(--space-8));
+}
+@media (min-width: 768px) {
+  .app-main { padding: var(--space-6) var(--space-6) var(--space-8); }
+}
+@media (min-width: 1024px) {
+  .app-main {
+    max-width: var(--shell-wide);
+    padding: var(--space-7) var(--space-7) var(--space-9);
+  }
+}
+/* 沉浸页（秒杀详情/结算）没有底部 Tab，收掉那段预留高度 */
+.app-shell--bare .app-main { padding-bottom: var(--space-8); }
+
+/* ---------- 区块 ---------- */
+.section { margin-bottom: var(--space-7); }
+.section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.section__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: var(--tracking-head);
+}
+.section__more {
+  font-size: var(--fs-sm);
+  color: var(--c-brand);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.section__more:hover { text-decoration: underline; }
+
+/* ---------- 栅格：移动 1 列 → 平板 2 → 桌面 3/4 ---------- */
+.grid { display: grid; gap: var(--space-4); }
+.grid--cards { grid-template-columns: 1fr; }
+@media (min-width: 600px) { .grid--cards { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1024px) {
+  .grid--cards { grid-template-columns: repeat(3, 1fr); gap: var(--space-5); }
+}
+.grid--4 { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 1024px) { .grid--4 { grid-template-columns: repeat(4, 1fr); } }
+.grid--2 { grid-template-columns: repeat(2, 1fr); }
+
+/* 主从分栏：移动堆叠（中间留一条间距，别让两张卡贴死），桌面展开成两列 + 粘性侧栏 */
+.split { display: flex; flex-direction: column; gap: var(--space-5); }
+@media (min-width: 1024px) {
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: var(--space-7);
+    align-items: start;
+  }
+  .split--wide { grid-template-columns: minmax(0, 1fr) 420px; }
+  .split__aside { position: sticky; top: calc(var(--header-h) + var(--space-5)); }
+}
+
+/* 票据接缝：把上下两张卡接成一张券，中间是可撕的虚线 + 两侧打孔缺口。
+   只在堆叠态出现——桌面两列并排时它们本来就不相邻。 */
+.ticket-seam { display: none; }
+@media (max-width: 1023.98px) {
+  .ticket-seam {
+    display: block;
+    position: relative;
+    height: 0;
+    border-top: 1px dashed var(--c-border-strong);
+  }
+  /* 缺口用页面底色盖住卡片边缘，视觉上" punch 掉"两个半圆 */
+  .ticket-seam::before,
+  .ticket-seam::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--c-canvas);
+  }
+  .ticket-seam::before { left: -9px; }
+  .ticket-seam::after { right: -9px; }
+}
+
+/* ---------- 通用工具 ---------- */
+.stack { display: flex; flex-direction: column; }
+.stack--gap { gap: var(--space-3); }
+.stack--gap-lg { gap: var(--space-5); }
+.wrap { flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.center { display: grid; place-items: center; }
+
+.muted { color: var(--c-text-muted); }
+.faint { color: var(--c-text-faint); }
+.strong { font-weight: 600; }
+.tiny { font-size: var(--fs-xs); }
+.small { font-size: var(--fs-sm); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 移动端的横向轨道，到桌面自动变成整行栅格（不逼桌面用户横滚） */
+.rail {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: var(--space-2);
+  margin: 0 calc(var(--space-4) * -1);
+  padding-inline: var(--space-4);
+  scrollbar-width: none;
+}
+.rail::-webkit-scrollbar { display: none; }
+.rail > * { scroll-snap-align: start; flex: none; }
+@media (min-width: 1024px) {
+  .rail {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: var(--space-5);
+    overflow: visible;
+    margin: 0;
+    padding: 0;
+  }
+  .rail > * { width: auto !important; }
+}
+
+/* 路由淡入 */
+.page-enter-active,
+.page-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.page-enter-from { opacity: 0; transform: translateY(6px); }
+.page-leave-to { opacity: 0; }

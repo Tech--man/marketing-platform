@@ -30,8 +30,13 @@ public class SeckillOrderService {
     private final SeckillStockService stockService;
 
     /** 模拟支付回调：CREATED → PAID；已 PAID 幂等成功；已 CANCELLED 拒绝 */
-    public SeckillOrderEntity pay(String orderNo) {
+    public SeckillOrderEntity pay(String orderNo, long callerUid) {
         SeckillOrderEntity order = require(orderNo);
+        // 本人校验排在幂等短路之前：否则"替别人付款"第二次调用会因为订单已是 PAID
+        // 而返回成功，等于把一次越权伪装成一次无害的重试
+        if (order.getUserId() == null || order.getUserId() != callerUid) {
+            throw BizException.of(ErrorCode.FORBIDDEN, "订单不属于当前登录账号");
+        }
         if (SeckillOrderStatus.PAID.name().equals(order.getStatus())) {
             return order; // 支付回调重复投递，幂等返回
         }

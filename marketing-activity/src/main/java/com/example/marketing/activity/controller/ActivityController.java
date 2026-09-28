@@ -4,7 +4,9 @@ import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.service.ActivityService;
 import com.example.marketing.activity.service.BudgetService;
 import com.example.marketing.activity.service.GrayService;
+import com.example.marketing.common.security.ConsumerRequestIdentity;
 import com.example.marketing.common.api.Result;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -30,6 +32,7 @@ public class ActivityController {
     private final ActivityService activityService;
     private final BudgetService budgetService;
     private final GrayService grayService;
+    private final ConsumerRequestIdentity identity;
 
     /** 查询活动 */
     @GetMapping("/{activityNo}")
@@ -46,10 +49,13 @@ public class ActivityController {
         return Result.ok(activityService.participatable(activityNo));
     }
 
-    /** 灰度命中判断 */
+    /**
+     * 灰度命中判断。userId 来自验过签名的 token，不再是查询参数 ——
+     * 灰度桶决定这个人能不能进活动，让它由调用方自报就等于把分流开关交给调用方。
+     */
     @GetMapping("/{activityNo}/gray-hit")
-    public Result<Boolean> grayHit(@PathVariable String activityNo, @RequestParam Long userId) {
-        return Result.ok(grayService.hit(activityNo, userId));
+    public Result<Boolean> grayHit(@PathVariable String activityNo, HttpServletRequest request) {
+        return Result.ok(grayService.hit(activityNo, identity.require(request).uid()));
     }
 
     /** 扣减预算（幂等键作用域 = 活动 + bizKey；data 区分真扣 DEDUCTED 与重复回放 REPLAYED） */

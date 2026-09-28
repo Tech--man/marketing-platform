@@ -69,8 +69,8 @@ fi
 # 先 sed 出 data 数组再相加：整串直接喂给 awk 的话，第一个桶会跟着 `"data":[` 一起
 # 变成非数字而被当成 0（实测少算一个桶，把一次正常的复位读成恒等式破了）。
 buckets_sum() {
-  curl -s -m 10 -H "Authorization: Bearer ${GATEWAY_TOKEN:-demo-token-123}" \
-    "$GW/api/seckill/stock/$ACT" \
+  # 不带凭证：/api/seckill/stock/** 是游客可读的余量读数（C 端共享 demo token 那一层已删除）
+  curl -s -m 10 "$GW/api/seckill/stock/$ACT" \
     | sed -n 's/.*"data":\[\([^]]*\)\].*/\1/p' \
     | tr ',' '\n' | awk '{s += $1 + 0} END {print s + 0}'
 }

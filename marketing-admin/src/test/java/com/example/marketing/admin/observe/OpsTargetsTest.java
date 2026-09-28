@@ -31,6 +31,18 @@ class OpsTargetsTest {
     }
 
     @Test
+    @DisplayName("账号进程（8087）在清单内，但清单仍是逐个枚举不是区间")
+    void accountPortIsListedWithoutLooseningTheSet() {
+        // ④ 抓不到账号进程 = 七个应用里有一个在只读面上隐身；而"为了让新服务能抓"
+        // 把白名单改成 8080-8100 这类区间，等于把正面清单退回黑名单。两条要同时钉住。
+        assertEquals(8087, OpsTargets.parse("account", "marketing-account:8087").port());
+        assertEquals("http://marketing-account:8087/actuator/prometheus",
+                OpsTargets.parse("account", "marketing-account:8087").url());
+        assertRejected("marketing-account:8088");      // 紧邻的未列举端口仍拒
+        assertRejected("marketing-account:8080");
+    }
+
+    @Test
     @DisplayName("数据库与 Redis 的端口必须拒：那是同机上最值钱的两扇门")
     void rejectsDataStorePorts() {
         assertRejected("127.0.0.1:3307");

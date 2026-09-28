@@ -1,15 +1,35 @@
+# ---- 构建产物与运行时残留 ----
 target/
 logs/
 run/
-.admin-jwt-secret
 *.log
+hs_err_pid*
+
+# ---- 根目录本地密钥（缺失时对应鉴权整片拒；每个环境自己生成） ----
+.admin-jwt-secret
+.consumer-jwt-secret
+.env
+
+# ---- IDE / 编辑器 / OS ----
 .idea/
 *.iml
 .vscode/
 .DS_Store
+.settings/
+.classpath
+.project
 
-# ⑥ 的前端依赖与中间产物。注意 static/ui/** 是**故意入仓**的构建产物
-# （clone 下来 mvn package 就能跑出带界面的 jar），所以这里只忽略 node_modules
-# 与 vite 的默认 dist，绝不忽略 static/ui。
-marketing-admin-ui/node_modules/
+# ---- 本机工具状态目录（ZCode 插件等生成，与项目无关，勿提交） ----
+.mimosa/
+.v2c/
+.video_agent/
+.zion-mcp/
+
+# ---- 前端依赖与 vite 默认中间产物 ----
+# 注意：marketing-admin/src/main/resources/static/ui/** 与 static/h5/**
+# 是**故意入仓**的构建产物（clone 下来 mvn package 就能跑出带界面的 jar，
+# 重建唯一入口是 scripts/build-ui.sh / build-h5.sh）。
+# 这里只忽略 node_modules 与 vite 的默认 dist，绝不忽略 static/ui、static/h5。
+node_modules/
 marketing-admin-ui/dist/
+marketing-h5-ui/dist/

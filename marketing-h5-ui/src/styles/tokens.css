@@ -1,0 +1,167 @@
+/* ============================================================
+ * 设计令牌 · Apple 风格（Apple HIG / apple.com 口径）
+ *
+ * 三条纪律：
+ * 1) 中性色是主角。页面底 #f5f5f7、卡片纯白、发丝级描边——层级靠"背景深浅 + 留白"
+ *    表达，不靠彩色，也不靠重阴影。
+ * 2) 蓝色只干一件事：可操作。系统蓝 #0071e3 只出现在按钮/链接/选中态上。
+ *    价格不再是红色大字（那是促销海报，不是 Apple），改回近黑的正文色。
+ * 3) 语义色取自 Apple 系统色板，并且区分"文字用"与"底色用"两档，
+ *    保证亮色下正文对比度站得住。
+ * 亮色在 :root，暗色在 [data-theme=dark] 重映射同一批语义名；视图只引用语义名。
+ * ============================================================ */
+:root {
+  /* —— 表面与描边（Apple 灰阶） —— */
+  --c-canvas: #f5f5f7; /* 页面底：apple.com 的标志性浅灰 */
+  --c-surface: #ffffff; /* 卡片 / 内容面 */
+  --c-surface-2: #fbfbfd; /* 二级面（表头、内嵌块） */
+  --c-surface-3: #ebebee; /* 分组底 / 控件填充 */
+  --c-border: #d2d2d7; /* 发丝描边 */
+  --c-border-strong: #b8b8bf;
+
+  /* —— 文字 —— */
+  --c-text: #1d1d1f; /* Apple 正文近黑 */
+  --c-text-2: #424245;
+  --c-text-muted: #6e6e73; /* Apple 的次级灰，正文可用 */
+  --c-text-faint: #86868b; /* 仅辅助信息 */
+
+  /* —— 强调（系统蓝）：只用于可操作的东西 —— */
+  --c-brand: #0071e3;
+  --c-brand-hover: #0077ed;
+  --c-brand-active: #0062c9;
+  --c-brand-soft: #e5f0fd;
+  --c-brand-contrast: #ffffff;
+
+  /* —— 次强调（琥珀）：补贴/优惠额度这类"价值"信息，克制使用 —— */
+  --c-gold: #8a5a00;
+  --c-gold-soft: #fbf1de;
+
+  /* —— 语义状态（Apple 系统色，文字档已压到可上正文的对比度） —— */
+  --c-success: #248a3d;
+  --c-success-soft: #e3f5e8;
+  --c-warning: #9a5b00;
+  --c-warning-soft: #fbf0dd;
+  --c-danger: #d70015;
+  --c-danger-soft: #ffe5e7;
+  --c-info: #0071e3;
+  --c-info-soft: #e5f0fd;
+
+  /* —— 间距阶（4px 基准，Apple 偏宽松） —— */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* —— 圆角（Apple：控件胶囊，卡片大圆角） —— */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
+  --radius-pill: 980px;
+
+  /* —— 阴影：极轻，层级主要靠底色 —— */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-3: 0 24px 60px rgba(0, 0, 0, 0.18);
+  --ring: 0 0 0 4px rgba(0, 113, 227, 0.28);
+
+  /* —— 材质（Apple 的招牌毛玻璃） —— */
+  --material-bg: rgba(255, 255, 255, 0.72);
+  --material-bg-solid: rgba(255, 255, 255, 0.92);
+  --material-filter: saturate(180%) blur(20px);
+  --hairline: rgba(0, 0, 0, 0.09);
+
+  /* —— 层级 —— */
+  --z-sticky: 10;
+  --z-nav: 20;
+  --z-dropdown: 30;
+  --z-mask: 40;
+  --z-sheet: 50;
+  --z-toast: 60;
+
+  /* —— 动效 —— */
+  --dur: 220ms;
+  --dur-fast: 150ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1); /* Apple 的减速曲线 */
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+
+  /* —— 字体：SF Pro 优先，中文回退 PingFang —— */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans SC", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 15px;
+  --fs-md: 17px; /* Apple 正文基准 */
+  --fs-lg: 21px; /* headline */
+  --fs-xl: 28px;
+  --fs-2xl: 34px;
+  --fs-3xl: 44px;
+  --fs-display: 56px;
+  /* Apple 的标题靠"负字距 + 适中字重"，不靠加粗到爆 */
+  --tracking-display: -0.021em;
+  --tracking-head: -0.015em;
+  --tracking-body: -0.011em;
+
+  /* —— 尺寸 —— */
+  --control-h: 44px;
+  --nav-h: 56px; /* 移动端底部栏 */
+  --header-h: 52px;
+  --sidebar-w: 244px; /* 桌面侧栏 */
+  --measure: 44rem;
+  --shell-max: 1180px; /* 桌面内容容器 */
+  --shell-wide: 1400px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+/* ============================================================
+ * 暗色：Apple 的深色是"真黑页面 + 深灰卡片"，蓝色提亮，
+ * 语义色换成 iOS 深色档的系统色。
+ * ============================================================ */
+[data-theme="dark"] {
+  --c-canvas: #000000;
+  --c-surface: #1c1c1e;
+  --c-surface-2: #232325;
+  --c-surface-3: #2c2c2e;
+  --c-border: #38383a;
+  --c-border-strong: #48484a;
+
+  --c-text: #f5f5f7;
+  --c-text-2: #d2d2d7;
+  --c-text-muted: #98989d;
+  --c-text-faint: #6c6c70;
+
+  --c-brand: #0a84ff;
+  --c-brand-hover: #409cff;
+  --c-brand-active: #6cb2ff;
+  --c-brand-soft: rgba(10, 132, 255, 0.16);
+  --c-brand-contrast: #ffffff;
+
+  --c-gold: #e3b341;
+  --c-gold-soft: rgba(227, 179, 65, 0.14);
+
+  --c-success: #30d158;
+  --c-success-soft: rgba(48, 209, 88, 0.16);
+  --c-warning: #ff9f0a;
+  --c-warning-soft: rgba(255, 159, 10, 0.16);
+  --c-danger: #ff453a;
+  --c-danger-soft: rgba(255, 69, 58, 0.16);
+  --c-info: #0a84ff;
+  --c-info-soft: rgba(10, 132, 255, 0.16);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --ring: 0 0 0 4px rgba(10, 132, 255, 0.4);
+
+  --material-bg: rgba(28, 28, 30, 0.72);
+  --material-bg-solid: rgba(28, 28, 30, 0.92);
+  --hairline: rgba(255, 255, 255, 0.12);
+}

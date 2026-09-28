@@ -19,6 +19,7 @@
         <module>marketing-coupon</module>
         <module>marketing-discount</module>
         <module>marketing-seckill</module>
+        <module>marketing-account</module>
         <module>marketing-admin</module>
         <module>marketing-standalone</module>
     </modules>

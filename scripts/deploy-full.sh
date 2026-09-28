@@ -24,6 +24,20 @@ if [ -z "${ADMIN_JWT_SECRET:-}" ]; then
   exit 1
 fi
 
+# 消费者 token 密钥同理必须在入口拦：漏了会让 account 容器起不来（AccountSecurityConfig
+# 空密钥即抛），而 gateway 侧只是 /api/auth/** 整片 40300 —— 一个"半死不活"的栈比崩掉更难查。
+if [ -z "${CONSUMER_JWT_SECRET:-}" ]; then
+  echo "!! 请先导出 CONSUMER_JWT_SECRET（gateway、marketing-account 以及四个业务服务必须同值，且与 ADMIN_JWT_SECRET 不同）" >&2
+  echo "   四个业务服务要它自验网关透传的那枚签名 token：少了就装不出 ConsumerRequestIdentity，" >&2
+  echo "   交易入口会在第一个请求上炸" >&2
+  echo "   例：export CONSUMER_JWT_SECRET=\$(openssl rand -base64 32)" >&2
+  exit 1
+fi
+if [ "${CONSUMER_JWT_SECRET}" = "${ADMIN_JWT_SECRET}" ]; then
+  echo "!! CONSUMER_JWT_SECRET 不得与 ADMIN_JWT_SECRET 同值：两套凭证必须靠不同密钥隔离" >&2
+  exit 1
+fi
+
 if docker ps --format '{{.Names}}' | grep -q '^mkt-preview-standalone$'; then
   echo "!! LITE 形态正在占用 8090/8085，先执行 ./scripts/stop-preview.sh" >&2
   exit 1
@@ -78,11 +92,12 @@ wait_healthy marketing-gateway 8090 180
 # 冒烟会吃到 28 条"C 端全红"的假失败——排查方向还长得像异步链路坏了，代价很大。
 # 所以这里按路由各打一发真实业务请求，等到 `"code":0` 才算就绪。
 echo "==> 等待五条路由真正可服务（服务发现订阅是懒加载的）"
-CT="Authorization: Bearer ${GATEWAY_TOKEN:-demo-token-123}"
 wait_route() { # url desc 期望片段
   local url=$1 desc=$2 want=$3 body=""
   for _ in $(seq 1 60); do
-    body=$(curl -s -m 5 -H "$CT" "http://127.0.0.1:8090$url")
+    # 不带凭证：这三条探针打的都是游客可读的目录端点（/api/activity/{no}、
+    # /api/coupon/stock/{no}、/api/seckill/activities）。C 端共享 demo token 那一层已删除。
+    body=$(curl -s -m 5 "http://127.0.0.1:8090$url")
     if echo "$body" | grep -q "$want"; then
       echo "    $desc 可服务"
       return 0

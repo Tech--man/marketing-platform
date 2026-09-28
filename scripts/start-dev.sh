@@ -43,6 +43,7 @@ export MYSQL_PORT="$DEV_MYSQL_PORT" REDIS_PORT="$DEV_REDIS_PORT"
 # start_jvm 就会被用到 —— 放在后面等于只给网关配了密钥，聚合进程直接死在健康检查上（实测）。
 # dev 档给固定占位值并让 AdminSecurityConfig 为此打 WARN。
 export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
+export CONSUMER_JWT_SECRET="${CONSUMER_JWT_SECRET:-dev-only-consumer-secret-change-me}"
 # 与密钥一样必须在启动任何 JVM 之前导出：standalone 与 gateway 要在同一个 form 下解析，
 # 否则会出现"业务进程按 LITE 收口、网关按 FULL 放行"这种两半都对但合起来漏水的组合
 export DEPLOY_FORM="${DEPLOY_FORM:-DEV}"
@@ -71,6 +72,10 @@ export ACTIVITY_HOST=127.0.0.1 COUPON_HOST=127.0.0.1 DISCOUNT_HOST=127.0.0.1 SEC
 export ACTIVITY_PORT=8085 COUPON_PORT=8085 DISCOUNT_PORT=8085 SECKILL_PORT=8085
 # 后台与 LITE 同进程：路由指向 standalone 的 8085
 export ADMIN_HOST=127.0.0.1 ADMIN_PORT=8085
+# 账号服务同理：dev 下它聚在 standalone 里，8087 只是 FULL 进程形态的默认端口。
+# 漏这两行的表现与当年漏 ADMIN_HOST 完全同形：POST /api/auth/login 被网关打到
+# 127.0.0.1:8087（那里没人听）→ 500 Connection refused，而冒烟在第一步就停。
+export ACCOUNT_HOST=127.0.0.1 ACCOUNT_PORT=8085
 start_jvm marketing-gateway "$ROOT/marketing-gateway/target/marketing-gateway-1.0.0-SNAPSHOT-exec.jar" "$GATEWAY_OPTS"
 wait_healthy marketing-gateway 8090 60
 

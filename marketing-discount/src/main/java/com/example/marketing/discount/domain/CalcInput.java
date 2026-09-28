@@ -1,5 +1,6 @@
 package com.example.marketing.discount.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.AllArgsConstructor;
@@ -17,6 +18,8 @@ import java.util.Set;
 @AllArgsConstructor
 public class CalcInput {
 
+    /** 由控制器从验过签名的身份里填入；{@code @JsonIgnore} 让请求体根本改不动它 */
+    @JsonIgnore
     private Long userId;
     /** 限定活动（可空：为空则对全部生效规则计算） */
     private String activityNo;

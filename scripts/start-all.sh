@@ -39,15 +39,20 @@ export MYSQL_DB="${MYSQL_DB:-marketing}"
 # 也就不能"原地"来回切；隔离的收益是跨模块 join 由 DB 拦住。
 MYSQL_DB_PER_SERVICE="${MYSQL_DB_PER_SERVICE:-0}"
 
-ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill marketing-admin)
+ALL_SERVICES=(marketing-gateway marketing-activity marketing-coupon marketing-discount marketing-seckill marketing-account marketing-admin)
 SERVICES=("$@")
 [ ${#SERVICES[@]} -eq 0 ] && SERVICES=("${ALL_SERVICES[@]}")
 
 # 后台 token 的 HS256 密钥：gateway 与 admin（进程形态）必须同值，否则签得出验不过。
 # 这里是 dev 档占位值，AdminSecurityConfig 见到它会打一条 WARN；预览/正式由 compose 显式下发。
 export ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-dev-only-secret-change-me}"
+# 消费者 token 用另一把 dev 占位密钥：与后台同值会让两套凭证互通，dev 档也必须分开，
+# 否则"dev 能跑、正式互不通"这种差异会在第一次部署时才暴露。
+export CONSUMER_JWT_SECRET="${CONSUMER_JWT_SECRET:-dev-only-consumer-secret-change-me}"
 [ "${ADMIN_JWT_SECRET}" = "dev-only-secret-change-me" ] \
   && echo "!! ADMIN_JWT_SECRET 未设置，使用 dev 占位密钥（仅限本机开发）" >&2
+[ "${CONSUMER_JWT_SECRET}" = "dev-only-consumer-secret-change-me" ] \
+  && echo "!! CONSUMER_JWT_SECRET 未设置，使用 dev 占位密钥（仅限本机开发）" >&2
 
 # 形态标识：在线配置按它分档。进程形态与容器形态同档，所以这里也是 FULL；
 # 与密钥一样必须在启动任何 JVM 之前导出（六个服务都在同一个 shell 里起）。
@@ -101,16 +106,29 @@ port_of() {
     marketing-coupon) echo 8082 ;;
     marketing-discount) echo 8083 ;;
     marketing-seckill) echo 8084 ;;
+    marketing-account) echo 8087 ;;
     marketing-admin) echo 8086 ;;
   esac
 }
+
+# 漏分支的代价必须是响亮的一条：空端口会让 wait_healthy 去 curl
+# `http://127.0.0.1:/actuator/health`，那不会立刻失败，而是把 150s 的等待跑满
+# 再报"未就绪"——加第一个服务时就是这么踩的（marketing-account 进 ALL_SERVICES
+# 而 port_of 没跟上）。所以在这里逐个先验一遍，起 JVM 之前就把话说死。
+for s in "${SERVICES[@]}"; do
+  [ -n "$(port_of "$s")" ] || {
+    echo "!! $s 在 port_of() 里没有端口映射：健康检查会拿空端口去 curl，等满 150s 才假报未就绪" >&2
+    echo "   新加服务要同时补：ALL_SERVICES、port_of、（若它在 FULL 拓扑里）admin 的 ops.targets" >&2
+    exit 1
+  }
+done
 
 for s in "${SERVICES[@]}"; do start_one "$s"; done
 
 echo "==> 等待健康检查 ..."
 PIDS=()
 for s in "${SERVICES[@]}"; do
-  # 150s 而不是默认 60s：这里可能同时冷启 6 个 JVM（外加抢 MQ/Nacos），
+  # 150s 而不是默认 60s：这里可能同时冷启 7 个 JVM（外加抢 MQ/Nacos），
   # 而 admin 的 Hikari 池是首个请求才建的 —— 实测 60s 会假报"未就绪"，进程其实活着。
   wait_healthy "$s" "$(port_of "$s")" 150 &
   PIDS+=("$!")

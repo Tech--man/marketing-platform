@@ -36,6 +36,12 @@
             <artifactId>marketing-seckill</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- 消费者账号：与后台同一策略，LITE 服役档不为身份件新增常驻进程，直接聚进同一个 JVM -->
+        <dependency>
+            <groupId>com.example.marketing</groupId>
+            <artifactId>marketing-account</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- 管理后台：LITE 服役档不为它新增常驻进程，直接聚进同一个 JVM。
              代价是 +20-40MiB 堆与一份 MVC/Mapper，实测数字见 README 的内存表 -->
         <dependency>

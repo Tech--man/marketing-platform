@@ -36,13 +36,14 @@
 |---|---|---|
 | marketing-common | - | Result/异常、幂等执行器、本地消息表、Lua 工具、MQ 契约 |
 | marketing-open-api | - | 风控 / 分销 / ROI 领域接口与占位实现（自动装配，可替换） |
-| marketing-gateway | 8090 | 路由、Bearer 鉴权、Redis+Lua 滑动窗口限流 |
+| marketing-gateway | 8090 | 路由、两套凭证鉴权（C 端 `ConsumerAuthFilter` + 后台 `AdminAuthFilter`）、Redis+Lua 滑动窗口限流 |
 | marketing-activity | 8081 | 活动状态机、预算 Redis 预扣 + 流水、灰度分流 |
 | marketing-coupon | 8082 | 券模板/库存预热、领券、结果轮询、核销 |
 | marketing-discount | 8083 | 规则 DSL、位图倒排索引、最优组合、分摊、超时降级 |
 | marketing-seckill | 8084 | 分桶预热、Lua 抢购、MQ 异步下单、支付、超时回补 |
-| marketing-admin | 8086 | 管理后台：账号/会话/审计/运维入口（登录、改密踢会话、强制下线、重预热）。LITE 与 dev 下**不新增进程**，聚进 standalone |
-| marketing-standalone | 8085 | LITE 服役档 / dev 开发档的聚合进程：四业务模块 + admin 单 JVM + Redis Stream 消息（见第三节） |
+| marketing-account | 8087 | 消费者账号：注册/登录/刷新/登出/改密/会话与身份事件流水。LITE 与 dev 下**不新增进程**，聚进 standalone |
+| marketing-admin | 8086 | 管理后台：后台账号/会话/审计/运维入口（登录、改密踢会话、强制下线、重预热）。LITE 与 dev 下**不新增进程**，聚进 standalone |
+| marketing-standalone | 8085 | LITE 服役档 / dev 开发档的聚合进程：四业务模块 + 后台 + 账号 单 JVM + Redis Stream 消息（见第三节） |
 
 ## 三、形态与环境
 
@@ -52,8 +53,8 @@
 
 | 形态 | 定位 | 拓扑 | 消息通道 | 数据库 | 可靠性口径 |
 |---|---|---|---|---|---|
-| **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 4 容器：mysql / redis / standalone（四业务模块 + 后台聚合）/ gateway | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
-| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 两种交付形态二选一：**本机进程** 6 JVM（8081-8084、8086 + 8090）／**容器化** 一容器一服务且可 `--scale` 多副本（只有网关发布端口，后台不对外直连）；配 RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库，后台即第 5 库 `marketing_admin`） | 中间件默认全持久化 |
+| **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 4 容器：mysql / redis / standalone（四业务模块 + 后台 + 账号聚合）/ gateway | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
+| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 两种交付形态二选一：**本机进程** 7 JVM（8081-8084、8086、8087 + 8090）／**容器化** 一容器一服务且可 `--scale` 多副本（只有网关发布端口，后台与账号服务不对外直连）；配 RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库，六个库：四业务 + `marketing_admin` + `marketing_account`） | 中间件默认全持久化 |
 | **dev 开发档** | 本机改代码，允许丢数据 | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 不持久化；**淘汰策略仍与 LITE 一致** |
 
 LITE 的省内存**一律不靠牺牲可靠性换**，四条不可退让：淘汰策略必须 `noeviction`
@@ -346,7 +347,7 @@ PROCESSING 状态），需要连同幂等语义一起评估，不是纯性能改
 | ~~消费并行度：FULL 8 线程 / LITE 1 线程~~ 已对齐（默认 8） | 见上文；两形态消费并发不再不等价，但并行度需与连接池一起调（池 30 才吃得住 8 worker） |
 
 数据库账号 `marketing / marketing123`（宿主机端口 **3307**，避开本地 mysqld 占用的 3306）；
-网关演示 Token `demo-token-123`（环境变量 `GATEWAY_TOKEN` 覆盖）。
+C 端种子账号 `demo / demo123456`（`CONSUMER_JWT_SECRET` 签发的 JWT，见"消费者账号体系"一节）。
 
 **构建要求**：Maven 必须跑在 **JDK 17**，`scripts/*.sh` 已通过 `scripts/common.sh` 自动锁定。
 Homebrew 默认 JDK 已滚到 26，Lombok 1.18.x 在其上无法运行注解处理，表现为满屏
@@ -402,7 +403,8 @@ POST /api/seckill/grab
 POST /api/admin/auth/login（账号口令，dev 种子见下）
   → AdminAuthFilter（网关 order -110）验签 → 查 admin:revoked:{jti} / admin:user:bump:{uid}
   → 角色粗筛（写方法拒 read-only）→ 剥掉 Authorization、注入 X-Admin-{User,Role,Jti,Uid}
-  → AuthFilter 见 VERIFIED 标记即让路：后台 token 进不了 C 端，C 端 demo token 也进不了后台
+  → ConsumerAuthFilter（order -105）见 AdminAuthFilter 的 VERIFIED 标记即让路：
+    它托管整片 /api/**，后台那半边靠这个标记而不是靠排除前缀
   → 会话以 admin_session 表为准；改密/停用抬 pwd_version 并写 bump 键 → 整号会话一次杀光
   → 动作写 admin_audit_log（口令类字段写前脱敏），GET /api/admin/audits 查
 ```
@@ -513,8 +515,8 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 
 **为什么同源**：仓库零 CORS 配置，也不打算加。`/ui/**` 由网关新增的 `ui-route` 转给 admin
 （local 与 nacos **两套 profile 各一条**，LITE 复用同一对 `ADMIN_HOST/ADMIN_PORT` 指到 standalone:8085），
-并且必须同时进 `whitelist` 与 `rate-limit` map——**route 不在 map 里 = 完全不限流且不报错**，
-而不在白名单里的后果是"打开后台得先有一个 C 端 demo token"。
+并且必须进 `rate-limit` map——**route 不在 map 里 = 完全不限流且不报错**。
+它不需要任何白名单条目：C 端鉴权托管的是 `\u002fapi/**`，`/ui/**` 与 `/h5/**` 天然不在罩子里。
 
 **history 回退在 admin，不在网关**：`UiWebMvcConfig` 给 `/ui/**` 注册资源并回退 `index.html`，
 网关不该懂前端路由。两个只起进程才看得见的坑（都是真栈实测抓的，纯函数单测两次都绿）：
@@ -552,7 +554,43 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 真浏览器走了一遍登录 → 十页渲染 → 界面改秒杀库存并核对 Redis 分桶真的按 `total-sold` 重建
 （证据 `docs/superpowers/evidence/6-browser-journey.md`）。
 
-## 五、API 速查（经网关 8090；C 端需 `Authorization: Bearer demo-token-123`，后台需登录换来的 admin token）
+## 四·五、消费者账号体系（C 端身份的唯一来源）
+
+C 端不再有"一枚所有人共用的 demo token"。身份链路是：
+
+```
+POST /api/auth/login（identifier + password，BCrypt 校验）
+  → account 服务签发一对 JWT：accessToken(15min) + refreshToken(30d)，会话落 consumer_session
+  → ConsumerAuthFilter（网关 order -105）验签 → 查 consumer:revoked:{jti} / consumer:bump:{uid}
+  → 剥掉 Authorization、注入 X-User-{Id,Name,Jti} + 透传那枚 X-User-Token
+  → 业务服务用同一个 codec 无状态自验（ConsumerRequestIdentity）
+  → 刷新走 /api/auth/refresh：旧 refresh 进 Redis 黑名单，重放即吊销整条会话
+```
+
+三条不可协商的口径：
+
+1. **托管的是整片 `/api/**`，公开读数靠例外清单**。方向反过来写一次，新增一条交易路由就默默免鉴权了。
+   当前例外：活动详情/可参与/预算余量、券模板余量、秒杀列表与分桶余量 —— 判据是"游客本来就该看到"
+   且"不落任何属于某个消费者的数据"。
+2. **身份只认签名 token，不认裸 `X-User-*` 头**。FULL 档业务端口绑 `*:808x`、LITE 的 standalone:8085
+   也发布，直连的人随手一个 `X-User-Id: 70001` 就能读走任何人的卡包 —— 与后台 ③ 同一条理由，
+   冒烟两侧都各钉了一条断言。
+3. **请求体里没有 `userId` 了**。领券/核销/抢购/试算/灰度命中原先由调用方自报归属，现在一律从验过的
+   claims 里取。`CalcInput.userId` 上是 `@JsonIgnore`：反序列化根本不收。
+
+已知边界（写清楚，不藏）：
+- 吊销位与会话作废只在网关判，业务侧是无状态验签 —— 被吊销的 access token 直连业务端口可用到自然过期，
+  上限 15 分钟。与后台同形。
+- `CalcInput.userTags` 仍是调用方声明的标签（会员等级/人群包的来源不在本项目内），本轮没收口。
+- `/api/seckill/grab/result/{token}` 只做登录门，没做本人校验：token 是 UUID 且结果只含状态与单号。
+  `/api/coupon/grant/result/{requestId}` 做了本人过滤（那里返回的是可兑付的券码）。
+- `CONSUMER_JWT_SECRET` 必须与 `ADMIN_JWT_SECRET` 是**不同**的值：同值的话两套凭证的隔离只剩
+  claim 形状的侥幸。deploy-preview/deploy-full 的入口会拒绝同值与留空。
+- 上面这三条语义 + 登出与改密的"当场生效"，都由**冒烟链路 9** 端到端钉住（配对形状：先验有效、
+  再验作废、最后验新状态可用）。五套形态的实跑与它抓到的一处真缺陷（重放时代码按已被轮换掉的
+  `refresh_hash` 找受害会话，必然查不到 → 只拒不吊销）见 `docs/superpowers/evidence/9-identity-five-form-runs.md`。
+
+## 五、API 速查（经网关 8090；C 端需登录换来的 `Authorization: Bearer <accessToken>`，后台需 admin token）
 
 | Method | Path | 说明 |
 |---|---|---|
@@ -563,7 +601,9 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 | POST | /api/discount/calculate | 优惠计算（购物车 → 命中规则 + 行级分摊）。规则读写自 ③ 起只在后台前缀 |
 | POST | /api/seckill/grab · /pay/{orderNo} | 抢购 · 模拟支付回调 |
 | GET | /api/seckill/grab/result/{token} · /activities · /stock/{activityNo} | 轮询 / 活动列表 / 分桶余量 |
-| POST | /api/admin/auth/login · /logout · /password · GET /me | 后台登录 / 登出 / 改自己口令（成功后全会话作废）/ 当前身份。**用 admin token，不是 C 端 demo token** |
+| POST | /api/auth/register · /login · /refresh | 注册 / 登录 / 换一对新凭证。这三个是 `/api/**` 里**仅有的**免 access token 入口（靠网关例外清单，见第四·五节）；refresh 只认请求体里的 refreshToken，且旧值重放 = 整条会话作废 |
+| GET·POST·PUT | /api/auth/me · /sessions · /logout · /password | 当前身份 / 我的会话列表 / 登出（当场失效，不等自然过期）/ 改密（成功后该账号全部会话作废）。都要带 access token |
+| POST | /api/admin/auth/login · /logout · /password · GET /me | 后台登录 / 登出 / 改自己口令（成功后全会话作废）/ 当前身份。**用 admin token，不是消费者 token** |
 | GET | /api/admin/users · /sessions · /audits | 账号 / 在线会话 / 审计，统一 `PageResult`（含 total）；`?mine=true` 只看自己的会话 |
 | PUT | /api/admin/users/{id}/status?status= | 启停账号（仅 admin；停用同时作废其全部会话） |
 | DELETE | /api/admin/sessions/{jti} | 强制下线单个会话（仅 admin） |
@@ -613,16 +653,19 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 358 个单测 / 76 个类：见下
+mvn test                 # 419 个单测 / 82 个类：见下
 cd marketing-admin-ui && npm test    # 46 条前端用例 / 9 个文件（vitest + jsdom，见 ⑥）
+cd marketing-h5-ui && npm test       # 90 条 C 端用例 / 7 个文件（响应形状与 40101/40102 分流）
 ./scripts/build-ui.sh    # ⑥ 唯一的前端重建入口（产物入仓，机器上没 node 也能跑 jar）
 ./scripts/check-ui-dist.sh  # jar 与仓库的 static/ui 逐项 sha256 比对（前提：已 package）
-./scripts/smoke-test.sh  # 端到端 95 条断言（LITE/dev）/ 96 条（FULL 两种形态与每服务一库），
-                         # 八条链路，需服务已启动；差的正是跨进程重预热回执那条
+./scripts/build-h5.sh    # C 端 H5 的唯一重建入口（产物入 static/h5）
+./scripts/check-h5-dist.sh  # 同一道产物闸的 H5 版（前提：已 package）
+./scripts/smoke-test.sh  # 端到端 113 条断言 / 九条链路，需服务已启动
+                         # （LITE 与 dev 各实测 113/113，2026-09-25；FULL 两种形态见第六节矩阵）
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（358 用例 / 76 类）**分九族：
+**单测（419 用例 / 82 类）**分十族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
@@ -637,6 +680,15 @@ cd marketing-admin-ui && npm test    # 46 条前端用例 / 9 个文件（vitest
   只读角色写 403、缺密钥时后台整片拒而 C 端不受影响）、审计摘要脱敏（JSON 与 key=value
   两种形态、驼峰与下划线都盖）；这一族的变异检查是必须的——把"敏感键判定"改成恒 false，
   5 条里红 4 条；把网关的"放行登录口"改成恒真，10 条里红 6 条；
+- **消费者账号（C 端身份）**：codec 的签/验往返（改一个字符就验不过、`exp` 之内容忍时钟偏移、
+  **refresh 不能当 access 用**、换一把密钥签的一律无效、垃圾输入只回 MALFORMED 不抛异常）、
+  登录判定的边界（账号不存在按口令错处理、停用与锁定都先于口令判定、锁定时刻已过不再算锁定、
+  到阈值上锁 15 分钟并清零计数）、限速键"恰好等于限额仍放行"、以及 Redis 取不到时**按放行**
+  （宁可少挡一次撞库，也不让身份链路因为一个计数器而整片不可用——与 `RedisLeaseLock` 同一条取舍）；
+  还有一条是本轮补的**合成用例**："先轮换、再重放旧值"必须吊销那条**还活着**的会话。
+  分开测时两边各自绿（`refreshRotates` 只验 rotate 被调、旧版重放用例把 `findByRefreshHash`
+  stub 成查得到），而真值里 rotate 是同一行就地换摘要 → 旧摘要永远查不到 → 吊销从未发生。
+  变异检查：把实现退回"按摘要找"，这条立即红（`Wanted but not invoked: revoke(...)`）。
 - **在线配置下发（⑤）**：形态解析优先级（`form 行 > GLOBAL 行`，且**别的形态一行都读不到**）、
   逐条类型/边界校验与"未声明即忽略"、快照 JSON 坏了退化成空快照、轮询器版本比对与
   "Redis 抖动时保住现值"、`ConfigSyncer` 让位条件、后台写侧四道裁决（未声明/越界/非法 form 拒、
@@ -739,7 +791,25 @@ H2（`MODE=MySQL`）把未加引号的标识符折成**大写**。所以 ④ 的
 所以**只有源码变了又跳过构建**才会踩到。要验 ⑥ 那一格，别带 `SKIP_BUILD=1`；
 分不清手上镜像新旧时，直接看索引页里的 `build-ui: rev=` 注释，它比 `docker ps` 的启动时间诚实。
 
-**冒烟（95 条断言 / FULL 分进程 96 条，八条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
+**已知噪音 ⑨（两套库布局共用一个 Redis 时的 userId 撞号）**：`per_user_limit` 与"每人一场"的判定
+在 **Redis**，键里带的是 `userId`（`coupon:user:{模板id}:{uid}`、`seckill:bought:{活动号}:{uid}`）。
+而单库布局的账号表在 `marketing.consumer_user`、每服务一库布局在 `marketing_account.consumer_user`，
+两边各自 `AUTO_INCREMENT` —— 同一份 MySQL 卷 + 同一个 Redis 上换过布局之后，**同一个号码会属于两个人**。
+实测：每服务一库档新注册的冒烟账号从 70002 开始，而 70002-70008 在单库那套里已被上午的探针用过，
+于是"全新的人"一出生 Redis 里就有它的限领标记，链路 1 与链路 6 六条断言一起红在 `41000 已超过单人限领`
+上——红得极像"限领逻辑坏了"，实际是共用了一个号码。处置在冒烟侧：`require_consumer` 拿到注册响应里的
+`uid` 后，只删这个刚出生 uid 自己的那两类键（不扫别人的）。生产上不会遇到，因为一套部署只有一种布局；
+**但如果哪天让布局变成可热切的东西，这条就是必须处理的语义**（限领状态得跟着账号体系走，而不是跟着编号）。
+
+**已知噪音 ⑩（换布局不换 Redis：库存桶会带着上一套布局的账）**：与 ⑨ 同一个根，只是这次是**库存**。
+分桶余量存在 Redis（`seckill:stock:<活动号>:<桶>`），而"按 `total-sold` 重建桶"读的是**当前布局那个库**的
+`sold`。实测这一轮：每服务一库档跑完（那套库里 sold=9，桶被重建成 4991）→ 换回容器档（单库 `marketing`，
+`sold` 是 118）→ 冒烟的恒等式立刻红成 `remain=4991 sold=118 total=5000`，差 109。判据没错、库存也没错，
+错的是**桶是上一套布局的账**。处置：换布局后先 `./scripts/reset-demo-data.sh`（它走 ③ 的后台端点，
+同事务里 `reheat(force=true)` 按当前库的 `total-sold` 重建桶），再跑冒烟 —— 这一档照做之后 114/114 全绿。
+④ 大盘的"缓存与账不符"三条恒等式盯的就是这件事：它在面板上看得见，不是只能靠冒烟撞出来。
+
+**冒烟（LITE/dev 113 条断言 / FULL 两种形态与每服务一库 114 条，九条链路）**：链路 0 活动中心（草稿→提审→灰度→上线→终态、非法流转 41001、
 重复活动号 41000、超预算 41003、灰度命中、可参与位切换）+ **预算算术守卫**：
 被拒扣减不留痕、重复扣减在 `data` 里标 `REPLAYED`、同 bizKey 换活动仍真扣 `DEDUCTED`；
 链路 1 领券；链路 2 优惠计算；链路 3 秒杀 + 并发防超卖；
@@ -789,28 +859,50 @@ URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己�
 **缺文件必须 404 而不是回退成一份 HTML**（否则 js 报的是"模块加载失败"，把人支去查构建）；
 最后一条是这段的边界所在——`无凭证 GET /api/admin/users` 仍是 `40100`：**加了界面不等于加了口子**。
 
+**链路 9 消费者身份语义**：这一段刻意放在最后（它会把主会话烧掉，前八条都在用那枚 token），
+断的是三条"错了不会有人立刻发现"的语义：**轮换过的旧 refresh 再出现 = 整条会话作废**
+（先验 `/me` 通、换新凭证、旧值重放吃 40100，然后再用**刚换到的那枚新 access** 打 `/me` 必须是
+40102 —— 只断 40100 分不出"拒了这一次刷新"和"吊销了整条会话"，而这两件事在实现里恰好是分开坏的）；
+**登出当场生效**（另开一条会话，登出后那枚 access 立刻 40102，而不是等 15 分钟自然过期）；
+**改密作废全部会话**（落在链路 6 那个探针账号上，不能拿 demo 做——改种子口令会让下一轮登录直接红；
+断旧 access 立刻 40102 + 新口令能登录 + 旧口令仍被拒且对外文案不变）。
+这一段的三条红各教会了一件事，都写进了上面的"脚本四条不变式"。
 
-**脚本两条不变式**（都是踩过才写下的）：① `poll` 的针必须与紧随其后的断言针一致——轮询超时照样把
+
+**脚本四条不变式**（都是踩过才写下的）：① `poll` 的针必须与紧随其后的断言针一致——轮询超时照样把
 最后一次响应打出来，只查 `"couponCode"` 这个键名会让 `PROCESSING`（`"couponCode":null`）蒙过断言，
 于是红点落在下一行的"核销 40000 couponCode 必填"上，看着像核销坏了（FULL 进程形态首跑那 1 条红就是它）；
-② `expect` 拒绝空针，因为 `grep -q ""` 恒真，"上一步取值失败"会伪装成"这条通过"。
+② `expect` 拒绝空针，因为 `grep -q ""` 恒真，"上一步取值失败"会伪装成"这条通过"；
+③ **JSON 请求体先收成变量再交给 curl**：`expect "..." '针' "$(curl -d "{\"k\":\"$V\"}")"` 这种
+两层引号套在命令替换里的写法，送出去的 body 是残缺的（服务侧回 40000"请求体不是可解析的 JSON"，
+而且一发请求炸出两条解析错误），把 body 提成 `BODY='{"k":"…"}'` 就正常。顶层赋值
+（`R=$(curl -d "{…}")`）不受影响——所以老链路一直是对的，链路 9 新写的四条红全是这个成因；
+④ **直连探针必须自己挑一个真在听的进程，且接受条件要排除 404**：`/api/coupon/usable` 打到 8081
+（activity）会回 `40400 资源不存在`，那也是一段带 `"code"` 的 JSON，于是"被拒"与"路由不在这"同形。
+判据收紧成"只接受 `0` 或 `401xx`"，候选端口按服务写死（券是 8082/8085，容器形态退到 `docker exec`）。
 
 并发段的库存基线**从接口读、不写死**，并断言恒等式 `分桶余量 + DB 已售 == 总库存`
 （对超时取消抖动免疫，超卖/漏扣/回补异常都会破坏它）。因此可连续重复运行：已实测连跑 3 轮全绿。
 
 **五套形态入口的端到端覆盖矩阵**（每格都是真跑 `smoke-test.sh` 的结果，不是推断）。
 断言集在长（S2 加了 5 条预算/消息守卫，后台那批加了链路 4 的 13 条，⑤ 又加了链路 5 的 20 条，
-③ 加了 drain 落表 2 条 + 链路 6 的 7 条，④ 加了链路 7 的 8 条，⑥ 加了链路 8 的 6 条），
+③ 加了 drain 落表 2 条 + 链路 6 的 7 条，④ 加了链路 7 的 8 条，⑥ 加了链路 8 的 6 条，
+**消费者账号加了链路 9 的 12 条 + 链路 6 的 C 端对偶 2 条**），
 所以标了跑时的断言数——**低于当前基数的格子只代表"当时那一版全绿"，不等于已在新断言下复跑过**。
+2026-09-25 这一轮把五套形态**全部按新基数各跑绿过一遍**（跑次、每档的红点与成因、
+以及链路 9 当场抓到的那处真缺陷，见 `docs/superpowers/evidence/9-identity-five-form-runs.md`）；
+2026-09-28 这一轮补掉它留的两格：**2 副本档按 114 复跑**（含跨副本限领与 jobs 持锁分布，
+见 `docs/superpowers/evidence/9-two-replica-and-capacity.md`）与 **`load-probe.sh` 容量重新取数**
+（净排空 106 msg/s，登录口 BCrypt 与业务同 JVM 之后 LITE 的异步口径没有塌）。
 
 | 形态 | 最近一次 | 通道证据 | ④ 读数 / ⑥ 界面证据 |
 |---|---|---|---|
-| LITE 服役档（容器） | **95/95**（2026-09-24，八条链路全集，⑥ dist 入镜像后复跑） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 517-599 MiB/768MiB（本轮跑完 550.4） | `mode=local+proxy`：`self` 走 local、`marketing-gateway` 走 proxy（网关在这一档仍是独立进程）；Stream 六条（两个业务 topic + 审计 + 三个 reheat type）全 `applicable=true`；恒等式基线 0。**⑥ 的真浏览器旅程就在这档**（`evidence/6-browser-journey.md`）：十页逐屏渲染核对 + 一次真写（秒杀总库存改 5010 → 直读 Redis 求和 4725==5010-285，分桶真的重建了），并抓到"点大盘整页空白"那个只有真人点才看见的 bug |
-| dev 开发档（本机 2 JVM） | **95/95**（2026-09-24，八条链路全集，⑥ dist 由 `start-dev.sh` 现场 `mvn package` 打进 standalone） | 同上；`ownForm=DEV`；`reset-demo-data.sh` 在这一档实测（复位后恒等式 `分桶余量+已售==总库存` 自洽） | 同上（`mode=local+proxy`、判活里 `marketing-standalone=true`、四个业务进程名 `null`=本档不适用）；standalone 本机 RSS 175 MiB 是**上一轮（89 条那趟）的读数，本轮复跑没重测**。**⑥ 在这一档验的是"同一份 dist 换一种装配"**：`/ui/` 由 standalone 里的 admin 模块发出，六条链路 8 断言全绿（含 `no-store`、深链回退、缺文件 404） |
-| FULL · 本机进程形态 | **90/90**（2026-09-24；⑥ 未在此档复跑，同一份 jar 已由容器档与 dev 档两头夹住。从每服务一库档换回来时按脚本注释跑了一次 `reset-demo-data.sh`，未做任何 SQL 清理。"A→B 原地切换零清理"的那条证据仍是第一轮那趟） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支；裸头直连 `:8081` 被拒而带 token 放行（这一档端口真的绑 `*`，是最需要这条的形态） | `mode=proxy` 六目标全 OK（每份 150-320 样本）；两个业务 topic 显式 `applicable=false` + RocketMQ 说明、`mkt:audit:pending` 仍 `true`；恒等式的"修"走 ack 轮询到 `DONE` 才要求面板回落 |
-| FULL · 本机进程 · 每服务一库隔离档 | **90/90**（2026-09-24） | 数据按服务落 5 个库；后台会话/审计确实写进第 5 库 `marketing_admin`，与单库 `marketing` 里的旧数据互不串。换布局需先跑一次 `reset-demo-data.sh`（这一档实测：`marketing_seckill` 里 `sold=0` → 复位后分桶合计 5000 自洽）。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）| 跨库发现唯一被真正用到的一档：`backlog.schemas` 一次列出 5 个库并逐库独立（缺表的库不进列表、某库查询失败只让那一行 `-1`）。**④ 在这里抓到了真漂移**：面板开局报 budget=1/coupon=1/seckill=1，那是上一套布局留在 Redis 里的缓存对不上本布局的 DB——`information_schema` 那段 SQL 存在的意义就是让这种偏差看得见 |
-| FULL · 容器化 1 副本 | **96/96**（2026-09-24，八条链路全集，镜像含 ⑥ dist） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 `mkt-full-marketing-activity-1` 写回（消费组 `owning-exec` 实测 2 consumers、pending 0）；链路 6 的直连探测走 `docker exec` 进容器这条路。**⑥ 在这一档只这一格能验**：`ui-route` 的 `lb://` 那条、以及重预热页的类型清单（admin 自己 `/cache/types` 实测返回 `[]`，靠 ④ 面板并集才有得选），见 `docs/superpowers/evidence/6-reheat-full-container.md` | `mode=proxy` 且 target 主机名是 **compose service 名**（`http://marketing-activity:8081/...` 六条全 OK）——这一档的清单由 `OPS_T_*` 覆写，admin 的 yml 默认值是进程拓扑的 `127.0.0.1`，在容器里指向自己。**面板的"进程存活"在这一档不可信**：activity/coupon/admin 显示"没在跑"而 `docker ps` 说它们在，因为判活读的是 ⑤ 的 schema 自述键、而"无可改参数的服务不写自述"（已记 TODO，界面只是忠实渲染） |
-| FULL · 容器化 2 副本（seckill + coupon） | 34/34（未按 95 复跑） | 第三节的多副本三条证据 | 未跑（面板没验过多副本；两副本时 `liveness` 与 `jobs` 的持锁者分布是这一格唯一的新信息。⑥ 也没验过——两副本时 `ui-route` 只会落到其中一个 admin，界面写动作的审计归属值得单独走一趟） |
+| LITE 服役档（容器） | **113/113**（2026-09-25，九条链路全集；账号体系与 ⑥ dist 都在镜像里） | Redis Stream 键 + XDEL 生效（跑完 `mkt:audit:pending` 与业务 topic 的 XLEN 恒 0）；`local_message` 零在途、键形 `grant:<requestId>` 两侧一致；`ownForm=LITE` 且跑完 `admin_config` 归零；重预热走**本进程同步**分支；standalone 常驻 517-599 MiB/768MiB（本轮跑完 550.4） | `mode=local+proxy`：`self` 走 local、`marketing-gateway` 走 proxy（网关在这一档仍是独立进程）；Stream 六条（两个业务 topic + 审计 + 三个 reheat type）全 `applicable=true`；恒等式基线 0。**⑥ 的真浏览器旅程就在这档**（`evidence/6-browser-journey.md`）：十页逐屏渲染核对 + 一次真写（秒杀总库存改 5010 → 直读 Redis 求和 4725==5010-285，分桶真的重建了），并抓到"点大盘整页空白"那个只有真人点才看见的 bug |
+| dev 开发档（本机 2 JVM） | **113/113**（2026-09-25，九条链路全集，⑥ dist 由 `start-dev.sh` 现场 `mvn package` 打进 standalone） | 同上；`ownForm=DEV`；**这一档第一次跑是红的**：`start-dev.sh` 没发 `ACCOUNT_HOST/ACCOUNT_PORT`，网关把 `/api/auth/login` 打到没人听的 127.0.0.1:8087 → 500，与当年漏 `ADMIN_HOST` 同形；补上两行后全绿。（`reset-demo-data.sh` 在这一档的实测是 **09-24 那趟**的记录，本轮没重跑） | 同上（`mode=local+proxy`、判活里 `marketing-standalone=true`、四个业务进程名 `null`=本档不适用）；standalone 本机 RSS 175 MiB 是**上一轮（89 条那趟）的读数，本轮复跑没重测**。**⑥ 在这一档验的是"同一份 dist 换一种装配"**：`/ui/` 由 standalone 里的 admin 模块发出，六条链路 8 断言全绿（含 `no-store`、深链回退、缺文件 404） |
+| FULL · 本机进程形态 | **114/114**（2026-09-25，九条链路全集；这一档的第七个 JVM 就是 `marketing-account:8087`，`start-all.sh` 的 `port_of` 补上之前它根本起不来——健康检查拿空端口 curl，等满 150s 再假报"未就绪"） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支（这就是比 LITE 多的那一条断言）；裸头直连 `:8082` 被拒而带签名 token 放行（这一档端口真的绑 `*`，是最需要这条的形态）。链路 9 的三条身份语义在这一档同样全绿
+| FULL · 本机进程 · 每服务一库隔离档 | **114/114**（2026-09-25，九条链路全集；`marketing_account` 是这一档的第 6 个库，`init/01-schema.sql` 补了建库与授权，现存卷走 `docker/mysql/migrate/2026-09-25-account-db.sql`） | 数据按服务落 6 个库；后台会话/审计写进 `marketing_admin`，消费者账号/会话/身份事件写进 `marketing_account`，与单库 `marketing` 里那套互不串。**这一档第一次跑红了 6 条**：不是账号体系坏了，是两套布局的 `userId` 撞号 + 共用同一个 Redis（详见第六节 已知噪音 ⑨），处置在冒烟侧。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）| 跨库发现唯一被真正用到的一档：`backlog.schemas` 一次列出 5 个库并逐库独立（缺表的库不进列表、某库查询失败只让那一行 `-1`）。**④ 在这里抓到了真漂移**：面板开局报 budget=1/coupon=1/seckill=1，那是上一套布局留在 Redis 里的缓存对不上本布局的 DB——`information_schema` 那段 SQL 存在的意义就是让这种偏差看得见 |
+| FULL · 容器化 1 副本 | **114/114**（2026-09-25，九条链路全集，镜像含账号体系 + ⑥ + H5 产物。第一次跑红 1 条是 已知噪音 ⑩ 那件换布局未重预热的事，`reset-demo-data.sh` 之后复跑全绿） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 owning 容器写回；链路 6 的直连探测走 `docker exec` 进容器这条路（C 端那条对偶断言在这一档正是这么打的）。**⑥ 在这一档只这一格能验**：`ui-route` 的 `lb://` 那条、以及重预热页的类型清单（admin 自己 `/cache/types` 实测返回 `[]`，靠 ④ 面板并集才有得选）。上一格（09-24，96/96）的读数与证据仍在 `docs/superpowers/evidence/6-reheat-full-container.md`，含消费组 `owning-exec` 2 consumers / pending 0 | `mode=proxy`，**target 从六个变成七个**：`marketing-account` 进了可抓清单且 `source=proxy status=OK`（这一档的清单由 `OPS_T_*` 覆写，8087 也补进了 `OpsTargets` 的端口正面清单）。**#82 在这一档当场复现**：`liveness` 里 activity/coupon/admin 报 `false` 而 `docker ps` 说它们在跑（判活读的是 ⑤ 的 schema 自述键，无可改参数的进程不写自述）；账号进程**故意不在**判活清单里——宁可这一格读数缺席，也不新增一条错读数 |
+| FULL · 容器化 2 副本（seckill + coupon） | **114/114**（2026-09-28 01:51，按新基数复跑） | 第三节的多副本三条证据 | 跨副本限领**实测只生效一次**（新账号 24 发并发打两个 coupon 副本：受理 1、41000 23、落库 1）；`jobs` 出现**两个不同持锁者**，三个任务各只有一个 holder。`liveness` 里 activity/coupon/admin 报 `false` = 已知 #82 复现，非新缺陷。**仍未跑**：admin 也起两副本时 `ui-route` 落到哪一个实例、界面写动作的审计归属（本轮只 scale 了 seckill+coupon，admin 单副本，这一条给不出答案） |
 
 ## 七、扩展点（占位 → 生产的升级路径）
 
@@ -828,29 +920,40 @@ URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己�
 
 ```
 marketing-platform/
-├── pom.xml                     # 父 POM（版本矩阵统一管理）
-├── marketing-common/           # 幂等/本地消息/Lua/Result/异常（自动装配）
+├── pom.xml                     # 父 POM（版本矩阵统一管理；两份前端不进 reactor）
+├── marketing-common/           # 幂等/本地消息/Lua/Result/异常 + 两套签名 token（自动装配）
 ├── marketing-open-api/         # 风控/分销/ROI 领域接口 + 占位实现
-├── marketing-gateway/          # 8090 路由/鉴权/限流
+├── marketing-gateway/          # 8090 路由 / C 端与后台两套鉴权 / 限流
 ├── marketing-activity/         # 8081 状态机/预算/灰度
 ├── marketing-coupon/           # 8082 券中心
 ├── marketing-discount/         # 8083 优惠计算引擎
 ├── marketing-seckill/          # 8084 秒杀中心
-├── marketing-admin/            # 8086 后台：账号/会话/审计/运维入口（LITE 与 dev 聚进 standalone）
+├── marketing-account/          # 8087 消费者账号：注册/登录/刷新/登出/改密/会话/身份事件
+├── marketing-admin/            # 8086 后台：账号/会话/审计/运维入口 + 两份静态产物 /ui /h5
+├── marketing-standalone/       # 8085 LITE 与 dev 的聚合进程（四业务 + 后台 + 账号同 JVM）
+├── marketing-admin-ui/         # ⑥ 后台 SPA 源码（Vue3 + vite，不进 maven 生命周期）
+├── marketing-h5-ui/            # C 端 H5 源码（同一套产物纪律：dist 入仓到 static/h5）
 ├── docker/
-│   ├── docker-compose.prod.yml    # FULL 扩容档中间件：MySQL/Redis/RocketMQ/Nacos/Prometheus
-│   ├── docker-compose.preview.yml # LITE 服役档全栈（2 JVM 容器 + AOF/noeviction/restart/日志轮转）
-│   ├── docker-compose.data.yml    # 常驻数据层（mysql 单库 + redis AOF），三套形态共用
-│   ├── mysql/init/01-schema.sql   # 4 库 DDL + 种子数据（FULL，自动执行）
-│   ├── mysql/init-lite/           # 单库 DDL + 种子数据（数据层默认，自动执行）
-│   ├── mysql/init/01-schema.sql   # 四库布局（可选隔离档，配合 MYSQL_DB_PER_SERVICE=1）
+│   ├── docker-compose.data.yml     # 常驻数据层（mysql + redis AOF），三套形态共用
+│   ├── docker-compose.preview.yml  # LITE 服役档全栈（standalone + gateway 两容器）
+│   ├── docker-compose.prod.yml     # FULL 中间件：RocketMQ/Nacos/Prometheus
+│   ├── docker-compose.full-app.yml # FULL 应用侧：一容器一服务，可 --scale
+│   ├── mysql/init-lite/            # 单库 DDL + 种子（数据层默认，自动执行）
+│   ├── mysql/init/                 # 六库布局（配合 MYSQL_DB_PER_SERVICE=1）
+│   ├── mysql/migrate/              # 现存卷的增量迁移（有守卫，重复执行 no-op）
+│   ├── rocketmq/                   # 两套 broker conf：进程形态广播 127.0.0.1，容器形态广播 host.docker.internal
 │   └── prometheus/prometheus.yml
 └── scripts/
-    ├── common.sh               # 公共前置：JDK 17 锁定 + 健康等待
+    ├── common.sh               # 公共前置：JDK 17 锁定 + 健康等待 + 端口归属自检
     ├── start-dev.sh / stop-dev.sh             # dev 开发档（2 个本机 JVM）
     ├── deploy-preview.sh / stop-preview.sh    # LITE 服役档（全栈容器）
-    ├── start-all.sh / stop-all.sh             # FULL 扩容档（5 个 JVM）
-    └── smoke-test.sh           # 三链路端到端冒烟（三套形态通用）
+    ├── start-all.sh / stop-all.sh             # FULL 扩容档·本机进程（7 个 JVM，含 account）
+    ├── deploy-full.sh                         # FULL 扩容档·容器化（可 --scale 多副本）
+    ├── smoke-test.sh                          # 九条链路端到端冒烟（三套形态通用）
+    ├── load-probe.sh                          # 容量夹具：按业务落库数算端到端，不看队列长度
+    ├── reset-demo-data.sh                     # 演示容量复位
+    └── build-ui.sh / check-ui-dist.sh         # ⑥ 后台产物的唯一重建入口 + jar/仓库 sha256 对拍
+        build-h5.sh / check-h5-dist.sh         # C 端 H5 同一条纪律的两个脚本
 ```
 
 种子数据：活动 `ACT2026001`、券模板 `CT2026001`(5元无门槛)/`CT2026002`(满100减20)、

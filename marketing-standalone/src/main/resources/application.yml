@@ -69,6 +69,28 @@ marketing:
         # 预览容器形态由 compose 用 OPS_GATEWAY_HOST 覆成服务名——同机不同容器时
         # 127.0.0.1 指的是自己，那条读数会变成一条 ERROR 而不是假绿。
         marketing-gateway: ${OPS_GATEWAY_HOST:127.0.0.1}:8090
+  # 消费者账号同样聚进本进程：CONSUMER_JWT_SECRET 必须在 standalone 与 gateway 两处同值下发。
+  # 属性只在 marketing-account 自己的 application.yml 里写不够 —— 一个应用只加载一份配置文件，
+  # standalone 加载的是它自己那份。少了 marketing.account.jwt-secret 是启动即失败（响亮），
+  # 少了 marketing.consumer.token-secret 则是条件 bean 安静地缺席，拖到第一个登录请求才炸。
+  account:
+    jwt-secret: ${CONSUMER_JWT_SECRET:}
+    access-ttl-seconds: ${CONSUMER_TOKEN_TTL:900}
+    refresh-ttl-seconds: ${CONSUMER_REFRESH_TTL:2592000}
+    # 下面这些也必须在这里写一份：standalone 只加载它那一份 yml，marketing-account 自己的
+    # application.yml 在 LITE 里根本不会被读。少一条不是报错，而是那些环境变量（CONSUMER_MAX_FAIL /
+    # CONSUMER_LOGIN_IP_LIMIT / CONSUMER_REGISTER_IP_LIMIT …）在服役档静默失效 ——
+    # 调了没反应，且没有任何地方告诉你没反应。与 consumer.token-secret 同一族坑。
+    clock-skew-seconds: 30
+    max-fail-count: ${CONSUMER_MAX_FAIL:5}
+    lock-minutes: ${CONSUMER_LOCK_MINUTES:15}
+    login-ip-limit: ${CONSUMER_LOGIN_IP_LIMIT:5}
+    login-ip-window-seconds: ${CONSUMER_LOGIN_IP_WINDOW:60}
+    register-ip-limit: ${CONSUMER_REGISTER_IP_LIMIT:10}
+    register-ip-window-seconds: ${CONSUMER_REGISTER_IP_WINDOW:3600}
+    max-active-sessions: ${CONSUMER_MAX_SESSIONS:10}
+  consumer:
+    token-secret: ${CONSUMER_JWT_SECRET:}
 
 management:
   endpoints:

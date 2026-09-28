@@ -45,6 +45,14 @@ management:
     tags:
       application: ${spring.application.name}
 
+# C 端身份：业务服务不采信裸 X-User-Id 头，而是自己验网关透传的那枚签名 token。
+# 这个属性缺失时 ConsumerRequestIdentity 这个 bean 会安静地缺席（它是 @ConditionalOnProperty
+# 装的），拖到第一个登录请求才炸 —— 所以四个业务模块与 standalone 都要显式声明，
+# 和 marketing.admin.jwt-secret 同一条口径。
+marketing:
+  consumer:
+    token-secret: ${CONSUMER_JWT_SECRET:}
+
 logging:
   level:
     com.example.marketing: INFO

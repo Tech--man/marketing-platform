@@ -22,7 +22,15 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 GW="${GW:-http://127.0.0.1:8090}"
-TOKEN="${GATEWAY_TOKEN:-demo-token-123}"
+# C 端身份现在是真账号：共享 demo token 那一层已删除，压测必须先登录。
+CID="${CONSUMER_IDENTIFIER:-demo}"
+CPWD="${CONSUMER_PASSWORD:-demo123456}"
+TOKEN=$(curl -s -m 25 -X POST "$GW/api/auth/login" -H 'Content-Type: application/json' \
+  -d "{\"identifier\":\"$CID\",\"password\":\"$CPWD\"}" \
+  | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+# 取不到 token 就停：否则整轮压测会打出 100% 的 401，曲线看着像"系统被打穿了"，
+# 真因只是没登录
+[ -n "$TOKEN" ] || { echo "!! C 端登录失败（$GW/api/auth/login，identifier=$CID）—— 压测无法继续" >&2; exit 1; }
 export GW AUTH="Authorization: Bearer $TOKEN"
 export TPL="${TPL:-CT2026001}"
 N="${1:-600}"
@@ -50,29 +58,65 @@ persisted() {
 }
 now() { python3 -c 'import time;print(f"{time.monotonic():.3f}")'; }
 grant() {
-  curl -s -o /dev/null -w '%{http_code}\n' -m 20 -X POST "$GW/api/coupon/grant" \
+  # 必须同时留 HTTP 码和业务码。只留 HTTP 码的话，"已超过单人限领"(41000) 会被算成受理
+  # —— 平台对所有业务失败都回 HTTP 200 + 信封错误码，于是 accepted 虚高，
+  # 下面那句"等 persisted 追上 accepted"就会空转到 900 秒超时。
+  # 单账号身份时代这条从假设变成了日常：额度是每人一份的，用完就全是 41000。
+  local out http
+  out=$(curl -s -m 20 -w '\n%{http_code}' -X POST "$GW/api/coupon/grant" \
     -H "$AUTH" -H 'Content-Type: application/json' \
-    -d "{\"requestId\":\"$RUN-$1\",\"userId\":$((UBASE+$1)),\"templateNo\":\"$TPL\"}"
+    -d "{\"requestId\":\"$RUN-$1\",\"templateNo\":\"$TPL\"}")
+  http=$(echo "$out" | tail -1)
+  echo "$http $(echo "$out" | head -1 | sed -n 's/.*"code":\([0-9]*\).*/\1/p')"
 }
+
+# 身份改成单账号之后，per_user_limit 直接给并发量封顶：所有请求都是同一个人，
+# 超过限领的那部分是 41000 —— 而它回的是 HTTP 200 + 信封里的错误码，下面按
+# `^200$` 统计的"受理数"会把它一起算进去，于是"异步排空能力"被读成"排空得真快"。
+# 上一版靠每个 worker 自报一个不同 userId 绕开，现在自报不改变得了，
+# 所以这道护栏必须显式存在：宁可不出数，也不出一条假的曲线。
+LIMIT_NEED="$N"
+PL=$(docker exec "$MYSQL_C" mysql --default-character-set=utf8mb4 -umarketing -pmarketing123 -N -e \
+  "SELECT per_user_limit FROM $SCHEMA.coupon_template WHERE template_no='$TPL';" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$PL" ]; then
+  echo "!! 查不到模板 $TPL 的 per_user_limit（$SCHEMA.coupon_template）—— 无法判断这轮压测能不能测到东西" >&2
+  exit 1
+fi
+if [ "$PL" -lt "$LIMIT_NEED" ]; then
+  echo "!! 模板 $TPL 的 per_user_limit=$PL < 每轮请求数=$LIMIT_NEED" >&2
+  echo "   单账号身份下超出的请求会被同步判 41000、根本不进队列，排空曲线是假的。" >&2
+  echo "   用后台 API 建一张 per_user_limit>=$LIMIT_NEED 的专用压测模板，再以 TPL=<新模板号> 重跑；" >&2
+  echo "   或把每轮请求数收到 $PL 以内（那测的是限领拦截，不是异步排空能力）。" >&2
+  exit 1
+fi
+echo "   压测模板 $TPL per_user_limit=$PL >= 每轮 $LIMIT_NEED，继续"
 
 export -f grant
 for r in $(seq 1 "$ROUNDS"); do
   RUN="PROBE$(date +%s)$r"
-  # 每轮换一段全新 userId：券模板 per_user_limit=1，复用会被限领拒掉而测不出真实吞吐
-  UBASE=$(python3 -c 'import time;print(int(time.time())%9000*1000+100000)')
-  export RUN UBASE
+  export RUN
   T0=$(now)
   seq 1 "$N" | xargs -P "$PAR" -I@ bash -c 'grant @' > /tmp/probe-codes.$r
   T1=$(now)
   L=$(xl)
-  OK=$(grep -c '^200$' /tmp/probe-codes.$r || true)
+  # 受理 = HTTP 200 且业务码 0。两者都要：42900 是 HTTP 429，41000 是 HTTP 200 + 业务码
+  OK=$(awk '$2=="0"{c++} END{print c+0}' /tmp/probe-codes.$r)
+  if [ "$OK" = "0" ]; then
+    # 一条都没受理就别等排空：等 900 秒只会得到一条"排空很慢"的假结论。
+    echo "!! 本轮 0 条受理（$N 发全被同步拒绝）。单账号身份下最常见的原因是" >&2
+    echo "   这个登录名已经把模板 $TPL 的每人限领额度用完了 —— 换 CONSUMER_IDENTIFIER" >&2
+    echo "   指向一个新账号，或建一张 per_user_limit 更大且未消耗的专用压测模板。" >&2
+    echo "   业务码分布: $(awk '{print $2}' /tmp/probe-codes.$r | sort | uniq -c | tr '\n' ' ')" >&2
+    exit 1
+  fi
   for _ in $(seq 1 900); do [ "$(persisted)" -ge "$OK" ] && break; sleep 1; done
   T2=$(now)
   python3 - "$N" "$T0" "$T1" "$L" "$T2" "$r" /tmp/probe-codes.$r <<'PY'
 import sys, collections
 n = int(sys.argv[1]); t0, t1 = float(sys.argv[2]), float(sys.argv[3]); L = int(sys.argv[4]); t2 = float(sys.argv[5]); rnd = sys.argv[6]
 codes = collections.Counter(l.strip() for l in open(sys.argv[7]) if l.strip())
-ok = codes.get('200', 0)
+# 每行是 "<http> <业务码>"；受理 = "200 0"
+ok = codes.get('200 0', 0)
 send = max(t1 - t0, .001); drain = max(t2 - t1, .001)
 print(f"轮 {rnd}: {n} 条 {dict(codes)}（受理 {ok}，其余为限流/业务拒绝）")
 print(f"   入口 {send:5.2f}s → 受理 {ok/send:5.0f} req/s ｜ 端到端 {ok/max(t2-t0,.001):5.0f} msg/s"

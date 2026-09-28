@@ -1,3 +1,4 @@
 com.example.marketing.common.config.MarketingCommonAutoConfiguration
 com.example.marketing.common.config.ConfigCommonAutoConfiguration
 com.example.marketing.common.config.AdminSecurityAutoConfiguration
+com.example.marketing.common.config.ConsumerSecurityAutoConfiguration

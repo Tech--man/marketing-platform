@@ -157,7 +157,7 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
         body.put("code", code);
         body.put("message", message);
         body.put("data", null);
-        return AuthFilter.writeJson(exchange.getResponse(), status, body);
+        return GatewayResponses.writeJson(exchange.getResponse(), status, body);
     }
 
     private boolean isPermitted(String path) {

@@ -105,7 +105,7 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
                     body.put("message", "请求过于频繁，请稍后再试");
                     // 排队码：秒杀场景前端凭此进入排队页轮询
                     body.put("data", Map.of("queueCode", "Q" + now));
-                    return AuthFilter.writeJson(exchange.getResponse(), HttpStatus.TOO_MANY_REQUESTS, body);
+                    return GatewayResponses.writeJson(exchange.getResponse(), HttpStatus.TOO_MANY_REQUESTS, body);
                 });
     }
 

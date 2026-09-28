@@ -49,6 +49,9 @@ public class GatewayConfigDefinitions implements ConfigDefinitionProvider {
                 ConfigDefinition.ofInt(keyOf("admin-coupon-route"), 50, 1, MAX_LIMIT, "券模板管理写每秒阈值"),
                 ConfigDefinition.ofInt(keyOf("admin-discount-route"), 50, 1, MAX_LIMIT, "优惠规则管理写每秒阈值"),
                 ConfigDefinition.ofInt(keyOf("admin-seckill-route"), 50, 1, MAX_LIMIT, "秒杀活动管理写每秒阈值"),
-                ConfigDefinition.ofInt(keyOf("ui-route"), 100, 1, MAX_LIMIT, "后台界面静态资源每秒阈值"));
+                ConfigDefinition.ofInt(keyOf("ui-route"), 100, 1, MAX_LIMIT, "后台界面静态资源每秒阈值"),
+                ConfigDefinition.ofInt(keyOf("h5-route"), 100, 1, MAX_LIMIT, "C 端 H5 静态资源每秒阈值"),
+                ConfigDefinition.ofInt(keyOf("account-route"), 20, 1, MAX_LIMIT,
+                        "账号服务每秒阈值（受 BCrypt 成本约束，且 LITE 下与业务同 JVM）"));
     }
 }

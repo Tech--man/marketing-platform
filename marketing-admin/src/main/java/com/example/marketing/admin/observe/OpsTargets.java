@@ -20,8 +20,9 @@ public final class OpsTargets {
     /** 本仓的服务名形态：marketing-*（进程/compose 服务名）、mkt-*（容器名）、standalone、回环地址 */
     private static final Pattern HOST = Pattern.compile("^(marketing-[a-z]+|standalone|127\\.0\\.0\\.1|mkt-[a-z-]+)$");
 
-    /** 七个应用的 actuator 端口。写死而不是"1024-65535 都行"：多开的端口就是给内网服务开门 */
-    private static final Set<Integer> PORTS = Set.of(8081, 8082, 8083, 8084, 8085, 8086, 8090);
+    /** 八个应用的 actuator 端口。写死而不是"1024-65535 都行"：多开的端口就是给内网服务开门 */
+    private static final Set<Integer> PORTS =
+            Set.of(8081, 8082, 8083, 8084, 8085, 8086, 8087, 8090);
 
     /** target 名会进 URL 展示与日志，也会由请求方给出，所以同样限死字符集 */
     private static final Pattern NAME = Pattern.compile("^[a-z][a-z0-9-]{0,39}$");

@@ -42,6 +42,8 @@ class AdminAuthFilterTest {
     private static final String SECRET = "unit-test-secret";
     /** 与 filter 内部同一时钟：签发与校验都取"现在"，不需要为一个测试引入时钟接缝 */
     private static final Instant NOW = Instant.now();
+    /** 演示级静态 token 那一层已删除，这里只留一个"非 JWT 的共享串"作为反面样本 */
+    private static final String LEGACY_DEMO_TOKEN = "demo-token-123";
 
     private GatewayProperties properties;
     private ReactiveRedisTemplate<String, String> redis;
@@ -131,7 +133,7 @@ class AdminAuthFilterTest {
     @Test
     @DisplayName("C 端 demo token 打后台被拒，且不进 chain")
     void cSideTokenIsRejectedOnAdminPath() {
-        MockServerWebExchange exchange = adminGet("Bearer " + properties.getAuth().getToken());
+        MockServerWebExchange exchange = adminGet("Bearer " + LEGACY_DEMO_TOKEN);
 
         filter.filter(exchange, chain).block();
 
@@ -209,9 +211,11 @@ class AdminAuthFilterTest {
     }
 
     @Test
-    @DisplayName("必须排在 C 端鉴权之前：否则后台请求会先被 demo token 判定挡下")
-    void runsBeforeAuthFilter() {
-        assertTrue(filter.getOrder() < new AuthFilter(properties).getOrder());
+    @DisplayName("必须排在消费者鉴权之前：托管清单罩住整片 /api/**，后台要靠先落 VERIFIED 让开")
+    void runsBeforeConsumerAuthFilter() {
+        assertTrue(filter.getOrder() < new ConsumerAuthFilter(properties, redis,
+                new com.example.marketing.common.security.ConsumerTokenCodec("x", java.time.Duration.ZERO))
+                .getOrder());
         assertFalse(AdminAuthFilter.VERIFIED.isEmpty());
     }
 
