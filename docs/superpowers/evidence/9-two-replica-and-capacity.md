@@ -97,10 +97,50 @@ local-message-retry    held=true  holder=a8531569  ttlLeft=7
 而平台对业务失败也回 HTTP 200，于是 41000 会被算进"受理"，
 "等 `persisted` 追上 accepted"就会空转到 900 s 超时。现在按 `HTTP + 业务码` 双条件计数。
 
-## 6. 这一轮**仍然**没验的东西
+## 7. 追加：admin 也起两副本（同日 02:41 → 03:12）
 
-- **admin 起两副本**时 `ui-route` 落到哪一个实例、界面写动作的审计归属。
-  本轮只 scale 了 seckill + coupon，admin 是单副本，这一条**给不出答案**，
-  README 那张矩阵里也照这么写的。它需要单独一轮（且这台机器当时的 swap 已经 19.5/20 GB）。
+`--scale marketing-admin=2`。这一格是 README 矩阵里最后一格空白，问的是两件 114 覆盖不到的事。
+
+### 7.1 `ui-route` 与写动作的审计归属
+
+- 两个 admin 都注册进 nacos（`192.168.107.7:8086` / `192.168.117.8:8086`，均 `healthy=true`）。
+- `/ui/` 与它引用的 hash 资源**连打 8 次全 200** —— 静态资源在两副本间轮转不会撕裂
+  （镜像同一份 `static/ui`，且索引 `no-store`、资源 `immutable` 的指纹一致）。
+- **审计归属成立**：12 次后台写（`POST /api/admin/activities`，`AUDITM2-<ts>-<i>`）→
+  `admin_audit_log` 恰好 **12 行、12 个不同 `resource_id`、零重复**。
+- 关键在于这条不是"只有一个 admin 在搬"的假象。`AuditOutboxDrainer` 用自起 daemon 线程
+  而**不是** `@Scheduled`，所以它**不经过** `mkt_job_dedup` 那套跨副本互斥；
+  它靠的是消费组 + 每进程唯一消费者名（`admin-<uuid>`）。实测 `XINFO CONSUMERS mkt:audit:pending admin-drain`
+  里**恰好两个消费者 idle≈1.4 s**（5 秒一轮的节奏），两者 pending 都是 0 —— 两个副本确实在同时搬，
+  而分摊而不是重放。④ 的 `consistency` 连读三次同形（`budget=0 / coupon-stock=1 / seckill-stock=0`），
+  两副本读数不分歧。
+
+### 7.2 一处新发现的泄漏（未修）
+
+`admin-drain` 组里累积了 **48 个消费者条目**。每个 admin/standalone 进程启动都 `XGROUP CREATECONSUMER`
+一个带随机后缀的新名字，**退出时从不 `XGROUP DELCONSUMER`**。后果：投递正确性不受影响
+（pending 一直是 0），但 Redis 里这个组的消费组元数据随重启次数无界增长，
+且 `XINFO CONSUMERS` 的输出会长到没法人工读（本轮判"几个在活"就得先按 idle 排序）。
+修法方向：消费者名改成"实例可预测"的稳定值（容器名/IP + 端口），或退出钩子里删消费者。
+记在这里，不在本轮改。
+
+### 7.3 一条部署期竞态：首跑 111/1 不是回归
+
+`deploy-full.sh --scale marketing-admin=2` 首跑时报两件事：
+`后台路由没有返回登录成功，末次响应 503`，以及冒烟**链路 7** 红一条
+（`面板读不出 budget 的不符条数`）。当时 admin 副本的日志显示它们**正在**注册：
+`register finished` 时间戳 02:57:25 与 02:57:28，而脚本的探测打在 02:57:27 ——
+撞在第二个实例注册完成前 1 秒，网关的 `lb://marketing-admin` 订阅还没刷到它。
+
+栈热透之后**同一条命令复跑 114/114**，且 7.1 的读数全部成立。
+
+**所以：新起 FULL 后若只红在链路 7 的 budget 比对那一条，先重跑一次再查代码。**
+`deploy-full.sh` 的 `wait_route` 是按路由探通的，但它探的是"第一个可用实例"，
+探不到"这个服务的所有副本都注册完了"—— 多副本下这天然是个窗口。
+
+## 8. 这一轮**仍然**没验的东西
+
 - 2 副本档没跑 `load-probe`：容量叙事是 LITE 服役档的，扩容档的并发口径不在这个问题里。
-- 专建的两张压测模板 `CT-PERF-001` / `CT-PERF-002` 留在演示库里，没删。
+- admin **三副本以上**、以及 admin 副本滚动重启**期间**的审计连续性（本轮是稳态两副本）。
+- 专建的两张压测模板 `CT-PERF-001` / `CT-PERF-002`、探针账号（`demo1`、`smoke*`、`p2*`、
+  `AUDITM2-*` 活动）留在演示库里，没删 —— 删数据要人点头。
