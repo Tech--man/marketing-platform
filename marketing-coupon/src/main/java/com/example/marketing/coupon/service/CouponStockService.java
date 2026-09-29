@@ -26,8 +26,8 @@ public class CouponStockService {
     private static final RedisScript<Long> DEDUCT = LuaScripts.ofLong("lua/deduct_stock.lua");
     private static final RedisScript<Long> ROLLBACK = LuaScripts.ofLong("lua/rollback_stock.lua");
 
-    /** 个人限领计数 TTL：覆盖活动周期即可（30 天） */
-    private static final Duration USER_KEY_TTL = Duration.ofDays(30);
+    /** 个人限领计数 TTL 下限（30 天）：实际取 max(下限, 模板有效期剩余) */
+    private static final Duration USER_KEY_TTL_FLOOR = Duration.ofDays(30);
 
     private final StringRedisTemplate redisTemplate;
 
@@ -51,17 +51,31 @@ public class CouponStockService {
 
     /**
      * 原子预扣（库存 + 个人限领同时校验，单命令内完成，无竞态窗口）。
+     *
+     * <p>限领计数 TTL 由调用方按模板有效期传入（2026-09-29 审查第四批）：固定 30 天
+     * 会把"活动内限领 N 张"稀释成"每 30 天限领 N 张"——种子模板有效期 365 天，
+     * 长周期活动人均发券量放大 12 倍。TTL 必须覆盖模板剩余有效期。</p>
      */
-    public DeductResult deduct(Long templateId, Long userId, int quantity, int perUserLimit) {
+    public DeductResult deduct(Long templateId, Long userId, int quantity, int perUserLimit,
+                               Duration userKeyTtl) {
         Long ret = redisTemplate.execute(DEDUCT,
                 List.of(stockKey(templateId), userKey(templateId, userId)),
                 String.valueOf(quantity), String.valueOf(perUserLimit),
-                String.valueOf(USER_KEY_TTL.toSeconds()));
+                String.valueOf(userKeyTtl.toSeconds()));
         DeductResult result = DeductResult.of(ret);
         if (result != DeductResult.SUCCESS) {
             log.info("[stock] 预扣拒绝 template={}, user={}, result={}", templateId, userId, result);
         }
         return result;
+    }
+
+    /** 限领计数 TTL：max(下限 30 天, 模板有效期剩余)——下限兜住 endTime 缺失的模板 */
+    public static Duration userKeyTtl(java.time.LocalDateTime endTime) {
+        if (endTime == null) {
+            return USER_KEY_TTL_FLOOR;
+        }
+        Duration remaining = Duration.between(java.time.LocalDateTime.now(), endTime);
+        return remaining.compareTo(USER_KEY_TTL_FLOOR) > 0 ? remaining : USER_KEY_TTL_FLOOR;
     }
 
     /** 回补（异步落库最终失败/人工回收时） */

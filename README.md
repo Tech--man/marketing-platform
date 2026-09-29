@@ -153,6 +153,9 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | 8085 | 聚合服务（调试直连；LITE 容器**仅绑回环**，见下） | 形态侧：dev 本机进程、LITE 容器 |
 | 8086 | 管理后台（仅 FULL 本机进程形态直连需要；容器形态不发布端口） | 形态侧：FULL |
 | 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | 仅 FULL 形态 |
+  （2026-09-29 第四批起，上表的 FULL 中间件宿主机发布全部改绑 127.0.0.1、四个容器补
+  restart: unless-stopped——nacos 无鉴权全网卡开放等于任何人可接管 lb:// 路由；
+  彻底方案 nacos 鉴权 + broker ACL 需要客户端凭证下发，另行跟进）
 
 **后台相关的两个环境变量**（三套形态都要给，且 gateway 与签发方必须同值）：
 
@@ -170,6 +173,10 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 > 相同（已声明边界：已吊销 token 可用到自然过期，上界 accessTtl）；`RL_*=0` 经
 > env/yml 设入时钳制为 1 并告警（0 在 Lua 里恒真 = 整条入口全拒，在线路径本有
 > min=1 校验，env 路径原先没有）。
+
+> **上游超时（2026-09-29 第四批）**：网关 httpclient 补 connect-timeout 2s /
+> response-timeout 10s（`GW_CONNECT_TIMEOUT`/`GW_RESPONSE_TIMEOUT` 可调）——SCG 默认
+> response 超时是无限，任何上游 hang 住都会无限期占用客户端连接与事件循环。
 
 > **XFF 治理（2026-09-29 起）**：网关是最外层入口，请求里出现的 `X-Forwarded-For` 只可能是
 > 客户端自报——限流键因此只取 TCP 对端地址（自报 XFF 刷不出新桶），且网关对下游**覆写** XFF
@@ -389,7 +396,10 @@ POST /api/coupon/grant (requestId 幂等键)
   回补原桶并写 FAIL 终态；budget_flow 补 REFUND 写入方（`POST /api/admin/activities/
   {no}/budget/refund`，按原 DEDUCT 配对、每笔扣减最多退一次）；FAILED 死信有计数告警
   （`marketing.message.failed`）与管理端重驱动（`POST /api/admin/coupon|seckill/messages/
-  redrive`，置回 PENDING 由补偿定时器重投）
+  redrive`，置回 PENDING 由补偿定时器重投）。2026-09-29 第四批三处收口：refresh
+  轮换改 CAS 于旧摘要（并发双花只有一个赢家，输家按重放吊销会话）；限领计数 TTL
+  改为覆盖模板剩余有效期（固定 30 天会把"活动内限领 N 张"稀释成"每 30 天 N 张"）；
+  会话行有低频清理（默认保留 7 天、12h 一轮、RedisLeaseLock 防多副本）
 - `LocalMessageRetryer`（common 内置 @Scheduled）补偿未确认消息；重启时 `StockWarmUpRunner` 按 DB 已发量重算 Redis 库存
 
 ### 2. 优惠计算（P99 < 20ms）

@@ -55,7 +55,8 @@ class CouponGrantServiceTest {
         template.setActivityNo("ACT2026001");
         template.setPerUserLimit(5);
         when(templateService.getRequiringGrantable("CT2026001")).thenReturn(template);
-        when(stockService.deduct(anyLong(), anyLong(), anyInt(), anyInt()))
+        when(stockService.deduct(anyLong(), anyLong(), anyInt(), anyInt(),
+                org.mockito.ArgumentMatchers.any(java.time.Duration.class)))
                 .thenReturn(CouponStockService.DeductResult.SUCCESS);
     }
 

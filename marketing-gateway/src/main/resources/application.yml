@@ -24,6 +24,11 @@ spring:
       x-forwarded:
         for-append: false
       httpclient:
+        # 上游超时（2026-09-29 审查第四批）：SCG/Reactor-Netty 默认 response 超时是**无限**——
+        # 任何上游 hang 住都会无限期占用客户端连接与事件循环。connect 2s / response 10s
+        # 覆盖除 BCrypt 登录（~100ms）外全部路径；超时走 5xx 兜底页而不是连接悬置。
+        connect-timeout: ${GW_CONNECT_TIMEOUT:2000}
+        response-timeout: ${GW_RESPONSE_TIMEOUT:10s}
         pool:
           # 上游 Tomcat 空闲 61.3s 主动关连接（实测，见 README"已知噪音"），而 reactor-netty
           # 默认既不设 max-idle-time 也不开后台清理（eviction-interval 默认 0）——池里的连接

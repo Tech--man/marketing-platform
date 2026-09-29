@@ -83,6 +83,9 @@ class ConsumerAuthServiceTest {
         redis = mock(StringRedisTemplate.class);
         valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
+        // rotate 的 CAS 默认赢家：本测试组关心轮换语义而不是竞态（竞态在
+        // ConsumerSessionServiceTest.rotateIsCasOnOldRefreshHash 用真库钉）
+        when(sessionService.rotate(any(), anyString(), any())).thenReturn(true);
 
         // 模拟 DB 的 AUTO_INCREMENT 回写：MyBatis-Plus 在真实装配里会把生成的 id 填回实体，
         // 注册流程紧接着就要用这个 id 签发会话。mock 不会自己做这件事。
@@ -197,7 +200,7 @@ class ConsumerAuthServiceTest {
         when(sessionService.findByJti("jti-live")).thenReturn(row);
         org.mockito.Mockito.doAnswer(inv -> {
             hashInRow.set(inv.getArgument(1));   // 就地换摘要：旧摘要从此查不到任何行
-            return null;
+            return true; // rotate 的 CAS 赢家（竞态语义另有专测）
         }).when(sessionService).rotate(any(ConsumerSessionEntity.class), anyString(),
                 any(LocalDateTime.class));
         when(userMapper.selectById(70001L)).thenReturn(user("ACTIVE"));

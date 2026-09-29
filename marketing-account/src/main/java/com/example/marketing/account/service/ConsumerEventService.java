@@ -41,7 +41,7 @@ public class ConsumerEventService {
             eventMapper.insert(event);
         } catch (Exception e) {
             log.warn("[account] 身份事件落库失败 action={}, uid={}, identifier={}, result={}, err={}",
-                    action, userId, identifier, result, e.toString());
+                    action, userId, IdentifierMask.mask(identifier), result, e.toString());
         }
     }
 

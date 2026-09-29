@@ -96,7 +96,8 @@ public class ConsumerAuthService {
             throw BizException.of(ErrorCode.BAD_REQUEST, "该登录名已被使用");
         }
         events.record("REGISTER", user.getId(), id, null, ip, userAgent, "SUCCESS");
-        log.info("[account] 注册成功 uid={}, identifier={}, ip={}", user.getId(), id, ip);
+        log.info("[account] 注册成功 uid={}, identifier={}, ip={}", user.getId(),
+                IdentifierMask.mask(id), ip);
         // 注册即登录：让消费者少一次口令输入，也让"注册完看不到自己的券"这类困惑不成立
         return issueSession(user, ip, userAgent, "REGISTER");
     }
@@ -267,13 +268,32 @@ public class ConsumerAuthService {
                 user.getId(), user.getIdentifier(), user.getNickname());
     }
 
-    /** 轮换沿用同一条会话行与同一个 jti，只换 refresh；access 重新签一枚 */
+    /**
+     * 轮换沿用同一条会话行与同一个 jti，只换 refresh；access 重新签一枚。
+     *
+     * <p><b>CAS 输家按重放处理</b>（2026-09-29 审查第四批）：rotate 条件带旧摘要，
+     * 并发双花同一枚 refresh 只有一个能成——输家说明这枚 refresh 已被别人轮换过，
+     * 与"已用过的 refresh 再次出现"同罪：吊销整条会话，不给第二对凭证。
+     * 原实现后写覆盖先写、两个人各拿一对有效 access，"重放即吊销"的承诺被竞态绕过。</p>
+     */
     private TokenPairVO rotateSession(ConsumerUserEntity user, ConsumerSessionEntity session) {
         String refresh = newRefreshToken();
         long now = Instant.now().getEpochSecond();
         long accessExp = now + properties.getAccessTtlSeconds();
-        sessionService.rotate(session, sha256(refresh),
+        boolean won = sessionService.rotate(session, sha256(refresh),
                 LocalDateTime.now().plusSeconds(properties.getRefreshTtlSeconds()));
+        if (!won) {
+            // 输了 CAS：这枚 refresh 已被并发请求轮换。黑名单在 refresh() 入口已查过
+            // （写它的人赢的时候会写）——这里赢家的黑名单写入与本请求之间存在窗口，
+            // 直接复用重放处置路径：吊销会话 + 事件留痕。
+            sessionService.revoke(session.getJti(), "REFRESH_REUSED",
+                    java.time.Duration.ofSeconds(properties.getAccessTtlSeconds()));
+            events.record("REFRESH_REUSED", user.getId(), user.getIdentifier(), session.getJti(),
+                    null, null, "REVOKED");
+            log.warn("[account] refresh 并发轮换竞态，按重放吊销会话 uid={}, jti={}",
+                    user.getId(), session.getJti());
+            throw BizException.of(ErrorCode.UNAUTHORIZED, "登录状态已失效，请重新登录");
+        }
         String access = codec.issue(new ConsumerClaims(user.getId(), user.getIdentifier(),
                 session.getJti(), ConsumerClaims.TYPE_ACCESS, now, accessExp));
         return new TokenPairVO(access, refresh, properties.getAccessTtlSeconds(),

@@ -30,15 +30,22 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <spring-boot.version>3.2.5</spring-boot.version>
-        <spring-cloud.version>2023.0.1</spring-cloud.version>
-        <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
+        <!-- 2026-09-29 审查第四批：3.2.5（2024-04）基线收口到 3.2.x 末版。此后 3.2 线
+             的已知 CVE（Tomcat CVE-2024-34750/50379、Spring 静态资源 CVE-2024-38816/38819
+             等）随 patch 修复；只动根 pom 三个属性，模块零改动（dependencyManagement 收口
+             的既有红利）。3.2.x OSS 支持已结束，升 3.3/3.4 是下一档的事。 -->
+        <spring-boot.version>3.2.12</spring-boot.version>
+        <spring-cloud.version>2023.0.4</spring-cloud.version>
+        <spring-cloud-alibaba.version>2023.0.3.2</spring-cloud-alibaba.version>
         <mybatis-plus.version>3.5.7</mybatis-plus.version>
         <redisson.version>3.27.2</redisson.version>
         <rocketmq-spring.version>2.3.3</rocketmq-spring.version>
         <!-- rocketmq-spring 2.3.3 需要 5.3.x 客户端（setNamespaceV2 等 API），
              而 Alibaba BOM 会把传递依赖压到 5.1.4，这里直接声明压回 5.3.0 -->
         <rocketmq-client.version>5.3.0</rocketmq-client.version>
+        <!-- nacos-client 2.3.2 传入 protobuf 3.20.1（CVE-2022-3509/3510 解析 DoS），
+             3.20.3 是同一 API 线的修复版，钉住消除传递依赖里的旧件（2026-09-29 审查第四批） -->
+        <protobuf.version>3.20.3</protobuf.version>
     </properties>
 
     <dependencyManagement>
@@ -79,6 +86,18 @@
                 <artifactId>redisson-spring-boot-starter</artifactId>
                 <version>${redisson.version}</version>
             </dependency>
+            <!-- protobuf 钉 3.20.3：只影响 nacos-client 的传递依赖，应用代码不直接用它 -->
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java-util</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+
             <!-- RocketMQ 客户端全家桶对齐 5.3.0（直接声明优先于导入的 BOM） -->
             <dependency>
                 <groupId>org.apache.rocketmq</groupId>

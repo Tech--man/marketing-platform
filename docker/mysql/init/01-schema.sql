@@ -159,6 +159,9 @@ CREATE TABLE IF NOT EXISTS user_coupon (
     PRIMARY KEY (id),
     UNIQUE KEY uk_coupon_code (coupon_code),
     UNIQUE KEY uk_request_id (request_id),
+    -- 过期扫描（CouponExpireJob 每分钟 WHERE status='UNUSED' AND expire_at < now）：
+    -- 无此前导索引会全表扫，user_coupon 只增不删，随发券量线性恶化（2026-09-29 审查）
+    KEY idx_status_expire (status, expire_at),
     KEY idx_user_status (user_id, status),
     KEY idx_template (template_id)
 ) ENGINE = InnoDB COMMENT '用户券实例';
@@ -486,7 +489,9 @@ CREATE TABLE IF NOT EXISTS consumer_session (
     PRIMARY KEY (id),
     UNIQUE KEY uk_jti (jti),
     UNIQUE KEY uk_refresh_hash (refresh_hash) COMMENT '轮换后旧值进 Redis 黑名单，表里只留当前值',
-    KEY idx_user_active (user_id, revoked_at, expire_at)
+    KEY idx_user_active (user_id, revoked_at, expire_at),
+    -- 清理任务按 refresh 寿命扫过期行（2026-09-29 审查第四批）：没有它清理走全表扫
+    KEY idx_refresh_expire (refresh_expire_at)
 ) ENGINE = InnoDB COMMENT '消费者会话（DB 为准，Redis 只放吊销位与整号作废时刻）';
 
 -- 身份事件独立成表，不并进 admin_audit_log：那条跨进程总线 MAXLEN 满则丢最旧，

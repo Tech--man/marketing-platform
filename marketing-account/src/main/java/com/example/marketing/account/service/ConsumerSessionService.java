@@ -147,14 +147,23 @@ public class ConsumerSessionService {
                 .orderByDesc(ConsumerSessionEntity::getId));
     }
 
-    /** 轮换：把本行的 refresh 换成新摘要并打点。调用方负责在同一事务里签发新 access */
-    public void rotate(ConsumerSessionEntity session, String newRefreshHash, LocalDateTime refreshExpireAt) {
+    /**
+     * 轮换：把本行的 refresh 换成新摘要并打点。<b>CAS 于旧摘要</b>（2026-09-29 审查第四批）：
+     * 条件带 refresh_hash——同一枚 refresh 被并发提交两次（攻击者与失主、或客户端双击）
+     * 时，两个人都通过黑名单检查、后写覆盖先写、双双拿到有效 access。
+     * CAS 后 0 行更新 = 旧摘要已被别人换掉，调用方必须按重放处理（吊销会话）。
+     *
+     * @return true = 抢到轮换权；false = 旧摘要已不在（并发轮换输家）
+     */
+    public boolean rotate(ConsumerSessionEntity session, String newRefreshHash, LocalDateTime refreshExpireAt) {
         ConsumerSessionEntity patch = new ConsumerSessionEntity();
         patch.setRefreshHash(newRefreshHash);
         patch.setRotatedAt(LocalDateTime.now());
         patch.setRefreshExpireAt(refreshExpireAt);
-        sessionMapper.update(patch, Wrappers.<ConsumerSessionEntity>lambdaUpdate()
-                .eq(ConsumerSessionEntity::getId, session.getId()));
+        int updated = sessionMapper.update(patch, Wrappers.<ConsumerSessionEntity>lambdaUpdate()
+                .eq(ConsumerSessionEntity::getId, session.getId())
+                .eq(ConsumerSessionEntity::getRefreshHash, session.getRefreshHash()));
+        return updated == 1;
     }
 
     private void markRevoked(String jti, String reason) {

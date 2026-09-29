@@ -85,11 +85,13 @@ public class CouponGrantService {
         // 2. 模板校验（状态 + 时间窗）
         CouponTemplateEntity template = templateService.getRequiringGrantable(request.templateNo());
         // 3. Redis 原子预扣（库存 + 个人限领）
+        java.time.Duration userKeyTtl = CouponStockService.userKeyTtl(template.getEndTime());
         CouponStockService.DeductResult deduct = stockService.deduct(
-                template.getId(), request.userId(), 1, template.getPerUserLimit());
+                template.getId(), request.userId(), 1, template.getPerUserLimit(), userKeyTtl);
         if (deduct == CouponStockService.DeductResult.NOT_WARMED) {
             templateService.warmStock(template);
-            deduct = stockService.deduct(template.getId(), request.userId(), 1, template.getPerUserLimit());
+            deduct = stockService.deduct(template.getId(), request.userId(), 1,
+                    template.getPerUserLimit(), userKeyTtl);
         }
         switch (deduct) {
             case SOLD_OUT -> {

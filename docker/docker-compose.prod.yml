@@ -8,6 +8,12 @@
 # 启动：docker compose -f docker-compose.prod.yml up -d（在本目录执行，
 #       或 cd docker && docker compose up -d 走默认解析）
 # ============================================================
+# 端口收口（2026-09-29 审查第四批）：nacos/RocketMQ/prometheus 的宿主机发布全部
+# 改绑 127.0.0.1——应用容器走 compose 网络访问不受影响，公网/局域网摸不到控制面
+# （nacos 无鉴权全网卡开放 = 任何人可注册实例改路由接管流量；broker 无 ACL = 任意
+# 读写消息）。四个服务补 restart: unless-stopped，宿主机重启后与应用/数据层一起自愈。
+# 彻底方案（nacos 开鉴权 + broker ACL）需要客户端凭证下发，另行跟进。
+# ============================================================
 services:
   # MySQL 与 Redis 属于常驻数据层（docker-compose.data.yml），本形态只补扩容档专属中间件
   rocketmq-namesrv:
@@ -15,7 +21,7 @@ services:
     platform: linux/amd64
     container_name: mkt-rocketmq-namesrv
     ports:
-      - "9876:9876"
+      - "127.0.0.1:9876:9876"
     # mqnamesrv 不认 JAVA_MIN_MEM/JAVA_MAX_MEM（镜像里只透传 JAVA_OPT_EXT），
     # 不给定则按容器内存的 1/4 取堆（实测 2G）
     environment:
@@ -26,6 +32,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+    restart: unless-stopped   # 2026-09-29：宿主机/docker 重启后中间件要跟数据层一样自愈
 
   rocketmq-broker:
     image: apache/rocketmq:5.2.0
@@ -35,8 +42,8 @@ services:
       rocketmq-namesrv:
         condition: service_healthy
     ports:
-      - "10909:10909"
-      - "10911:10911"
+      - "127.0.0.1:10909:10909"
+      - "127.0.0.1:10911:10911"
     environment:
       NAMESRV_ADDR: rocketmq-namesrv:9876
       # 同上：broker 也走 JAVA_OPT_EXT，实测不给定时吃 2G 堆
@@ -50,14 +57,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+    restart: unless-stopped
 
   nacos:
     image: nacos/nacos-server:v2.3.2
     platform: linux/amd64
     container_name: mkt-nacos
     ports:
-      - "8848:8848"
-      - "9848:9848"
+      - "127.0.0.1:8848:8848"
+      - "127.0.0.1:9848:9848"
     environment:
       MODE: standalone
       JVM_XMS: 512m
@@ -68,12 +76,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: mkt-prometheus
     ports:
-      - "9091:9090"   # 宿主机 9090 常被占用，改用 9091
+      - "127.0.0.1:9091:9090"   # 宿主机 9090 常被占用，改用 9091
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
 

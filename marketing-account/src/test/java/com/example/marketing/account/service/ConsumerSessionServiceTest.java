@@ -141,6 +141,30 @@ class ConsumerSessionServiceTest {
         assertEquals("PASSWORD_CHANGED", revokedReason("jti-a"));
     }
 
+    @Test
+    @DisplayName("B4-2：轮换 CAS 于旧摘要——并发双花只有一个赢家，输家拿到 false")
+    void rotateIsCasOnOldRefreshHash() {
+        insertSession("jti-r", "hash-old", java.time.LocalDateTime.now().plusMinutes(10),
+                java.time.LocalDateTime.now().plusDays(29), null);
+        com.example.marketing.account.infrastructure.mapper.ConsumerSessionMapper mapper =
+                session.getMapper(com.example.marketing.account.infrastructure.mapper.ConsumerSessionMapper.class);
+        ConsumerSessionEntity row = mapper.selectOne(
+                com.baomidou.mybatisplus.core.toolkit.Wrappers.<ConsumerSessionEntity>lambdaQuery()
+                        .eq(ConsumerSessionEntity::getJti, "jti-r"));
+
+        // 赢家：行上还是 hash-old，CAS 命中
+        boolean won = service.rotate(row, "hash-new", java.time.LocalDateTime.now().plusDays(30));
+        assertEquals(true, won, "持旧摘要的轮换必须赢");
+
+        // 输家：行上已是 hash-new，拿 hash-old 再来一次 CAS 落空（无 CAS 时后写覆盖先写）
+        boolean lost = service.rotate(row, "hash-other", java.time.LocalDateTime.now().plusDays(30));
+        assertEquals(false, lost, "并发双花的第二人必须输——原实现后写覆盖先写、双双拿有效凭证");
+
+        // 行上留的是赢家的新摘要，不是输家的
+        assertEquals("hash-new", jdbc.queryForObject(
+                "SELECT refresh_hash FROM consumer_session WHERE jti='jti-r'", String.class));
+    }
+
     private String revokedReason(String jti) {
         return jdbc.queryForObject(
                 "SELECT revoke_reason FROM consumer_session WHERE jti=?", String.class, jti);
