@@ -17,6 +17,8 @@ import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -150,6 +152,92 @@ class BudgetServiceTest {
                 org.mockito.ArgumentMatchers.contains("DELETE FROM budget_flow"),
                 org.mockito.ArgumentMatchers.eq("ACT2026001"),
                 org.mockito.ArgumentMatchers.eq("bk-redis-down"));
+    }
+
+    @Test
+    @DisplayName("A3：退款配对原 DEDUCT、落 REFUND 流水并 INCRBY 预算键")
+    void refundPairsWithDeductAndIncrementsRedis() {
+        org.springframework.data.redis.core.StringRedisTemplate redis =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        when(redis.hasKey("activity:budget:ACT2026001")).thenReturn(true);
+        // INSERT IGNORE 是 MySQL 方言，H2 不认——退款用例走 mock JdbcTemplate 钉编排语义
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("DEDUCT"),
+                org.mockito.ArgumentMatchers.eq("ACT2026001"),
+                org.mockito.ArgumentMatchers.eq("bk-1")))
+                .thenReturn(java.util.List.of(java.util.Map.of("amount_cents", -3000)));
+        when(jdbc.update(org.mockito.ArgumentMatchers.contains("REFUND"),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(1);
+        BudgetService refundable = new BudgetService(redis, jdbc, mapperReturning("100.00"));
+
+        assertEquals(BudgetService.RefundOutcome.REFUNDED,
+                refundable.refund("ACT2026001", "bk-1", 500L));
+
+        verify(ops).increment("activity:budget:ACT2026001", 500L);
+    }
+
+    @Test
+    @DisplayName("A3：同一笔扣减重复退款 → REPLAYED，不重复 INCRBY")
+    void refundReplayDoesNotDoubleCredit() {
+        org.springframework.data.redis.core.StringRedisTemplate redis =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("DEDUCT"),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(java.util.List.of(java.util.Map.of("amount_cents", -3000)));
+        when(jdbc.update(org.mockito.ArgumentMatchers.contains("REFUND"),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(0); // uk_activity_biz 已有 refund 行
+        BudgetService refundable = new BudgetService(redis, jdbc, mapperReturning("100.00"));
+
+        assertEquals(BudgetService.RefundOutcome.REPLAYED,
+                refundable.refund("ACT2026001", "bk-1", 500L));
+
+        verify(ops, org.mockito.Mockito.never())
+                .increment(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("A3：没有配对 DEDUCT 的退款 → 40400（退款不能凭空造钱）")
+    void refundWithoutDeductRejected() {
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(java.util.List.of());
+        BudgetService refundable = new BudgetService(null, jdbc, mapperReturning("100.00"));
+
+        BizException e = assertThrows(BizException.class,
+                () -> refundable.refund("ACT2026001", "bk-none", 500L));
+        assertEquals(40400, e.getCode());
+    }
+
+    @Test
+    @DisplayName("A3：退款超过原扣减 → 40000")
+    void refundOverDeductRejected() {
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(java.util.List.of(java.util.Map.of("amount_cents", -3000)));
+        BudgetService refundable = new BudgetService(null, jdbc, mapperReturning("100.00"));
+
+        BizException e = assertThrows(BizException.class,
+                () -> refundable.refund("ACT2026001", "bk-1", 3001L));
+        assertEquals(40000, e.getCode());
     }
 
     @Test

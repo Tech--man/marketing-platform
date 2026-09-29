@@ -72,7 +72,8 @@ class ConsumerAuthFilterTest {
         when(redis.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(anyString())).thenReturn(Mono.empty());
         when(redis.hasKey(anyString())).thenReturn(Mono.just(false));
-        filter = new ConsumerAuthFilter(properties, redis, codec());
+        filter = new ConsumerAuthFilter(properties, redis, codec(),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         chain = mock(GatewayFilterChain.class);
         when(chain.filter(any())).thenReturn(Mono.empty());
         captured = ArgumentCaptor.forClass(ServerWebExchange.class);
@@ -180,7 +181,8 @@ class ConsumerAuthFilterTest {
     @DisplayName("把一条公开读数从 permit 清单拿掉，它立刻变成要登录 —— 例外清单是唯一开关")
     void permitListIsTheOnlySwitch() {
         properties.getConsumer().setPermitPaths(List.of("/api/auth/login"));
-        filter = new ConsumerAuthFilter(properties, redis, codec());
+        filter = new ConsumerAuthFilter(properties, redis, codec(),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         MockServerWebExchange exchange = exchange(HttpMethod.GET, "/api/seckill/activities", null);
         filter.filter(exchange, chain).block();
@@ -392,7 +394,8 @@ class ConsumerAuthFilterTest {
     @DisplayName("未配 CONSUMER_JWT_SECRET：交易入口整片 40300，但游客读数与后台不受影响")
     void missingSecretClosesTransactionsNotTheWholeSite() {
         properties.getConsumer().setJwtSecret("");
-        filter = new ConsumerAuthFilter(properties, redis, new ConsumerTokenCodec("", Duration.ofSeconds(30)));
+        filter = new ConsumerAuthFilter(properties, redis, new ConsumerTokenCodec("", Duration.ofSeconds(30)),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         MockServerWebExchange txn = exchange(HttpMethod.POST, "/api/coupon/grant", null);
         filter.filter(txn, chain).block();
@@ -412,7 +415,8 @@ class ConsumerAuthFilterTest {
     @DisplayName("登录口在缺密钥时仍然放行：否则「配置错了」会表现为「登录页打不开」")
     void permitRoutesStillOpenWithoutSecret() {
         properties.getConsumer().setJwtSecret("");
-        filter = new ConsumerAuthFilter(properties, redis, new ConsumerTokenCodec("", Duration.ofSeconds(30)));
+        filter = new ConsumerAuthFilter(properties, redis, new ConsumerTokenCodec("", Duration.ofSeconds(30)),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         filter.filter(exchange(HttpMethod.POST, "/api/auth/login", null), chain).block();
 

@@ -112,6 +112,34 @@ public class LocalMessageService {
         return count;
     }
 
+    /**
+     * FAILED 死信计数（2026-09-29 审查，对账兜底的可观测面）。
+     * FAILED 是终态：一旦出现就永远停在表里，>0 即说明有消息需要人工处理或
+     * {@link #redriveFailed} 重驱动——原实现只留一条 log.error，没有任何地方能再看见它。
+     */
+    public int countFailed() {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + TABLE + " WHERE status = ?", Integer.class, STATUS_FAILED);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * 重驱动 FAILED 死信：置回 PENDING、清零重试计数，由补偿定时器重新投递。
+     * 重投安全由消费端幂等保证（MQ 至少一次的既定前提）。返回重驱动的条数。
+     * 不带 LIMIT：FAILED 是终态、量级是异常事件的人工处理量，全量重驱动才是本意
+     * （半截重驱动会把"哪些驱过哪些没驱"变成新的对账问题）。
+     */
+    public int redriveFailed(String topic) {
+        int driven = jdbcTemplate.update(
+                "UPDATE " + TABLE + " SET status = ?, retry_count = 0, next_retry_time = ? "
+                        + "WHERE topic = ? AND status = ?",
+                STATUS_PENDING, Timestamp.valueOf(LocalDateTime.now()), topic, STATUS_FAILED);
+        if (driven > 0) {
+            log.warn("[local-message] 重驱动 FAILED 死信 {} 条 topic={}（由补偿定时器重新投递）", driven, topic);
+        }
+        return driven;
+    }
+
     private void scheduleRetry(String topic, String bizKey, int currentRetry) {
         int retry = currentRetry + 1;
         long backoff = Math.min(BACKOFF_BASE_SECONDS * (1L << Math.min(retry, 6)), 300);

@@ -37,6 +37,8 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
     private static final int HANDLE_RETRY = 3;
     /** 空轮询间隔（毫秒） */
     private static final long POLL_IDLE_MS = 200;
+    /** PEL 回收门槛：空闲超过它的条目才认领（正常处理毫秒级，30s 只会是搁浅） */
+    private static final long RECLAIM_MIN_IDLE_MS = 30_000L;
 
     private final StringRedisTemplate redisTemplate;
     private final List<StreamMessageHandler> handlers;
@@ -92,6 +94,7 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
                     continue;
                 }
                 if (records == null || records.isEmpty()) {
+                    reclaimStale(handler, key, consumer);
                     sleepQuietly(POLL_IDLE_MS);
                     continue;
                 }
@@ -103,6 +106,46 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
         worker.setDaemon(true);
         worker.start();
         workers.add(worker);
+    }
+
+    /**
+     * PEL 回收（2026-09-29 审查）：认领"读走后长时间未确认"的条目。这条链路的
+     * 正确性闭环在本地消息表（未 confirm 会重发），PEL 滞留的主要是"已处理、
+     * XACK/XDEL 没打成"或"实例崩溃前刚读走"的条目——认领重投由消费端幂等兜住，
+     * 回收的收益是 PEL 不再永久膨胀、XDEL（消费完删条目）对滞留条目也生效。
+     * 只在空闲轮做，避免与正常读互相放大。
+     */
+    private void reclaimStale(StreamMessageHandler handler, String key,
+                              org.springframework.data.redis.connection.stream.Consumer consumer) {
+        try {
+            org.springframework.data.redis.connection.stream.PendingMessages pending =
+                    redisTemplate.opsForStream().pending(key, handler.group(),
+                            org.springframework.data.domain.Range.unbounded(), READ_COUNT);
+            if (pending == null || !pending.iterator().hasNext()) {
+                return;
+            }
+            List<org.springframework.data.redis.connection.stream.RecordId> stale = new java.util.ArrayList<>();
+            for (org.springframework.data.redis.connection.stream.PendingMessage message : pending) {
+                if (message.getElapsedTimeSinceLastDelivery().toMillis() >= RECLAIM_MIN_IDLE_MS) {
+                    stale.add(message.getId());
+                }
+            }
+            if (stale.isEmpty()) {
+                return;
+            }
+            List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream().claim(
+                    key, handler.group(), consumer.getName(),
+                    java.time.Duration.ofMillis(RECLAIM_MIN_IDLE_MS),
+                    stale.toArray(org.springframework.data.redis.connection.stream.RecordId[]::new));
+            if (claimed == null || claimed.isEmpty()) {
+                return;
+            }
+            log.info("[stream-consumer] 认领 {} 条滞留 PEL 的消息 topic={}（XACK 中断或死实例搁浅）",
+                    claimed.size(), handler.topic());
+            claimed.forEach(record -> deliver(handler, key, record));
+        } catch (Exception e) {
+            log.warn("[stream-consumer] PEL 回收失败 topic={}: {}", handler.topic(), e.getMessage());
+        }
     }
 
     private void deliver(StreamMessageHandler handler, String key, MapRecord<String, Object, Object> record) {

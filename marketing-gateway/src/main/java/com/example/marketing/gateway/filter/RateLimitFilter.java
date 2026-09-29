@@ -91,6 +91,15 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
         return redisTemplate.execute(slidingWindowScript, keys, args)
                 .next()
                 .defaultIfEmpty(1L)
+                // 根因 C（2026-09-29 审查）：限流依赖 Redis 裸调，Redis 故障 = 全站 5xx——
+                // 洪流保护自己的可用性反而比后端还低。fail-open：计数不可用时放行并计数告警，
+                // 上限是"退回没有限流的基线"（与 LoginGuard 同一方向：宁少挡不误伤），
+                // 比"整个入口跟着 Redis 一起死"便宜得多。Redis 恢复即自愈。
+                .onErrorResume(e -> {
+                    meterRegistry.counter("marketing.gateway.rate.limit.degraded").increment();
+                    log.warn("[rate-limit] 计数不可用，本请求放行（fail-open，恢复即自愈）: {}", e.toString());
+                    return reactor.core.publisher.Mono.just(1L);
+                })
                 .flatMap(allowed -> {
                     if (allowed == 1L) {
                         return chain.filter(exchange);

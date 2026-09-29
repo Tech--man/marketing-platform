@@ -104,13 +104,38 @@ public class CouponGrantService {
                         template.getId(), template.getActivityNo(), 1);
                 // 与幂等表同一个键（BizKey 统一拼法），消费端 confirm 能从事件里原样还原
                 String msgKey = BizKey.of("grant", request.requestId());
-                localMessageService.recordIfAbsent(MqTopics.TOPIC_COUPON_GRANT, MqTopics.TAG_GRANT,
-                        msgKey, JsonUtils.toJson(event));
-                localMessageService.publish(MqTopics.TOPIC_COUPON_GRANT, msgKey);
+                try {
+                    localMessageService.recordIfAbsent(MqTopics.TOPIC_COUPON_GRANT, MqTopics.TAG_GRANT,
+                            msgKey, JsonUtils.toJson(event));
+                    localMessageService.publish(MqTopics.TOPIC_COUPON_GRANT, msgKey);
+                } catch (RuntimeException e) {
+                    // A1/A2（2026-09-29 审查，根因 A：预扣后无归还原语）：预扣之后、
+                    // 消息登记/投递之前的失败必须归还预扣——否则幂等键标 FAILED、客户端
+                    // 重试整体重跑 action 再扣一次（1 张券吃 2 份库存 + 2 次限领，第二次
+                    // 多半直接 EXCEED_LIMIT，用户一张都拿不到）。归还后重试从头来，
+                    // 预扣最多生效一次。进程在两步之间被 kill 的残余窗口 try/catch 管不到，
+                    // 由 ④ 的 coupon mismatch 恒等式兜底可见（残留为库存偏少方向）。
+                    rollbackPreDeduct(template.getId(), request.userId(), 1);
+                    throw e;
+                }
                 Counter.builder("coupon.grant.accepted").register(meterRegistry).increment();
                 return GrantTicket.accepted(request.requestId());
             }
         }
         // switch 各分支均已 return/throw，此处不可达，无需兜底语句
+    }
+
+    /** 归还预扣（rollback_stock.lua：INCRBY 库存 + DECRBY 个人限领计数）。
+     *  归还自身失败只能计数暴露——别让补偿动作把原始异常吃掉 */
+    private void rollbackPreDeduct(Long templateId, Long userId, int quantity) {
+        try {
+            stockService.rollback(templateId, userId, quantity);
+            Counter.builder("coupon.grant.rollback").register(meterRegistry).increment();
+            log.warn("[grant] 预扣后失败，已归还预扣 template={}, user={}", templateId, userId);
+        } catch (RuntimeException rollbackEx) {
+            Counter.builder("coupon.grant.rollback_failed").register(meterRegistry).increment();
+            log.error("[grant] 预扣归还失败（残余差值由 ④ coupon mismatch 暴露）template={}, user={}: {}",
+                    templateId, userId, rollbackEx.toString());
+        }
     }
 }

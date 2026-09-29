@@ -129,6 +129,20 @@ class RateLimitFilterTest {
     }
 
     @Test
+    @DisplayName("根因 C：Redis 计数抛异常 → fail-open 放行并计 degraded，不再是入口 5xx")
+    void redisFailureFailsOpen() {
+        ruleIsOnePerSecond();
+        when(redis.execute(any(RedisScript.class), anyList(), anyList()))
+                .thenReturn(Flux.error(new RuntimeException("connection refused")));
+
+        filter.filter(exchange(), chain).block();
+
+        verify(chain).filter(any());
+        assertEquals(1.0, meters.counter("marketing.gateway.rate.limit.degraded").count(),
+                "降级必须有指标：洪流保护自己的可用性不能比后端还低");
+    }
+
+    @Test
     @DisplayName("H3：自报 XFF 不进限流键——键取 TCP 对端地址，换假 IP 刷不出新桶")
     void spoofedXffIsNotTheRateKey() {
         ruleIsOnePerSecond();

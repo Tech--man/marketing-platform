@@ -7,6 +7,7 @@ import com.example.marketing.activity.dto.CreateActivityRequest;
 import com.example.marketing.activity.dto.GrayUpdateRequest;
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.service.ActivityService;
+import com.example.marketing.activity.service.BudgetService;
 import com.example.marketing.common.api.PageQuery;
 import com.example.marketing.common.api.PageResult;
 import com.example.marketing.common.api.Result;
@@ -18,6 +19,8 @@ import com.example.marketing.common.security.AdminRoles;
 import com.example.marketing.common.web.ClientIp;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +53,7 @@ public class ActivityAdminController {
     private static final String RESOURCE = "activity";
 
     private final ActivityService activityService;
+    private final BudgetService budgetService;
     private final AdminRequestIdentity identity;
     private final AuditOutbox outbox;
 
@@ -71,6 +75,27 @@ public class ActivityAdminController {
         audit(actor, "activity.create", created.getActivityNo(), request,
                 "from=, to=budget=" + created.getBudgetAmount() + ", name=" + created.getName());
         return Result.ok(ActivityView.from(created));
+    }
+
+    /**
+     * 预算退款（A3，2026-09-29）：按原扣减 bizKey 配对归还，REFUND 流水 + Redis INCRBY。
+     * 与 {@link #updateBudget}（改总盘子）是两件事——退款不改变预算总额，只归还已扣额度。
+     */
+    @PostMapping("/{activityNo}/budget/refund")
+    public Result<BudgetService.RefundOutcome> refundBudget(@PathVariable String activityNo,
+                                                            @Valid @RequestBody RefundRequest body,
+                                                            HttpServletRequest request) {
+        AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
+        BudgetService.RefundOutcome outcome =
+                budgetService.refund(activityNo, body.bizKey(), body.amountCents());
+        audit(actor, "activity.budget.refund", activityNo, request,
+                "bizKey=" + body.bizKey() + ", amountCents=" + body.amountCents() + ", outcome=" + outcome);
+        return Result.ok(outcome);
+    }
+
+    /** 退款请求体：bizKey 指向要归还的那笔扣减（结算回退/运营纠错用） */
+    public record RefundRequest(@NotNull(message = "amountCents 必填") Long amountCents,
+                                @NotBlank(message = "bizKey 必填") String bizKey) {
     }
 
     /** 状态机流转：动作型端点，path 与 event 都进审计（谁把谁从哪推到哪） */

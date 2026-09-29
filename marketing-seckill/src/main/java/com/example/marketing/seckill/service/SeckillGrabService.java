@@ -56,18 +56,43 @@ public class SeckillGrabService {
         String token = UUID.randomUUID().toString().replace("-", "");
         SeckillOrderEvent event = new SeckillOrderEvent(token, activityNo, userId, activity.getItemId(), bucket);
         String bizKey = BizKey.of("seckill", token);
-        // 顺序很关键：受理占位必须在投递之前，否则消费端可能先写出终态、再被这里的
-        // ACCEPTED 覆盖（markAccepted 自身也只允许"无值时写"，双保险）
-        stockService.markAccepted(token);
-        // 本地消息表 + MQ：即使进程崩溃，补偿定时器会把消息补发出去
-        localMessageService.recordIfAbsent(MqTopics.TOPIC_SECKILL_ORDER, MqTopics.TAG_ORDER,
-                bizKey, JsonUtils.toJson(event));
-        localMessageService.publish(MqTopics.TOPIC_SECKILL_ORDER, bizKey);
+        try {
+            // 顺序很关键：受理占位必须在投递之前，否则消费端可能先写出终态、再被这里的
+            // ACCEPTED 覆盖（markAccepted 自身也只允许"无值时写"，双保险）
+            stockService.markAccepted(token);
+            // 本地消息表 + MQ：即使进程崩溃，补偿定时器会把消息补发出去
+            localMessageService.recordIfAbsent(MqTopics.TOPIC_SECKILL_ORDER, MqTopics.TAG_ORDER,
+                    bizKey, JsonUtils.toJson(event));
+            localMessageService.publish(MqTopics.TOPIC_SECKILL_ORDER, bizKey);
+        } catch (RuntimeException e) {
+            // A4（2026-09-29 审查，根因 A）：占名额之后、消息登记/投递之前的失败必须回补
+            // 名额并删防重标记——否则名额泄漏 + 用户被 bought 标记锁死至 TTL（轮询永远
+            // ACCEPTED→过期，拿不到单也抢不了第二次）。refill 内部即回补原桶 + 删标记；
+            // 它失败时只能计数暴露（残余由 seckill mismatch 恒等式兜底可见）。
+            // 进程在两步之间被 kill 的残余窗口 try/catch 管不到，同理靠 mismatch 暴露。
+            compensateGrab(activityNo, userId, bucket, buckets, token);
+            throw e;
+        }
 
         Counter.builder("seckill.grab.accepted").register(meterRegistry).increment();
         log.info("[seckill] 抢购受理 activityNo={}, userId={}, bucket={}, token={}",
                 activityNo, userId, bucket, token);
         return new GrabTicket(token, "ACCEPTED");
+    }
+
+    /** 抢购受理失败的最佳努力补偿：回补名额 + 删防重标记 + 写 FAIL 终态（轮询别停在 ACCEPTED） */
+    private void compensateGrab(String activityNo, Long userId, int bucket, int buckets, String token) {
+        try {
+            stockService.refill(activityNo, userId, bucket, buckets);
+            stockService.saveResult(token, "FAIL:GRAB_ABORTED");
+            Counter.builder("seckill.grab.compensated").register(meterRegistry).increment();
+            log.warn("[seckill] 占名额后失败，已回补名额并写 FAIL activityNo={}, userId={}, bucket={}",
+                    activityNo, userId, bucket);
+        } catch (RuntimeException refillEx) {
+            Counter.builder("seckill.grab.compensate_failed").register(meterRegistry).increment();
+            log.error("[seckill] 回补失败（残余差值由 ④ seckill mismatch 暴露）activityNo={}, userId={}, "
+                    + "bucket={}: {}", activityNo, userId, bucket, refillEx.toString());
+        }
     }
 
     /** 轮询抢购结果：ACCEPTED / SUCCESS:{orderNo} / FAIL:{reason} / null（过期视为未中） */

@@ -58,13 +58,16 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
     private final GatewayProperties properties;
     private final ReactiveRedisTemplate<String, String> redis;
     private final ConsumerTokenCodec codec;
+    private final io.micrometer.core.instrument.MeterRegistry meters;
 
     public ConsumerAuthFilter(GatewayProperties properties,
                               ReactiveRedisTemplate<String, String> redis,
-                              ConsumerTokenCodec consumerTokenCodec) {
+                              ConsumerTokenCodec consumerTokenCodec,
+                              io.micrometer.core.instrument.MeterRegistry meters) {
         this.properties = properties;
         this.redis = redis;
         this.codec = consumerTokenCodec;
+        this.meters = meters;
     }
 
     @Override
@@ -114,11 +117,22 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
         };
     }
 
-    /** 吊销位与整号作废时刻：两次 Redis 串行，命中就不必再查第二跳（单会话登出是最常见路径） */
+    /**
+     * 吊销位与整号作废时刻：两次 Redis 串行，命中就不必再查第二跳（单会话登出是最常见路径）。
+     *
+     * <p><b>根因 C 降级（2026-09-29 审查）</b>：Redis 异常时退化为"仅验签放行 + 计数告警"，
+     * 不再是整个入口 5xx。代价与 Redis 被清空时相同（已声明的已知边界）：已吊销的
+     * access token 可用到自然过期，上界 accessTtl（15 分钟）——用有限时间的降级窗口
+     * 换"Redis 故障不放大成全站不可用"。恢复即自愈。</p>
+     */
     private Mono<Void> checkRevocation(ServerWebExchange exchange, GatewayFilterChain chain,
                                        ConsumerClaims claims, String path) {
         return redis.hasKey(REVOKED_PREFIX + claims.jti())
                 .defaultIfEmpty(false)
+                .onErrorResume(e -> {
+                    degraded("revoked-check", e);
+                    return chain.filter(pass(exchange, claims)).then(Mono.just(false));
+                })
                 .flatMap(revoked -> revoked
                         ? reject(exchange, HttpStatus.UNAUTHORIZED, 40102, "会话已失效，请重新登录")
                         : checkBump(exchange, chain, claims, path));
@@ -128,6 +142,10 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
                                  ConsumerClaims claims, String path) {
         return redis.opsForValue().get(BUMP_PREFIX + claims.uid())
                 .defaultIfEmpty("")
+                .onErrorResume(e -> {
+                    degraded("bump-check", e);
+                    return chain.filter(pass(exchange, claims)).then(Mono.just(""));
+                })
                 .flatMap(bumpedAt -> {
                     if (!bumpedAt.isEmpty() && claims.iat() < Long.parseLong(bumpedAt)) {
                         log.info("[consumer-auth] 会话早于整号作废时刻，拒绝 uid={}, path={}", claims.uid(), path);
@@ -135,6 +153,13 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
                     }
                     return chain.filter(pass(exchange, claims));
                 });
+    }
+
+    /** 吊销链 Redis 不可用的降级计数 + 告警（详见 checkRevocation 的根因 C 注释） */
+    private void degraded(String stage, Throwable e) {
+        meters.counter("marketing.gateway.auth.degraded", "filter", "consumer", "stage", stage).increment();
+        log.warn("[consumer-auth] {} 不可用，退化为仅验签放行（bounded by accessTtl，恢复即自愈）: {}",
+                stage, e.toString());
     }
 
     private Mono<Void> rejectedByStatus(ServerWebExchange exchange, ConsumerVerifyResult result, String path) {

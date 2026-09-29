@@ -158,8 +158,8 @@ public class MarketingCommonAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService,
-                RedisLeaseLock leaseLock) {
-            return new LocalMessageRetryer(localMessageService, leaseLock);
+                RedisLeaseLock leaseLock, MeterRegistry meterRegistry) {
+            return new LocalMessageRetryer(localMessageService, leaseLock, meterRegistry);
         }
     }
 
@@ -193,8 +193,8 @@ public class MarketingCommonAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService,
-                RedisLeaseLock leaseLock) {
-            return new LocalMessageRetryer(localMessageService, leaseLock);
+                RedisLeaseLock leaseLock, MeterRegistry meterRegistry) {
+            return new LocalMessageRetryer(localMessageService, leaseLock, meterRegistry);
         }
     }
 }

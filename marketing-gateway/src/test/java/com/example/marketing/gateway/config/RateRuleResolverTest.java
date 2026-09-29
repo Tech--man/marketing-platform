@@ -85,4 +85,18 @@ class RateRuleResolverTest {
         new RateRuleResolver().resolve(ROUTE, rule, valuesWith("5"));
         assertEquals(200, rule.getLimit(), "共享的 @ConfigurationProperties bean 不能被改");
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("根因 C：yml/env 的 limit<1 钳制为 1——0 等于整条入口全拒")
+    void zeroLimitIsClampedToOne() {
+        GatewayProperties.RateRule zero = new GatewayProperties.RateRule();
+        zero.setLimit(0);
+        zero.setWindowSeconds(1);
+
+        RateRuleResolver.Outcome outcome = new RateRuleResolver().resolve("seckill-route", zero,
+                com.example.marketing.common.config.ConfigValues.empty());
+
+        org.junit.jupiter.api.Assertions.assertEquals(1, outcome.rule().getLimit(),
+                "0 在 Lua 里恒真 = 入口全拒，必须钳到 1（在线路径有 min=1 校验，env 路径原先没有）");
+    }
 }

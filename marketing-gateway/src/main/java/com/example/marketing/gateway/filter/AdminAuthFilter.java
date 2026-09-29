@@ -56,13 +56,16 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
     private final GatewayProperties properties;
     private final ReactiveRedisTemplate<String, String> redis;
     private final AdminTokenCodec codec;
+    private final io.micrometer.core.instrument.MeterRegistry meters;
 
     public AdminAuthFilter(GatewayProperties properties,
                            ReactiveRedisTemplate<String, String> redis,
-                           AdminTokenCodec adminTokenCodec) {
+                           AdminTokenCodec adminTokenCodec,
+                           io.micrometer.core.instrument.MeterRegistry meters) {
         this.properties = properties;
         this.redis = redis;
         this.codec = adminTokenCodec;
+        this.meters = meters;
     }
 
     @Override
@@ -86,9 +89,16 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
         if (isWrite(exchange) && AdminRoles.READ_ONLY.equals(claims.role())) {
             return reject(exchange, HttpStatus.FORBIDDEN, 40300, "只读角色不能执行写操作");
         }
-        // 两次 Redis 串行：吊销位命中就不必再查作废时刻（单会话登出是最常见路径）
+        // 两次 Redis 串行：吊销位命中就不必再查作废时刻（单会话登出是最常见路径）。
+        // 根因 C 降级（2026-09-29 审查）：Redis 异常时退化为"仅验签放行 + 计数告警"，
+        // 代价与 Redis 被清空相同（已声明边界：已吊销 token 可用到自然过期，上界 accessTtl）
+        // ——用有限降级窗口换"Redis 故障不放大成后台整片 5xx"。恢复即自愈。
         return redis.hasKey(REVOKED_PREFIX + claims.jti())
                 .defaultIfEmpty(false)
+                .onErrorResume(e -> {
+                    degraded("revoked-check", e);
+                    return chain.filter(pass(exchange, claims)).then(Mono.just(false));
+                })
                 .flatMap(revoked -> revoked
                         ? reject(exchange, HttpStatus.UNAUTHORIZED, 40102, "会话已失效，请重新登录")
                         : checkBump(exchange, chain, claims, path));
@@ -98,6 +108,10 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
                                  AdminClaims claims, String path) {
         return redis.opsForValue().get(BUMP_PREFIX + claims.uid())
                 .defaultIfEmpty("")
+                .onErrorResume(e -> {
+                    degraded("bump-check", e);
+                    return chain.filter(pass(exchange, claims)).then(Mono.just(""));
+                })
                 .flatMap(bumpedAt -> {
                     if (!bumpedAt.isEmpty() && claims.iat() < Long.parseLong(bumpedAt)) {
                         log.info("[admin-auth] 会话早于整号作废时刻，拒绝 user={}, path={}", claims.sub(), path);
@@ -105,6 +119,13 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
                     }
                     return chain.filter(pass(exchange, claims));
                 });
+    }
+
+    /** 吊销链 Redis 不可用的降级计数 + 告警（详见 filter() 的根因 C 注释） */
+    private void degraded(String stage, Throwable e) {
+        meters.counter("marketing.gateway.auth.degraded", "filter", "admin", "stage", stage).increment();
+        log.warn("[admin-auth] {} 不可用，退化为仅验签放行（bounded by accessTtl，恢复即自愈）: {}",
+                stage, e.toString());
     }
 
     private Mono<Void> rejectedByStatus(ServerWebExchange exchange, TokenVerifyResult result, String path) {

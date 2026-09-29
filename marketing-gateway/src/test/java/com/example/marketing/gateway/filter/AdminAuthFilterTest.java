@@ -61,7 +61,8 @@ class AdminAuthFilterTest {
         when(redis.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(anyString())).thenReturn(Mono.empty());
         when(redis.hasKey(anyString())).thenReturn(Mono.just(false));
-        filter = new AdminAuthFilter(properties, redis, codec());
+        filter = new AdminAuthFilter(properties, redis, codec(),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         chain = mock(GatewayFilterChain.class);
         when(chain.filter(any())).thenReturn(Mono.empty());
         captured = ArgumentCaptor.forClass(ServerWebExchange.class);
@@ -192,7 +193,8 @@ class AdminAuthFilterTest {
     @DisplayName("未配 ADMIN_JWT_SECRET：后台整片拒绝，但网关与 C 端不受影响")
     void missingSecretFailsClosedForAdminOnly() {
         properties.getAdmin().setJwtSecret("");
-        filter = new AdminAuthFilter(properties, redis, new AdminTokenCodec("", Duration.ofSeconds(30)));
+        filter = new AdminAuthFilter(properties, redis, new AdminTokenCodec("", Duration.ofSeconds(30)),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         MockServerWebExchange exchange = adminGet("Bearer " + token(1L, "admin", "admin", "jti-1"));
 
         filter.filter(exchange, chain).block();
@@ -214,7 +216,8 @@ class AdminAuthFilterTest {
     @DisplayName("必须排在消费者鉴权之前：托管清单罩住整片 /api/**，后台要靠先落 VERIFIED 让开")
     void runsBeforeConsumerAuthFilter() {
         assertTrue(filter.getOrder() < new ConsumerAuthFilter(properties, redis,
-                new com.example.marketing.common.security.ConsumerTokenCodec("x", java.time.Duration.ZERO))
+                new com.example.marketing.common.security.ConsumerTokenCodec("x", java.time.Duration.ZERO),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
                 .getOrder());
         assertFalse(AdminAuthFilter.VERIFIED.isEmpty());
     }

@@ -164,6 +164,13 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | `GRAY_REFRESH_SECONDS` | `5` | 灰度规则回源 DB 的节拍（灰度真值在 `activity.gray_percent`，不依赖 Redis） |
 | `RL_ADMIN` | 后台路由的限流阈值（默认 50/s） | 路由 id 不在限流 map 里＝完全不限流；后台登录口的 BCrypt 单次 50-100ms，几十 QPS 就能把与 C 端同进程的后台打满 |
 
+> **网关 Redis 降级（2026-09-29 第三批，根因 C 收口）**：限流计数不可用时 fail-open
+> 放行并计 `marketing.gateway.rate.limit.degraded`（洪流保护自己的可用性不能比后端低）；
+> C 端/后台吊销位与 bump 查询不可用时退化为"仅验签放行 + 告警"，代价与 Redis 被清空
+> 相同（已声明边界：已吊销 token 可用到自然过期，上界 accessTtl）；`RL_*=0` 经
+> env/yml 设入时钳制为 1 并告警（0 在 Lua 里恒真 = 整条入口全拒，在线路径本有
+> min=1 校验，env 路径原先没有）。
+
 > **XFF 治理（2026-09-29 起）**：网关是最外层入口，请求里出现的 `X-Forwarded-For` 只可能是
 > 客户端自报——限流键因此只取 TCP 对端地址（自报 XFF 刷不出新桶），且网关对下游**覆写** XFF
 > （`x-forwarded.for-append: false`）后才转发，下游 `ClientIp` 拿到的恒为网关写入的单值；
@@ -376,7 +383,13 @@ POST /api/coupon/grant (requestId 幂等键)
   `marketing.idempotent.processing-lease-seconds` 可调——进程崩溃后键不再永久砖化在
   "处理中"，重试可按 update_time CAS 接管）；领券消费端把 `uk_request_id`（重复投递，
   幂等回放）与 `uk_coupon_code`（券码随机撞码，换码重试上限 3 次）两类冲突分开处置
-  ——原实现一律当重复消息确认掉，撞码时静默丢券且库存/限领永不归还
+  ——原实现一律当重复消息确认掉，撞码时静默丢券且库存/限领永不归还。
+  2026-09-29 第三批补齐**归还原语**（根因 A 收口）：券预扣后消息登记/投递失败即调
+  rollback_stock.lua 归还（幂等 FAILED 重试不再二次预扣）；秒杀占名额后失败即 refill
+  回补原桶并写 FAIL 终态；budget_flow 补 REFUND 写入方（`POST /api/admin/activities/
+  {no}/budget/refund`，按原 DEDUCT 配对、每笔扣减最多退一次）；FAILED 死信有计数告警
+  （`marketing.message.failed`）与管理端重驱动（`POST /api/admin/coupon|seckill/messages/
+  redrive`，置回 PENDING 由补偿定时器重投）
 - `LocalMessageRetryer`（common 内置 @Scheduled）补偿未确认消息；重启时 `StockWarmUpRunner` 按 DB 已发量重算 Redis 库存
 
 ### 2. 优惠计算（P99 < 20ms）

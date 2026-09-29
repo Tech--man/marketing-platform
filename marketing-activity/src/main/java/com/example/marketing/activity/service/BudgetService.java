@@ -157,6 +157,70 @@ public class BudgetService implements CacheReheater, CacheConsistency {
     }
 
     /**
+     * 退款（A3，2026-09-29 审查，根因 A：预算无归还原语）。
+     *
+     * <p>{@code budget_flow} 的 REFUND 类型与对账公式（Redis 剩余 == 总预算 +
+     * SUM(DEDUCT) + SUM(REFUND)）从建表起就支持，但全仓从未有写入方——扣出去的预算
+     * 没有任何归还路径，结算回退/运营纠错只能手工改库。</p>
+     *
+     * <p><b>配对与幂等</b>：退款必须指向一笔真实 DEDUCT（按原 (activityNo, bizKey)
+     * 配对），金额不得超过它；REFUND 行自身用 {@code refund:} + 原 bizKey 占唯一键
+     * ——重复退款命中 uk_activity_biz 被拦下，回放 REPLAYED。即每笔扣减最多退一次
+     * （可部分退），要多次退款就该有多次扣减。</p>
+     *
+     * <p><b>Redis 侧</b>：键存在时 INCRBY；缺失时跳过——缺键分支与 reheat 的重建
+     * 公式都含 REFUND，下一次扣减/重预热自然把退款带进余额，而 INCRBY 在缺失键上
+     * 会从 0 起算（错账方向不可控）。INCRBY 失败不回退流水：余额偏低方向偏保守，
+     * 由公式重建自愈。</p>
+     */
+    public RefundOutcome refund(String activityNo, String bizKey, long amountCents) {
+        if (amountCents <= 0) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "退款金额必须为正");
+        }
+        List<java.util.Map<String, Object>> deducts = jdbcTemplate.queryForList(
+                "SELECT amount_cents FROM budget_flow WHERE activity_no = ? AND biz_key = ? AND type = 'DEDUCT'",
+                activityNo, bizKey);
+        if (deducts.isEmpty()) {
+            throw BizException.of(ErrorCode.NOT_FOUND, "没有对应的扣减流水: " + bizKey);
+        }
+        long deducted = -((Number) deducts.get(0).get("amount_cents")).longValue();
+        if (amountCents > deducted) {
+            throw BizException.of(ErrorCode.BAD_REQUEST,
+                    "退款 " + amountCents + " 分超过原扣减 " + deducted + " 分");
+        }
+        String refundKey = "refund:" + bizKey;
+        int inserted = jdbcTemplate.update(
+                "INSERT IGNORE INTO budget_flow (activity_no, biz_key, amount_cents, type) "
+                        + "VALUES (?, ?, ?, 'REFUND')",
+                activityNo, refundKey, amountCents);
+        if (inserted == 0) {
+            log.info("[budget] 重复退款请求幂等回放 activityNo={}, bizKey={}", activityNo, bizKey);
+            return RefundOutcome.REPLAYED;
+        }
+        try {
+            if (Boolean.TRUE.equals(redisTemplate.hasKey(budgetKey(activityNo)))) {
+                redisTemplate.opsForValue().increment(budgetKey(activityNo), amountCents);
+            } else {
+                log.info("[budget] 预算键缺失，退款只落流水（重建公式含 REFUND，余额自愈）activityNo={}",
+                        activityNo);
+            }
+        } catch (RuntimeException e) {
+            log.warn("[budget] 退款 INCRBY 失败（余额偏低方向偏保守，公式重建自愈）activityNo={}: {}",
+                    activityNo, e.toString());
+        }
+        // 展示口径同步回减；GREATEST 防负数（该列仅展示，权威在流水与 Redis）
+        jdbcTemplate.update(
+                "UPDATE activity SET used_amount = GREATEST(used_amount - ?, 0) WHERE activity_no = ?",
+                BigDecimal.valueOf(amountCents).movePointLeft(2), activityNo);
+        return RefundOutcome.REFUNDED;
+    }
+
+    /** 退款结果：与扣减同款语义，REPLAYED = 这笔扣减已经退过 */
+    public enum RefundOutcome {
+        REFUNDED, REPLAYED;
+    }
+
+    /**
      * 扣减结果。原来 void + code=0 让"幂等回放"与"真的扣了钱"在响应上无法区分，
      * 运营/调用方看到成功就以为扣成了 —— 现在语义进 data。
      */

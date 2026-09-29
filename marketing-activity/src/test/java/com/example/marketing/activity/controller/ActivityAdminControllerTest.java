@@ -40,10 +40,12 @@ import static org.mockito.Mockito.when;
 class ActivityAdminControllerTest {
 
     private final ActivityService activityService = mock(ActivityService.class);
+    private final com.example.marketing.activity.service.BudgetService budgetService =
+            org.mockito.Mockito.mock(com.example.marketing.activity.service.BudgetService.class);
     private final AdminRequestIdentity identity = mock(AdminRequestIdentity.class);
     private final AuditOutbox outbox = mock(AuditOutbox.class);
     private final ActivityAdminController controller =
-            new ActivityAdminController(activityService, identity, outbox);
+            new ActivityAdminController(activityService, budgetService, identity, outbox);
 
     private final MockHttpServletRequest request = new MockHttpServletRequest();
     private final AdminPrincipal admin = new AdminPrincipal(1L, "admin", AdminRoles.ADMIN, "jti-1");

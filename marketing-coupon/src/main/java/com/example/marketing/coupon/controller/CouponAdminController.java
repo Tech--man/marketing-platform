@@ -44,6 +44,7 @@ public class CouponAdminController {
 
     private final CouponTemplateService templateService;
     private final AdminRequestIdentity identity;
+    private final com.example.marketing.common.message.LocalMessageService localMessageService;
     private final AuditOutbox outbox;
 
     @GetMapping("/templates")
@@ -90,6 +91,20 @@ public class CouponAdminController {
         audit(actor, "coupon.status.set", templateNo, request,
                 "from=" + from + ", to=" + after.getStatus() + ", version=" + after.getVersion());
         return Result.ok(TemplateView.from(after));
+    }
+
+    /**
+     * 重驱动本地消息死信（2026-09-29 审查，对账兜底的人工通道）：FAILED 是终态，
+     * 补偿定时器不再扫它；这里置回 PENDING 由定时器重新投递，重投安全由消费端
+     * 幂等保证。驱动条数进审计。
+     */
+    @PostMapping("/messages/redrive")
+    public Result<Integer> redriveMessages(HttpServletRequest request) {
+        AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
+        int driven = localMessageService.redriveFailed(com.example.marketing.common.mq.MqTopics.TOPIC_COUPON_GRANT);
+        audit(actor, "coupon.messages.redrive", "local_message", request,
+                "topic=" + com.example.marketing.common.mq.MqTopics.TOPIC_COUPON_GRANT + ", driven=" + driven);
+        return Result.ok(driven);
     }
 
     private void audit(AdminPrincipal actor, String action, String templateNo,

@@ -150,4 +150,38 @@ class LocalMessageServiceTest {
                 "SELECT retry_count FROM local_message WHERE topic = ? AND biz_key = ?",
                 Integer.class, SECKILL_TOPIC, "REQ-10"), "秒杀那行的重试次数不能被带着走");
     }
+
+    @Test
+    @DisplayName("FAILED 死信可计数（对账兜底信号）且重驱动后回到补偿链路")
+    void failedDeadLetterIsCountedAndRedrivable() {
+        service.recordIfAbsent(COUPON_TOPIC, "GRANT", "REQ-DEAD", "coupon-payload");
+        jdbc.update("UPDATE local_message SET status = 'FAILED', retry_count = 10 "
+                + "WHERE topic = ? AND biz_key = ?", COUPON_TOPIC, "REQ-DEAD");
+        service.recordIfAbsent(SECKILL_TOPIC, "ORDER", "REQ-ALIVE", "order-payload");
+
+        assertEquals(1, service.countFailed(), "死信计数是 ④/告警的唯一入口，数错就是看不见");
+
+        int driven = service.redriveFailed(COUPON_TOPIC);
+
+        assertEquals(1, driven);
+        assertEquals("PENDING", status(COUPON_TOPIC, "REQ-DEAD"));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT retry_count FROM local_message WHERE topic = ? AND biz_key = ?",
+                Integer.class, COUPON_TOPIC, "REQ-DEAD"), "重试计数必须清零，否则马上又撞上限");
+        // topic 隔离：另一个 topic 的活消息不受影响
+        assertEquals("PENDING", status(SECKILL_TOPIC, "REQ-ALIVE"));
+    }
+
+    @Test
+    @DisplayName("重驱动只认自己的 topic：别的 topic 的死信不动")
+    void redriveOnlyTouchesOwnTopic() {
+        service.recordIfAbsent(COUPON_TOPIC, "GRANT", "REQ-D1", "p");
+        service.recordIfAbsent(SECKILL_TOPIC, "ORDER", "REQ-D2", "p");
+        jdbc.update("UPDATE local_message SET status = 'FAILED' WHERE status = 'PENDING'");
+
+        int driven = service.redriveFailed(COUPON_TOPIC);
+
+        assertEquals(1, driven);
+        assertEquals("FAILED", status(SECKILL_TOPIC, "REQ-D2"), "跨 topic 误驱会把别人的死信也重投");
+    }
 }
