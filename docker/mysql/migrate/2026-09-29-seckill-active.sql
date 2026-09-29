@@ -8,10 +8,13 @@
 --     四库隔离档  → mysql -umarketing -pmarketing123 marketing_seckill   < 本文件
 --   （其他库没有 seckill_order 表，本文件会整体跳过，不会误建。）
 --
---   做两件事：
---     1) seckill_order 加 active 列（存量行取默认值 1 = 有效，语义不变）；
+--   做三件事：
+--     1) seckill_order 加 active 列（存量行取默认值 1 = 有效）；
 --     2) 唯一索引 uk_activity_user 从 (activity_no, user_id) 换成
---        (activity_no, user_id, active) —— 只约束"一人一张有效单"。
+--        (activity_no, user_id, active) —— 只约束"一人一张有效单"；
+--     3) 存量 CANCELLED 行回填 active=0 —— ADD COLUMN 的默认值 1 会把它们也标成
+--        "有效单"，这批用户在旧索引下本就被永久锁死（无法重抢），不回填等于把
+--        病灶原样留给存量数据（本仓常驻卷实测 6907 行 CANCELLED）。
 --   成因：超时取消链路会回补库存并删防重标记（允许重抢），但旧唯一索引把
 --   CANCELLED 行也算进占用——重抢的 insert 必撞旧行，消费端把已取消单号当
 --   SUCCESS 回放，用户拿到永远付不了款的单号，且本次名额无主。
@@ -48,6 +51,14 @@ SET @s := (SELECT IF(@has_order > 0
         'DROP INDEX uk_activity_user, ',
         'ADD UNIQUE KEY uk_activity_user (activity_no, user_id, active) ',
         'COMMENT ''防重复购买兜底（一人一张有效单；取消置 active=0 释放占用）'''),
+    'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- ------------------------------------------------------------
+-- 2.5) 存量回填：已取消的订单释放占用（active=0）。幂等：已置 0 的行不再命中
+-- ------------------------------------------------------------
+SET @s := (SELECT IF(@has_order > 0,
+    'UPDATE seckill_order SET active = 0 WHERE status = ''CANCELLED'' AND active = 1',
     'DO 0'));
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
