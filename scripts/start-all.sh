@@ -101,7 +101,8 @@ start_one() {
 # 本机进程形态的端口是静态路由的依据：只等本次真正拉起的那几个服务
 port_of() {
   case $1 in
-    marketing-gateway) echo 8090 ;;
+    # 网关的健康检查端口是独立管理端口 8091（actuator 不再挂在业务入口 8090 上）
+    marketing-gateway) echo 8091 ;;
     marketing-activity) echo 8081 ;;
     marketing-coupon) echo 8082 ;;
     marketing-discount) echo 8083 ;;

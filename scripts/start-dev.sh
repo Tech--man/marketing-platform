@@ -77,6 +77,6 @@ export ADMIN_HOST=127.0.0.1 ADMIN_PORT=8085
 # 127.0.0.1:8087（那里没人听）→ 500 Connection refused，而冒烟在第一步就停。
 export ACCOUNT_HOST=127.0.0.1 ACCOUNT_PORT=8085
 start_jvm marketing-gateway "$ROOT/marketing-gateway/target/marketing-gateway-1.0.0-SNAPSHOT-exec.jar" "$GATEWAY_OPTS"
-wait_healthy marketing-gateway 8090 60
+wait_healthy marketing-gateway 8091 60   # 网关管理端口（actuator 已与 8090 分离）
 
 echo "==> 开发环境就绪。冒烟测试：./scripts/smoke-test.sh"

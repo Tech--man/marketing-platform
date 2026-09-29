@@ -24,7 +24,7 @@ class OpsTargetsTest {
     @DisplayName("清单内的 host:port 正常收下")
     void acceptsWhitelisted() {
         assertEquals("marketing-activity", OpsTargets.parse("activity", "marketing-activity:8081").host());
-        assertEquals(8090, OpsTargets.parse("gw", "marketing-gateway:8090").port());
+        assertEquals(8091, OpsTargets.parse("gw", "marketing-gateway:8091").port());
         assertEquals("standalone", OpsTargets.parse("self", "standalone:8085").host());
         assertEquals("127.0.0.1", OpsTargets.parse("self", "127.0.0.1:8085").host());
         assertEquals("mkt-preview-standalone", OpsTargets.parse("c", "mkt-preview-standalone:8085").host());

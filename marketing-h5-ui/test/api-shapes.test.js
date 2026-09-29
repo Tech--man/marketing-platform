@@ -94,10 +94,11 @@ describe("活动 /api/activity", () => {
 });
 
 describe("优惠计算 / 秒杀", () => {
-  it("calculate 的 body 里没有 userId", async () => {
-    await discountApi.calculate({ activityNo: "ACT2026001", userTags: [], items: [{ lineId: "1" }] });
+  it("calculate 的 body 里没有 userId / userTags", async () => {
+    await discountApi.calculate({ activityNo: "ACT2026001", items: [{ lineId: "1" }] });
     expect(last().url).toBe("/api/discount/calculate");
     expect("userId" in last().body).toBe(false);
+    expect("userTags" in last().body).toBe(false);
   });
 
   it("grab 只带 activityNo", async () => {

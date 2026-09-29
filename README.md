@@ -149,7 +149,8 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | 3307 | MySQL（仅绑回环，单库 `marketing`） | 数据层 `mkt-mysql` |
 | 6380 | Redis（仅绑回环，AOF + noeviction） | 数据层 `mkt-redis` |
 | 8090 | 网关对外入口 | 形态侧：dev/FULL 本机进程、LITE 容器 |
-| 8085 | 聚合服务（调试直连） | 形态侧：dev 本机进程、LITE 容器 |
+| 8091 | 网关 actuator（health/prometheus），容器形态仅绑回环 | 网关独立管理端口（2026-09-29 起） |
+| 8085 | 聚合服务（调试直连；LITE 容器**仅绑回环**，见下） | 形态侧：dev 本机进程、LITE 容器 |
 | 8086 | 管理后台（仅 FULL 本机进程形态直连需要；容器形态不发布端口） | 形态侧：FULL |
 | 9876 / 10911 / 8848 / 9091 | RocketMQ / Nacos / Prometheus | 仅 FULL 形态 |
 
@@ -162,6 +163,12 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | `CONFIG_POLL_SECONDS` | `5` | 各进程比对配置版本的节拍，即"改完阈值到全档生效"的延迟上限 |
 | `GRAY_REFRESH_SECONDS` | `5` | 灰度规则回源 DB 的节拍（灰度真值在 `activity.gray_percent`，不依赖 Redis） |
 | `RL_ADMIN` | 后台路由的限流阈值（默认 50/s） | 路由 id 不在限流 map 里＝完全不限流；后台登录口的 BCrypt 单次 50-100ms，几十 QPS 就能把与 C 端同进程的后台打满 |
+
+> **XFF 治理（2026-09-29 起）**：网关是最外层入口，请求里出现的 `X-Forwarded-For` 只可能是
+> 客户端自报——限流键因此只取 TCP 对端地址（自报 XFF 刷不出新桶），且网关对下游**覆写** XFF
+> （`x-forwarded.for-append: false`）后才转发，下游 `ClientIp` 拿到的恒为网关写入的单值；
+> `X-Real-IP` 从采信链移除（它没有合法写入方）。审计 ip 列与登录限速由此不可被一个请求头
+> 投毒。将来前面真加一层可信 LB 时，在那层写 XFF 并按固定跳数取段，而不是恢复盲信首段。
 
 **注册中心模式已实测**（`PROFILES=nacos ./scripts/start-all.sh`）：5 个服务全部注册进 Nacos；
 再起第二个 discount 实例（`SERVER_PORT=8093`）后 Nacos 显示两个 host，经网关打 20 次同步请求，
@@ -428,11 +435,12 @@ POST /api/admin/auth/login（账号口令，dev 种子见下）
 - **配置类写自 ③ 起只存在于 `/api/admin/**`**（详见下面的"写入口矩阵"）：`POST /api/activity`、
   `PUT /api/activity/{no}/budget`、`POST /api/discount/rules`、`POST /api/coupon/templates` 等
   C 端旧路径已删除且**不留转发别名**，命中就是 `40400`。
-- 已知边界：业务服务端口绑 `*:808x`（FULL 进程形态）、standalone 的 8085 也发布了（LITE），
-  所以后台身份**不认裸 `X-Admin-*` 头** —— 网关验签后注入的是 `X-Admin-Token`，服务侧用同一枚
-  HS256 密钥再验一次签名；绕过网关只带裸头直连必然 `40100`（链路 6 同时钉"带合法 token 时
-  身份放行"，否则 `40100` 也可能只是"端口不通"的另一种写法）。四个 C 端**交易**路径本来就不
-  校验 token（鉴权在网关），所以**任何形态下都不该把业务服务端口暴露到不可信网络**
+- 已知边界：业务服务端口绑 `*:808x`（FULL 进程形态），所以后台身份**不认裸 `X-Admin-*` 头**
+  —— 网关验签后注入的是 `X-Admin-Token`，服务侧（含 admin 进程自己，2026-09-29 起同一纪律）
+  用同一枚 HS256 密钥再验一次签名；绕过网关只带裸头直连必然 `40100`（链路 6 同时钉"带合法
+  token 时身份放行"，否则 `40100` 也可能只是"端口不通"的另一种写法）。LITE 的 standalone:8085
+  已改为**仅绑回环**发布（此前是全网卡，与"对外只暴露网关"的注释相悖）；四个 C 端**交易**路径
+  本来就不校验 token（鉴权在网关），所以**任何形态下都不该把业务服务端口暴露到不可信网络**
 
 ### 5. 在线配置下发（改阈值与灰度不重启）
 
@@ -488,7 +496,8 @@ Redis + MySQL，Prometheus 只是可选的第二消费者。
 
 **抓谁由清单说了算，清单在启动时校验**：`marketing.admin.ops.targets` 是
 `name → host:port` 的正面白名单（host 只接受 `marketing-*` / `standalone` / `127.0.0.1` /
-`mkt-*`，端口只接受 8081-8086 与 8090，路径是常量 `/actuator/prometheus`），请求期不再接受
+`mkt-*`，端口只接受 8081-8087 与 8090/8091（8091 是网关独立管理端口），路径是常量
+`/actuator/prometheus`），请求期不再接受
 任何外部输入；`Redirect.NEVER`、1s 超时、响应超过 256KB 直接判失败（半份指标比没指标更坏）。
 清单里任意一条不合法 → **启动即失败**，而不是点大盘时才发现。
 
@@ -581,7 +590,9 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 已知边界（写清楚，不藏）：
 - 吊销位与会话作废只在网关判，业务侧是无状态验签 —— 被吊销的 access token 直连业务端口可用到自然过期，
   上限 15 分钟。与后台同形。
-- `CalcInput.userTags` 仍是调用方声明的标签（会员等级/人群包的来源不在本项目内），本轮没收口。
+- `CalcInput.userTags` 已收口（2026-09-29）：C 端入口把它覆写为空集，管理端也禁止创建
+  `user:` 前缀的人群规则 —— 服务端没有可信人群来源之前，人群折扣不该有"自报命中"的路径。
+  引擎的 `user:` 匹配语义保留，接入人群服务后在此恢复按 userId 填标签。
 - `/api/seckill/grab/result/{token}` 只做登录门，没做本人校验：token 是 UUID 且结果只含状态与单号。
   `/api/coupon/grant/result/{requestId}` 做了本人过滤（那里返回的是可兑付的券码）。
 - `CONSUMER_JWT_SECRET` 必须与 `ADMIN_JWT_SECRET` 是**不同**的值：同值的话两套凭证的隔离只剩
@@ -595,7 +606,7 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 | Method | Path | 说明 |
 |---|---|---|
 | GET | /api/activity/{no}/participatable · /gray-hit?userId= | 可参与校验 · 灰度命中判断 |
-| POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减 / 实时余额。幂等键作用域是 **(活动, bizKey)**，同一 bizKey 用在两个活动上是两次真扣；`data` 返回 `DEDUCTED`（本次扣了钱）或 `REPLAYED`（重复请求回放，没再扣） |
+| POST | /api/activity/{no}/budget/deduct · GET /budget/remain | 预算扣减 / 实时余额。幂等键作用域是 **(活动, bizKey)**，同一 bizKey 用在两个活动上是两次真扣；`data` 返回 `DEDUCTED`（本次扣了钱）或 `REPLAYED`（重复请求回放，没再扣）。**需登录**，且过滥用闸（单笔上限、每用户每活动每分钟次数上限，`marketing.activity.budget-deduct.*` 可调）—— bizKey 由调用方自报，没有闸时换键即真扣 |
 | POST | /api/coupon/grant · /consume | 领券受理 · 核销 |
 | GET | /api/coupon/grant/result/{requestId} · /usable?userId= · /stock/{templateNo} | 轮询 / 可用券 / 模板余量 |
 | POST | /api/discount/calculate | 优惠计算（购物车 → 命中规则 + 行级分摊）。规则读写自 ③ 起只在后台前缀 |

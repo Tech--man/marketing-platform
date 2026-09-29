@@ -37,7 +37,9 @@ export const useCart = defineStore("cart", () => {
   // [{ skuId, itemId, name, spec, unitPrice, tags, icon, qty }]
   const lines = ref(loadCart());
   const activityNo = ref(ACTIVITY_NO);
-  const userTags = ref(new Set()); // 人群标签（演示用，命中 requiredTags）
+  // 人群标签开关已随服务端 H9 收口移除（2026-09-29）：/api/discount/calculate 会把
+  // 请求体里的 userTags 覆写为空集——人群规则在接入可信人群来源前不可用，
+  // 留一个"点了没反应"的自报开关只会误导。
   const selectedCoupon = ref(null); // 选中的券（含 faceValue），结算页据此显示抵扣
   const selectedCouponCode = computed(() => selectedCoupon.value?.couponCode || null);
 
@@ -86,12 +88,6 @@ export const useCart = defineStore("cart", () => {
       selectedCoupon.value?.couponCode === coupon.couponCode ? null : coupon;
   }
 
-  function toggleUserTag(t) {
-    const s = new Set(userTags.value);
-    s.has(t) ? s.delete(t) : s.add(t);
-    userTags.value = s;
-  }
-
   const count = computed(() => lines.value.reduce((n, l) => n + l.qty, 0));
 
   const totalQuantity = computed(() =>
@@ -102,9 +98,9 @@ export const useCart = defineStore("cart", () => {
   const calcInput = computed(() => {
     if (!lines.value.length) return null;
     return {
-      // 不带 userId：服务端 @JsonIgnore 掉了它，身份由验签后的 access token 回填
+      // 不带 userId：服务端 @JsonIgnore 掉了它，身份由验签后的 access token 回填。
+      // 也不带 userTags：服务端同样覆写为空集（H9），发了也是白发。
       activityNo: activityNo.value,
-      userTags: [...userTags.value],
       items: lines.value.map((l) => ({
         lineId: String(l.skuId),
         skuId: l.skuId,
@@ -119,7 +115,6 @@ export const useCart = defineStore("cart", () => {
   return {
     lines,
     activityNo,
-    userTags,
     selectedCoupon,
     selectedCouponCode,
     add,
@@ -127,7 +122,6 @@ export const useCart = defineStore("cart", () => {
     remove,
     clear,
     selectCoupon,
-    toggleUserTag,
     count,
     totalQuantity,
     calcInput,

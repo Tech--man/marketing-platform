@@ -12,6 +12,7 @@ import com.example.marketing.common.util.JsonUtils;
 import com.example.marketing.discount.domain.PromoRuleDsl;
 import com.example.marketing.discount.dto.RuleSaveRequest;
 import com.example.marketing.discount.dto.RuleView;
+import com.example.marketing.discount.engine.RuleSnapshot;
 import com.example.marketing.discount.infrastructure.entity.PromoRuleEntity;
 import com.example.marketing.discount.infrastructure.mapper.PromoRuleMapper;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,21 @@ public class RuleAdminService {
      */
     @Transactional(rollbackFor = Exception.class)
     public RuleView save(RuleSaveRequest request, Integer expectedVersion) {
+        // H9（2026-09-29 架构审查）：user: 前缀的人群规则暂不可创建。
+        // 引擎的匹配语义是"规则带 user:X，输入侧 userTags 含 X 即命中"，而 C 端入口
+        // 已把自报 userTags 覆写为空集（DiscountController）——这类规则今天不存在
+        // 能被正当满足的路径，允许创建等于放一条"永远命中不了"的死规则进快照；
+        // 将来接上可信人群服务、入口恢复按 userId 填标签时，把这道闸拆掉。
+        if (request.getRequiredTags() != null) {
+            request.getRequiredTags().stream()
+                    .filter(tag -> tag != null && tag.startsWith(RuleSnapshot.USER_TAG_PREFIX))
+                    .findAny()
+                    .ifPresent(tag -> {
+                        throw BizException.of(ErrorCode.BAD_REQUEST,
+                                "人群标签规则（" + tag + "…）暂不可创建：服务端尚无可信人群来源，"
+                                        + "等人群服务接入后再启用");
+                    });
+        }
         PromoRuleEntity existing = byRuleNo(request.getRuleNo());
         String ruleJson = JsonUtils.toJson(toDsl(request));
         if (existing == null) {

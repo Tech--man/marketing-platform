@@ -54,8 +54,11 @@ class RateLimitFilterTest {
     }
 
     private MockServerWebExchange exchange() {
+        // 自报 XFF + 真实对端并存：H3 之后限流键只认对端地址（见 spoofedXffIsNotTheRateKey）
         MockServerWebExchange exchange = MockServerWebExchange.from(
-                MockServerHttpRequest.post("http://gw/api/seckill/grab").header("X-Forwarded-For", "10.1.2.3, 10.0.0.1"));
+                MockServerHttpRequest.post("http://gw/api/seckill/grab")
+                        .remoteAddress(new java.net.InetSocketAddress("192.0.2.9", 50000))
+                        .header("X-Forwarded-For", "10.1.2.3, 10.0.0.1"));
         Route route = Route.async().id("seckill-route").uri(URI.create("http://127.0.0.1:8084"))
                 .predicate(s -> true).build();
         exchange.getAttributes().put(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR, route);
@@ -70,9 +73,16 @@ class RateLimitFilterTest {
                 new RateRuleResolver.Outcome(rule, false, false));
     }
 
+    private java.util.List<String> capturedKeys;
+
     @SuppressWarnings("unchecked")
     private void luaSays(long allowed) {
-        when(redis.execute(any(RedisScript.class), anyList(), anyList())).thenReturn(Flux.just(allowed));
+        // 顺带记录本次限流键，供 H3 用例断言"自报 XFF 不进键"
+        when(redis.execute(any(RedisScript.class), anyList(), anyList()))
+                .thenAnswer(invocation -> {
+                    capturedKeys = invocation.getArgument(1);
+                    return Flux.just(allowed);
+                });
     }
 
     @Test
@@ -116,6 +126,18 @@ class RateLimitFilterTest {
         verify(chain).filter(any());
         verify(redis, never()).execute(any(RedisScript.class), anyList(), anyList());
         assertEquals(0.0, meteredCount());
+    }
+
+    @Test
+    @DisplayName("H3：自报 XFF 不进限流键——键取 TCP 对端地址，换假 IP 刷不出新桶")
+    void spoofedXffIsNotTheRateKey() {
+        ruleIsOnePerSecond();
+        luaSays(1L);
+
+        filter.filter(exchange(), chain).block();
+
+        assertEquals("gw:rl:seckill-route:192.0.2.9", capturedKeys.get(0),
+                "限流键必须是对端地址，XFF 首段 10.1.2.3 出现在键里就是回归");
     }
 
     private double meteredCount() {

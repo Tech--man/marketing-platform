@@ -2,6 +2,7 @@ package com.example.marketing.activity.controller;
 
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.service.ActivityService;
+import com.example.marketing.activity.service.BudgetDeductGuard;
 import com.example.marketing.activity.service.BudgetService;
 import com.example.marketing.activity.service.GrayService;
 import com.example.marketing.common.security.ConsumerRequestIdentity;
@@ -32,6 +33,7 @@ public class ActivityController {
     private final ActivityService activityService;
     private final BudgetService budgetService;
     private final GrayService grayService;
+    private final BudgetDeductGuard budgetDeductGuard;
     private final ConsumerRequestIdentity identity;
 
     /** 查询活动 */
@@ -58,10 +60,21 @@ public class ActivityController {
         return Result.ok(grayService.hit(activityNo, identity.require(request).uid()));
     }
 
-    /** 扣减预算（幂等键作用域 = 活动 + bizKey；data 区分真扣 DEDUCTED 与重复回放 REPLAYED） */
+    /**
+     * 扣减预算（幂等键作用域 = 活动 + bizKey；data 区分真扣 DEDUCTED 与重复回放 REPLAYED）。
+     *
+     * <p>H10（2026-09-29 架构审查收口）：必须登录（uid 参与限频），且过
+     * {@link BudgetDeductGuard} 的单笔金额与每用户频次两道闸——bizKey 由调用方自报，
+     * 换键即真扣，没有这两道闸时任何一个登录用户都能把活动预算逐笔抽干。
+     * 金额硬闸（余额不足）仍在 BudgetService，这里拦的是滥用不是余额。</p>
+     */
     @PostMapping("/{activityNo}/budget/deduct")
     public Result<BudgetService.DeductOutcome> deductBudget(@PathVariable String activityNo,
+                                                            HttpServletRequest httpRequest,
                                                             @Valid @RequestBody DeductRequest request) {
+        long uid = identity.require(httpRequest).uid();
+        budgetDeductGuard.checkAmount(request.amountCents());
+        budgetDeductGuard.checkRate(activityNo, uid);
         return Result.ok(budgetService.deduct(activityNo, request.amountCents(), request.bizKey()));
     }
 

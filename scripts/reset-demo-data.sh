@@ -22,7 +22,8 @@ JSON="Content-Type: application/json"
 # 冷栈守卫：脚本什么都能做，唯独不能在栈没起来时装作成功了。
 # 上一版这里只打两行提示就 0 退出，实测把 FULL 进程形态留成 41007「秒杀库存未预热」
 # + 冒烟整片红，而退出码看起来一切正常。
-if ! curl -fs --max-time 3 "$GW/actuator/health" >/dev/null 2>&1; then
+GW_MGMT="${GW_MGMT:-http://127.0.0.1:8091}"   # actuator 已与业务端口分离
+if ! curl -fs --max-time 3 "$GW_MGMT/actuator/health" >/dev/null 2>&1; then
   echo "!! 网关不可达（$GW）：先起任一形态（deploy-preview / deploy-full / start-dev）再复位" >&2
   exit 1
 fi

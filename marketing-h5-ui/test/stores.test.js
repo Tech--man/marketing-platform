@@ -165,7 +165,6 @@ describe("cart 行项目与 CalcInput 构造", () => {
     expect(input.items[0].lineId).toBe(String(CATALOG[2].skuId));
     expect(input.items[0].quantity).toBe(2);
     expect(input.items[0].unitPrice).toBe(CATALOG[2].unitPrice);
-    expect(Array.isArray(input.userTags)).toBe(true);
   });
   it("calcInput 里不许出现 userId：身份由 access token 判，多一个 userId 就多一个越权入口", () => {
     const cart = useCart();
@@ -182,10 +181,11 @@ describe("cart 行项目与 CalcInput 构造", () => {
     cart.selectCoupon(coupon);
     expect(cart.selectedCouponCode).toBeNull();
   });
-  it("userTags 是集合去重", () => {
+  it("calcInput 里不许出现 userTags：服务端 H9 收口后自报人群标签已被覆写，发了也是白发", () => {
     const cart = useCart();
-    cart.toggleUserTag("MEMBER");
-    cart.toggleUserTag("MEMBER");
-    expect(cart.userTags.has("MEMBER")).toBe(false);
+    cart.add(CATALOG[0]);
+    const raw = JSON.stringify(cart.calcInput);
+    expect("userTags" in cart.calcInput).toBe(false);
+    expect(raw).not.toContain("userTags");
   });
 });

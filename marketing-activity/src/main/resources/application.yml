@@ -56,6 +56,14 @@ management:
 marketing:
   consumer:
     token-secret: ${CONSUMER_JWT_SECRET:}
+  # C 端预算扣减的滥用闸（H10，2026-09-29 审查收口；实现见 BudgetDeductGuard）。
+  # 默认值够演示（H5 结算页单笔 100 分、每分钟远到不了 10 次）；上线按业务实测定。
+  # standalone 不加载本文件，但 @Value 带同样默认值，LITE 形态不配也能跑。
+  activity:
+    budget-deduct:
+      max-per-window: ${BUDGET_DEDUCT_MAX_PER_WINDOW:10}
+      window-seconds: ${BUDGET_DEDUCT_WINDOW_SECONDS:60}
+      max-amount-cents: ${BUDGET_DEDUCT_MAX_AMOUNT_CENTS:100000}
 
 logging:
   level:

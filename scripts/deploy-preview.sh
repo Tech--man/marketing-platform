@@ -57,7 +57,7 @@ docker compose -f "$COMPOSE" up -d --build --wait
 # 判就绪。所以就绪判定用应用自己的 health 端点收口（这两个端口编排里都对宿主机发布）。
 echo "==> 等待应用级就绪（actuator/health）"
 wait_healthy marketing-standalone 8085 90
-wait_healthy marketing-gateway 8090 60
+wait_healthy marketing-gateway 8091 60   # 网关管理端口（actuator 已与 8090 分离）
 
 echo "==> 预览栈就绪。验收：./scripts/smoke-test.sh"
 docker compose -f "$COMPOSE" ps

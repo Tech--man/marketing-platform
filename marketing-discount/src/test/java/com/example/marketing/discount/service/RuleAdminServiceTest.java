@@ -113,6 +113,32 @@ class RuleAdminServiceTest {
     }
 
     @Test
+    @DisplayName("H9：user: 前缀的人群规则拒绝保存——C 端已不收自报标签，这类规则无人能正当命中")
+    void userTagRuleIsRejected() {
+        RuleSaveRequest r = request("PR9004");
+        r.setRequiredTags(java.util.Set.of("user:MEMBER"));
+
+        BizException e = assertThrows(BizException.class, () -> service.save(r, null));
+
+        assertEquals(40000, e.getCode());
+        verify(mapper, never()).insert(any(PromoRuleEntity.class));
+        verify(mapper, never()).updateById(any(PromoRuleEntity.class));
+        verify(cacheManager, never()).bumpVersion();
+    }
+
+    @Test
+    @DisplayName("商品维度标签（无 user: 前缀）不受影响")
+    void itemTagRuleStillSaves() {
+        when(mapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        RuleSaveRequest r = request("PR9005");
+        r.setRequiredTags(java.util.Set.of("DIGITAL"));
+
+        service.save(r, null);
+
+        verify(mapper).insert(any(PromoRuleEntity.class));
+    }
+
+    @Test
     @DisplayName("列表视图带 version：编辑时要拿它当乐观锁期望值")
     void viewCarriesVersion() {
         PromoRuleEntity e = existing("PR9001", 7);

@@ -15,6 +15,14 @@ spring:
         enabled: false
         server-addr: ${NACOS_ADDR:127.0.0.1:8848}
     gateway:
+      # XFF 治理（H3，2026-09-29 架构审查）：网关是最外层入口，客户端自报的
+      # X-Forwarded-For / X-Real-IP 一律不可信。for-append=false 让网关把 XFF
+      # **覆写**为自己看到的对端地址再转发（SCG 默认是追加，伪造值会原样带到下游，
+      # 被 ClientIp 取首段采信——限速、登录限流、审计 IP 全部可被一个请求头穿透）。
+      # 下游因此拿到的 XFF 恒为网关写入的单值。将来前面真加一层可信 LB 时，
+      # 在那层写 XFF 并在这里按跳数取段，而不是恢复追加。
+      x-forwarded:
+        for-append: false
       httpclient:
         pool:
           # 上游 Tomcat 空闲 61.3s 主动关连接（实测，见 README"已知噪音"），而 reactor-netty
@@ -177,6 +185,12 @@ marketing:
         - /api/seckill/stock/*
 
 management:
+  # 管理端口与业务入口分离（2026-09-29 架构审查）：actuator 原先与 8090 同端口对外，
+  # /actuator/prometheus 会把全部路由与上游 URI 标签、限流拒绝计数挂在公网入口上，
+  # 等于内部拓扑测绘的原料。8091 不进 compose 的对外发布（进程形态下回环调试仍可用），
+  # ④ 的运维代理、prometheus、脚本的 /actuator/health 均已同步改指 8091。
+  server:
+    port: 8091
   endpoints:
     web:
       exposure:

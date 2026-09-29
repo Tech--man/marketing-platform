@@ -45,7 +45,7 @@ async function runCalc() {
 // 行项目/标签变化 → 防抖重算。金额真相只在后端，这里不复刻满减/折扣逻辑。
 let t = null;
 watch(
-  () => [JSON.stringify(cart.calcInput), [...cart.userTags].join(",")],
+  () => JSON.stringify(cart.calcInput),
   () => {
     clearTimeout(t);
     t = setTimeout(runCalc, 260);
@@ -125,16 +125,10 @@ function itemLabel(lineId) {
           </div>
         </section>
 
+        <!-- 人群标签开关已随服务端 H9 收口移除：自报 userTags 会被 /api/discount/calculate
+             覆写为空集，人群规则接入可信来源前不该有"自己给自己发会员价"的入口 -->
         <section class="ct__tags">
-          <span class="muted small">人群标签（影响规则命中）</span>
           <div class="row wrap" style="gap: var(--space-2)">
-            <button
-              v-for="tag in ['MEMBER', 'NEW']"
-              :key="tag"
-              class="tag-toggle"
-              :class="{ 'is-on': cart.userTags.has(tag) }"
-              @click="cart.toggleUserTag(tag)"
-            >{{ tag }}</button>
             <button class="btn btn--quiet btn--sm" @click="cart.clear()">清空购物车</button>
           </div>
         </section>

@@ -52,7 +52,10 @@ services:
       # 堆 320 + 元空间 160 + code cache/线程栈/direct ~150 给足余量，避免容器 OOMKill。
       JAVA_OPTS: "-Xmx320m -Xss512k -XX:MaxMetaspaceSize=160m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
     ports:
-      - "8085:8085"   # 调试用；对外只暴露网关
+      # 只绑回环（2026-09-29 架构审查收口）：8085 上挂着全部七个模块的端点，直连它
+      # 可以绕过网关的限流与吊销位。宿主机调试（curl 127.0.0.1:8085）不受影响，
+      # "对外只暴露网关"从此是端口事实而不只是注释。
+      - "127.0.0.1:8085:8085"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8085'"]
       interval: 10s
@@ -105,6 +108,9 @@ services:
       DEPLOY_FORM: LITE
     ports:
       - "8090:8090"   # 对外唯一入口（服务器可映射 80:8090）
+      # 管理端口只绑回环：容器网内的 ④ 代理按服务名访问（不受发布影响），
+      # 宿主机侧的脚本健康检查与调试走 127.0.0.1:8091，公网摸不到。
+      - "127.0.0.1:8091:8091"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090'"]
       interval: 10s

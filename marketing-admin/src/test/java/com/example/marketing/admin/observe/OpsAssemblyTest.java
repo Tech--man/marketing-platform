@@ -45,7 +45,7 @@ class OpsAssemblyTest {
     void localAndProxyCoexist() {
         runner().withPropertyValues(
                 "marketing.admin.ops.targets.self=127.0.0.1:8085",
-                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8090",
+                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8091",
                 "marketing.admin.ops.local-targets[0]=self")
                 .run(ctx -> {
                     TargetSources sources = ctx.getBean(TargetSources.class);
@@ -102,7 +102,7 @@ class OpsAssemblyTest {
     void minimalLiteConfigStarts() {
         runner().withPropertyValues(
                 "marketing.admin.ops.targets.self=127.0.0.1:8085",
-                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8090",
+                "marketing.admin.ops.targets.marketing-gateway=marketing-gateway:8091",
                 "marketing.admin.ops.local-targets[0]=self")
                 .run(ctx -> assertNull(ctx.getStartupFailure()));
     }

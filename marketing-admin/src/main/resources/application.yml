@@ -63,7 +63,8 @@ marketing:
         marketing-seckill: ${OPS_T_SECKILL:127.0.0.1:8084}
         # 账号服务只在 FULL 形态是独立进程（LITE/dev 聚在 standalone 里，由 self 覆盖）。
         marketing-account: ${OPS_T_ACCOUNT:127.0.0.1:8087}
-        marketing-gateway: ${OPS_T_GATEWAY:127.0.0.1:8090}
+        # 网关的 actuator 已移独立管理端口（8091），与业务入口 8090 分离
+        marketing-gateway: ${OPS_T_GATEWAY:127.0.0.1:8091}
         self: ${OPS_T_SELF:127.0.0.1:8086}
 
 management:

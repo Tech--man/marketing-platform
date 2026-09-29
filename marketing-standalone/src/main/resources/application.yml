@@ -68,7 +68,8 @@ marketing:
         # 网关在 LITE 也是独立进程，只能抓它。默认 127.0.0.1 是 dev（本机两 JVM）的形状；
         # 预览容器形态由 compose 用 OPS_GATEWAY_HOST 覆成服务名——同机不同容器时
         # 127.0.0.1 指的是自己，那条读数会变成一条 ERROR 而不是假绿。
-        marketing-gateway: ${OPS_GATEWAY_HOST:127.0.0.1}:8090
+        # 端口 8091 = 网关独立管理端口（actuator），业务入口仍是 8090
+        marketing-gateway: ${OPS_GATEWAY_HOST:127.0.0.1}:8091
   # 消费者账号同样聚进本进程：CONSUMER_JWT_SECRET 必须在 standalone 与 gateway 两处同值下发。
   # 属性只在 marketing-account 自己的 application.yml 里写不够 —— 一个应用只加载一份配置文件，
   # standalone 加载的是它自己那份。少了 marketing.account.jwt-secret 是启动即失败（响亮），

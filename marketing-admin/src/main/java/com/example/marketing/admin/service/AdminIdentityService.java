@@ -4,26 +4,37 @@ import com.example.marketing.common.security.AdminPrincipal;
 import com.example.marketing.common.api.ErrorCode;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.common.security.AdminClaims;
+import com.example.marketing.common.security.AdminRequestIdentity;
 import com.example.marketing.common.security.AdminTokenCodec;
 import com.example.marketing.common.security.TokenVerifyResult;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 
 /**
- * "当前这个请求是谁"的唯一出处，两条来源：
+ * "当前这个请求是谁"的唯一出处，两条来源、同一把尺子：<b>只认验签 token</b>。
  *
  * <ol>
- *   <li><b>经网关</b>：读 {@code X-Admin-*} 身份头。可信的理由不是"内部网络"这种口头约定，
- *       而是网关在处理 {@code /api/admin/**} 时既剥掉 Authorization、又把自己注入的
- *       {@code X-Admin-*} 先删后写（{@code AdminAuthFilter.pass}），客户端伪造的同名头到不了这里。</li>
- *   <li><b>直连服务端口</b>（绕过网关，如本机 curl 8085/8086）：头不在，就自己验签 +
- *       查吊销位与整号作废时刻。少了这条回退，"后台只经网关"就是一个纯口头承诺 ——
- *       而 LITE 服役档里 standalone 的 8085 是发布到宿主机的，同进程还有 C 端业务。</li>
+ *   <li><b>经网关</b>：网关验完后把 Authorization 剥掉、token 原文透传成
+ *       {@code X-Admin-Token}（{@code AdminAuthFilter.pass}，与业务服务的
+ *       {@code AdminRequestIdentity} 同一约定）。这里取这枚 token 验签。</li>
+ *   <li><b>直连服务端口</b>（绕过网关，如本机 curl 8085/8086）：Authorization
+ *       Bearer，自己验签 + 查吊销位与整号作废时刻。</li>
  * </ol>
+ *
+ * <p><b>为什么不认 {@code X-Admin-User/Role/Jti/Uid} 身份头</b>（2026-09-29 架构审查 H1
+ * 收口）：那套头的可信度只来自"网关先删后写"，对经网关的请求成立、对直连请求不成立——
+ * 而 LITE 服役档 standalone 的 8085 发布在宿主机上、FULL 进程形态 8086 绑 {@code *}。
+ * 早期版本在这里留过"四头齐全即免验签"的快路径，等于把最危险的一组端点（在线配置、
+ * 停用账号、踢会话）交给了任何一个能触达端口的人。业务服务侧早已只认 {@code X-Admin-Token}
+ * （段内 spec §3.2），admin 自己必须是同一纪律。头从此只当搬运工，身份一律取 claims。</p>
+ *
+ * <p>经网关的请求网关已查过一次吊销位，这里再查一次：一次 hasKey + 一次 get 的代价，
+ * 换"admin 进程不依赖网关的单点正确性"——直连与经网关两条路径走完全相同的判定。</p>
  *
  * <p>两条路径都失败一律 40100；角色不够是 40300（身份合法、权限不足，
  * 客户端对这两种的处理动作不同：一个重登，一个找管理员开权限）。</p>
@@ -38,11 +49,12 @@ public class AdminIdentityService {
     private final AdminSessionService sessionService;
 
     public AdminPrincipal resolve(HttpServletRequest request) {
-        AdminPrincipal fromGateway = fromHeaders(request);
-        if (fromGateway != null) {
-            return fromGateway;
-        }
-        return fromToken(request.getHeader("Authorization"));
+        // 网关流量 Authorization 已被剥掉，只剩 X-Admin-Token；直连流量则带 Authorization。
+        // 两者都有时以网关透传的为准：它一定是被验过的那枚，Authorization 反而可能是客户端塞的。
+        String relayed = request.getHeader(AdminRequestIdentity.TOKEN_HEADER);
+        String authorization = StringUtils.hasText(relayed) ? relayed
+                : request.getHeader(HttpHeaders.AUTHORIZATION);
+        return fromToken(authorization);
     }
 
     /** 解析并要求角色之一；不传 allowed 表示任意后台角色 */
@@ -53,23 +65,6 @@ public class AdminIdentityService {
                     "需要角色 " + String.join("/", allowedRoles) + "，当前 " + principal.role());
         }
         return principal;
-    }
-
-    private AdminPrincipal fromHeaders(HttpServletRequest request) {
-        String username = request.getHeader("X-Admin-User");
-        String role = request.getHeader("X-Admin-Role");
-        String jti = request.getHeader("X-Admin-Jti");
-        String uid = request.getHeader("X-Admin-Uid");
-        if (!StringUtils.hasText(username) || !StringUtils.hasText(role)
-                || !StringUtils.hasText(jti) || !StringUtils.hasText(uid)) {
-            // 缺任何一个都退回验签：半套头不能既当作"已过网关"又当作"信息不全无所谓"
-            return null;
-        }
-        try {
-            return new AdminPrincipal(Long.parseLong(uid), username, role, jti);
-        } catch (NumberFormatException e) {
-            throw BizException.of(ErrorCode.UNAUTHORIZED, "凭证无效");
-        }
     }
 
     private AdminPrincipal fromToken(String authorization) {

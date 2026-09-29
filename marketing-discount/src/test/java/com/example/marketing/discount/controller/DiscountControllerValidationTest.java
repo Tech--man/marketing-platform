@@ -99,6 +99,24 @@ class DiscountControllerValidationTest {
     }
 
     @Test
+    @DisplayName("H9：自报 userTags 被覆写为空集——人群折扣不能靠请求体冒领")
+    void selfDeclaredUserTagsAreOverwritten() throws Exception {
+        // 与 userId 同族的第二条身份输入：引擎里 user:MEMBER 规则按 userTags 命中，
+        // 自报 ["MEMBER"] 在收口前等于给任意登录用户发会员价。
+        mvc.perform(post("/api/discount/calculate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("X-User-Token", access(70001L))
+                        .content("{\"userTags\":[\"MEMBER\",\"NEW\"],\"items\":[{\"lineId\":\"L1\","
+                                + "\"unitPrice\":10.00,\"quantity\":2}]}"))
+                .andExpect(jsonPath("$.code").value(0));
+
+        org.mockito.ArgumentCaptor<CalcInput> cap = org.mockito.ArgumentCaptor.forClass(CalcInput.class);
+        verify(calcService).calculate(cap.capture());
+        assertEquals(true, cap.getValue().getUserTags().isEmpty(),
+                "进引擎的 userTags 必须是空集，出现 MEMBER 就是回归");
+    }
+
+    @Test
     @DisplayName("没登录就打算价口 → 40100，而不是拿 null userId 算出一套游客价")
     void anonymousCalcIsRejected() throws Exception {
         mvc.perform(post("/api/discount/calculate")

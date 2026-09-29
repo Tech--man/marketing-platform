@@ -1,7 +1,8 @@
 # Prometheus 采集配置：抓取四个业务服务 + 网关的 /actuator/prometheus
 # 两个 job 各自对应一个 FULL 交付形态（本机进程 / 容器化）。同一时刻只有当前形态的
-# targets 是 UP，另一形态的 up=0 属正常，不是故障；唯一例外是 8090——容器网关也发布
-# 在宿主机 8090，所以 marketing-local 的那条会串到容器网关上。
+# targets 是 UP，另一形态的 up=0 属正常，不是故障。网关走独立管理端口 8091
+# （2026-09-29 审查收口）：容器形态它只绑宿主机回环，host.docker.internal 够不着，
+# 所以容器形态下 marketing-local 的网关条目恒 down、由 marketing-full-container 接管。
 global:
   scrape_interval: 10s
   evaluation_interval: 15s
@@ -13,7 +14,7 @@ scrape_configs:
       # 宿主机服务在容器视角下通过 host.docker.internal 访问（macOS/Windows Docker Desktop 原生支持；
       # Linux 需在 compose 中为 prometheus 增加 extra_hosts: ["host.docker.internal:host-gateway"]）
       - targets:
-          - host.docker.internal:8090
+          - host.docker.internal:8091
           - host.docker.internal:8081
           - host.docker.internal:8082
           - host.docker.internal:8083
@@ -32,7 +33,7 @@ scrape_configs:
     metrics_path: /actuator/prometheus
     static_configs:
       - targets:
-          - marketing-gateway:8090
+          - marketing-gateway:8091
           - marketing-activity:8081
           - marketing-coupon:8082
           - marketing-discount:8083

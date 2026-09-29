@@ -100,7 +100,9 @@ services:
       # 账号服务在这一档是独立进程（LITE/dev 聚在 standalone 里，由 self 覆盖），
       # 不抓它就等于七个应用里有一个在只读面上彻底隐身。
       OPS_T_ACCOUNT: marketing-account:8087
-      OPS_T_GATEWAY: marketing-gateway:8090
+      # 网关 actuator 已移独立管理端口 8091（见 gateway 的 application.yml），
+      # 业务入口 8090 与管理端口自此不再同口对外。
+      OPS_T_GATEWAY: marketing-gateway:8091
       OPS_T_SELF: 127.0.0.1:8086
 
   marketing-account:
@@ -121,6 +123,9 @@ services:
     image: marketing-gateway:full
     ports:
       - "8090:8090"     # 对外唯一入口
+      # 管理端口只绑回环：容器网内的 ④ 代理与 prometheus 按服务名访问（不走发布），
+      # 宿主机侧脚本健康检查走 127.0.0.1:8091，公网摸不到。
+      - "127.0.0.1:8091:8091"
     environment:
       <<: *app-env
       # 容器形态走 nacos profile，后台路由是 lb://marketing-admin（按服务名发现），

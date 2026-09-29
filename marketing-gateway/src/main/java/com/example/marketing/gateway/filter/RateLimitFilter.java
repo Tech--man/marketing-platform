@@ -109,12 +109,16 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
                 });
     }
 
-    /** 客户端标识：优先 X-Forwarded-For 首段，回退远端地址（生产可换为用户/设备维度） */
+    /**
+     * 客户端标识：只认 TCP 对端地址（H3，2026-09-29 架构审查收口）。
+     *
+     * <p>曾优先采信 X-Forwarded-For 首段——但网关自己就是最外层入口，请求里出现的 XFF
+     * 只可能是客户端自报的：每个请求换一个假 IP 就得到一个全新空桶，秒杀 200/s、登录 20/s
+     * 形同虚设，还能顺带把 {@code gw:rl:*} 键无限撑大。这里只取 remoteAddress；
+     * 将来前面真有一层可信 LB 时，正确做法是那层写 XFF、网关按固定跳数取段并覆写
+     * （见 application.yml 的 {@code x-forwarded.for-append: false}），而不是恢复盲信首段。</p>
+     */
     private String resolveClientKey(ServerHttpRequest request) {
-        String xff = request.getHeaders().getFirst("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
         return request.getRemoteAddress() == null
                 ? "unknown" : request.getRemoteAddress().getAddress().getHostAddress();
     }

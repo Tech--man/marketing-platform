@@ -85,7 +85,7 @@ echo "==> ${BUILD_FLAG:+构建并}启动 FULL 应用栈"
 docker compose -f "$APP" up -d $BUILD_FLAG "$@"
 
 echo "==> 等待网关就绪（服务启动 + 注册进 nacos 需要一点时间）"
-wait_healthy marketing-gateway 8090 180
+wait_healthy marketing-gateway 8091 180   # 网关管理端口（actuator 已与 8090 分离）
 
 # 网关自身健康 ≠ 五条路由都能服务：Spring Cloud Gateway 是**首次命中**某条 lb:// 路由时
 # 才去 nacos 订阅该服务，订阅+实例推送到位前请求会被回 503（空响应体）。实测部署后立刻跑

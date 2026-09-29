@@ -40,6 +40,11 @@ public class DiscountController {
         // 只能是验过签名的那一个。命中的门槛规则、每人限领、会员等级都按它算，
         // 让它由调用方自报等于让调用方挑一套对自己最便宜的规则。
         input.setUserId(identity.require(httpRequest).uid());
+        // userTags 同一把尺子（H9，2026-09-29 架构审查收口）：它只喂 user: 前缀的
+        // 人群规则（会员价/新人价）。服务端目前**没有**可信的人群来源，请求体里的
+        // userTags 一律是调用方自报——任何登录用户 POST ["MEMBER"] 就能冒领人群折扣。
+        // 在接上真实人群服务（按 userId 查标签后在此覆写）之前，恒置空集。
+        input.setUserTags(java.util.Set.of());
         return Result.ok(calcService.calculate(input));
     }
 
