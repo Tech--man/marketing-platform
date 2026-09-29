@@ -91,4 +91,34 @@ class IdempotentExecutorTest {
         executor.executeVoid("REQ-004", calls::incrementAndGet);
         assertEquals(1, calls.get());
     }
+
+    @Test
+    @DisplayName("H11：PROCESSING 停留超过租约 → 视为执行者已死，重试接管执行（崩溃自愈）")
+    void expiredProcessingLeaseIsReclaimed() {
+        // 模拟崩溃现场：占键后进程死掉，记录永远停在 PROCESSING 且 update_time 已陈旧
+        jdbcTemplate.update(
+                "INSERT INTO idempotent_record (biz_key, status, update_time) VALUES (?, ?, "
+                        + "DATEADD('SECOND', -180, CURRENT_TIMESTAMP))",
+                "REQ-005", IdempotentStatus.PROCESSING.name());
+        // 用 120s 租约的执行器：180s 前的 PROCESSING 必须能被接管
+        IdempotentExecutor reclaiming = new IdempotentExecutor(jdbcTemplate, 120);
+
+        String result = reclaiming.execute("REQ-005", String.class, () -> "RECLAIMED");
+
+        assertEquals("RECLAIMED", result, "过期租约必须可被重试接管，而不是永远 DUPLICATE_REQUEST");
+        assertEquals(IdempotentStatus.SUCCESS.name(), jdbcTemplate.queryForObject(
+                "SELECT status FROM idempotent_record WHERE biz_key = ?", String.class, "REQ-005"));
+    }
+
+    @Test
+    @DisplayName("H11：租约内的 PROCESSING 照旧拒绝（活着的执行者不被打断）")
+    void freshProcessingStillRejects() {
+        jdbcTemplate.update("INSERT INTO idempotent_record (biz_key, status) VALUES (?, ?)",
+                "REQ-006", IdempotentStatus.PROCESSING.name());
+        IdempotentExecutor reclaiming = new IdempotentExecutor(jdbcTemplate, 120);
+
+        BizException e = assertThrows(BizException.class,
+                () -> reclaiming.execute("REQ-006", String.class, () -> "never"));
+        assertEquals(ErrorCode.DUPLICATE_REQUEST.getCode(), e.getCode());
+    }
 }

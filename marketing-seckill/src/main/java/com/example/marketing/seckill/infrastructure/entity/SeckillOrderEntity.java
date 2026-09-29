@@ -35,6 +35,15 @@ public class SeckillOrderEntity {
     private String token;
     /** 命中的库存分桶（超时回补用） */
     private Integer bucket;
+    /**
+     * 是否有效单：新建默认 1（依赖列默认值，insert 不显式带），超时取消置 0。
+     * H7（2026-09-29 架构审查）：唯一索引 uk_activity_user 带 active，只约束「每人
+     * 每活动一张<b>有效</b>单」——取消过的用户可以重新抢。原索引不含 active 时，
+     * 「取消后允许重抢（refill 删防重标记）」与「一人一单兜底」互相矛盾：重抢的
+     * insert 必撞旧 CANCELLED 行，幂等回放把已取消单号当 SUCCESS 写回，用户拿到
+     * 一个永远付不了款的单号，且本次重扣的名额无主（账实恒等式被破坏）。
+     */
+    private Integer active;
     private LocalDateTime payTime;
 
     @Version

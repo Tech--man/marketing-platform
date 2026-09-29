@@ -122,6 +122,37 @@ class BudgetServiceTest {
     }
 
     @Test
+    @DisplayName("H4：Redis 扣减抛异常 → 回删占位流水并抛 50000，不留超支窗口")
+    void redisFailureRollsBackFlow() {
+        // deduct 走的是 INSERT IGNORE（MySQL 方言），H2 单测里起不了真表，
+        // 这里用 mock JdbcTemplate 只钉核心行为：占位插入成功后 Redis 抛异常，
+        // 占位 DELETE 必须被调用、且必须带 activityNo+bizKey（地雷 B 的另一半）。
+        org.springframework.data.redis.core.StringRedisTemplate redisDown =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.mockito.Mockito.when(redisDown.execute(
+                        org.mockito.ArgumentMatchers.<org.springframework.data.redis.core.script.RedisScript<Long>>any(),
+                        org.mockito.ArgumentMatchers.anyList(),
+                        org.mockito.ArgumentMatchers.<Object>any()))
+                .thenThrow(new RuntimeException("connection refused"));
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        // 流水占位是 3 个绑定参数的 INSERT；回删是 2 个参数的 DELETE
+        org.mockito.Mockito.when(jdbc.update(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(1);
+        BudgetService broken = new BudgetService(redisDown, jdbc, mapperReturning("100.00"));
+
+        BizException e = assertThrows(BizException.class,
+                () -> broken.deduct("ACT2026001", 100L, "bk-redis-down"));
+
+        assertEquals(50000, e.getCode());
+        org.mockito.Mockito.verify(jdbc).update(
+                org.mockito.ArgumentMatchers.contains("DELETE FROM budget_flow"),
+                org.mockito.ArgumentMatchers.eq("ACT2026001"),
+                org.mockito.ArgumentMatchers.eq("bk-redis-down"));
+    }
+
+    @Test
     @DisplayName("注册进重预热表的类型标识是 budget，注册表按它分发")
     void registersAsBudgetType() {
         assertEquals("budget", service.type());

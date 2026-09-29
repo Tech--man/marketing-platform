@@ -70,7 +70,7 @@ public class RuleAdminService {
             fill(entity, request, ruleJson);
             entity.setVersion(0);
             promoRuleMapper.insert(entity);
-            ruleCacheManager.bumpVersion();
+            bumpAfterCommit();
             log.info("[discount] 规则新建 {} version={}", entity.getRuleNo(), entity.getVersion());
             return RuleView.from(entity);
         }
@@ -80,9 +80,31 @@ public class RuleAdminService {
         if (promoRuleMapper.updateById(existing) == 0) {
             throw VersionGuard.conflict("规则");
         }
-        ruleCacheManager.bumpVersion();
+        bumpAfterCommit();
         log.info("[discount] 规则更新 {}（原 name={}）", existing.getRuleNo(), before);
         return RuleView.from(existing);
+    }
+
+    /**
+     * H8（2026-09-29 架构审查）：bump 必须发生在事务提交之后。save 是 @Transactional，
+     * 提交前推版本号的话，其他实例在"bump 已见、数据未提交"的窗口里重建，会把
+     * <b>旧数据</b>装进<b>新版本号</b>的快照——之后版本比对恒相等，那份错快照永不重建。
+     * 注册 afterCommit 钩子；无事务上下文（单测直调）时立即 bump。
+     */
+    private void bumpAfterCommit() {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager
+                .isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                    .registerSynchronization(
+                            new org.springframework.transaction.support.TransactionSynchronization() {
+                                @Override
+                                public void afterCommit() {
+                                    ruleCacheManager.bumpVersion();
+                                }
+                            });
+        } else {
+            ruleCacheManager.bumpVersion();
+        }
     }
 
     /** 列表：按 ruleNo 升序，与原 {@code listRules} 同序；DSL 全文只在后台可见 */

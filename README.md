@@ -369,9 +369,14 @@ POST /api/coupon/grant (requestId 幂等键)
   → 网关限流 → 风控(占位) → 模板校验 → IdempotentExecutor 抢占
   → Redis+Lua 原子预扣库存(含单人限领) → 本地消息表 + MQ 发送
   → 返回 ACCEPTED，客户端轮询 GET /api/coupon/grant/result/{requestId}
-  → 消费端幂等落库(user_coupon.request_id 唯一索引兜底) → confirm 消息
+  → 消费端幂等落库(user_coupon.request_id 唯一索引兜底；券码撞码换码重试，见下) → confirm 消息
 ```
-- 三层幂等：`idempotent_record` 状态机 / `local_message.biz_key` 唯一 / 业务表唯一索引
+- 三层幂等：`idempotent_record` 状态机 / `local_message.biz_key` 唯一 / 业务表唯一索引。
+  2026-09-29 两处收口：`idempotent_record` 的 PROCESSING 带**租约**（默认 120s，
+  `marketing.idempotent.processing-lease-seconds` 可调——进程崩溃后键不再永久砖化在
+  "处理中"，重试可按 update_time CAS 接管）；领券消费端把 `uk_request_id`（重复投递，
+  幂等回放）与 `uk_coupon_code`（券码随机撞码，换码重试上限 3 次）两类冲突分开处置
+  ——原实现一律当重复消息确认掉，撞码时静默丢券且库存/限领永不归还
 - `LocalMessageRetryer`（common 内置 @Scheduled）补偿未确认消息；重启时 `StockWarmUpRunner` 按 DB 已发量重算 Redis 库存
 
 ### 2. 优惠计算（P99 < 20ms）
@@ -384,7 +389,10 @@ POST /api/discount/calculate（购物车 → 命中规则 + 行级分摊）
   → 专用线程池 orTimeout(50ms)，任何异常/超时降级返回原价(degraded=true)
 ```
 - 规则三级缓存：本地快照 → Redis 版本号(`discount:rule:version`) → DB 重建（synchronized + double check）
-- `POST /api/admin/discount/rules` upsert 规则后 bump 版本号，全实例秒级生效
+- `POST /api/admin/discount/rules` upsert 规则后 bump 版本号，全实例秒级生效。2026-09-29（H8）起
+  版本号用 **Redis INCR 单调序号**（毫秒时间戳同毫秒撞号会让后一次变更永久丢失）、bump 挪到
+  **事务提交后**（提交前 bump，别实例会在窗口里建出"新版本号+旧数据"的快照且永不重建）、
+  重建完成后再读一次版本号做双检；bump 写失败时本实例立即按 DB 重建（数据已提交）
   （③ 之前这条在 C 前缀下，任何拿到共享 demo token 的人都能改规则 DSL —— 已收进后台前缀，
   GET 也一并收，因为规则列表本身就是可反推定价策略的资产）
 - 基准（1 万规则 / 20 行购物车，开发机）：剪枝后候选 400 条，单次计算均值 **≈0.4ms**
@@ -395,7 +403,7 @@ POST /api/discount/calculate（购物车 → 命中规则 + 行级分摊）
 POST /api/seckill/grab
   → SETNX 防重购标记 → Lua 分桶原子扣减(hash(userId)%16 定位桶 + 顺序借桶)
   → 占名额成功即返回 token → 本地消息表 + MQ
-  → 消费端建单(seckill_order unique(activity_no,user_id) 兜底) + sold_stock 原子递增
+  → 消费端建单(seckill_order unique(activity_no,user_id,**active**) 兜底) + sold_stock 原子递增
   → 轮询 GET /api/seckill/grab/result/{token}: ACCEPTED / SUCCESS:{orderNo} / FAIL:{reason}
   → POST /api/seckill/pay/{orderNo} 模拟支付；超时 5 分钟未支付由 Job 取消订单并 Lua 回补
 ```
@@ -403,6 +411,11 @@ POST /api/seckill/grab
 - 预热口径收在 `SeckillWarmUpService`（启动 `SeckillWarmUpRunner` 与运维重预热共用一份）：
   SETNX 预热，重启/多实例不重置已售进度；**非 ONLINE 或已过结束时间的活动拒绝重预热**
   （否则 force 重预热等于把已下线活动的库存重新开闸）
+- **取消与重抢（H7，2026-09-29 对齐）**：超时取消回补库存、删防重标记（允许重抢），同时把
+  订单 `active` 置 0——唯一索引带 active，只约束"一人一张**有效**单"。改前索引把 CANCELLED
+  行也算占用：重抢的 insert 必撞旧行，幂等回放把已取消单号当 SUCCESS 写回（用户拿到永远
+  付不了款的单号）。消费端保留防御分支：回放撞上 CANCELLED 单时回补名额写 FAIL。
+  存量卷执行 `docker/mysql/migrate/2026-09-29-seckill-active.sql`。
 
 ### 4. 管理后台（两套凭证不互通 + 审计 + 运维入口）
 
@@ -613,7 +626,7 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 | POST | /api/seckill/grab · /pay/{orderNo} | 抢购 · 模拟支付回调 |
 | GET | /api/seckill/grab/result/{token} · /activities · /stock/{activityNo} | 轮询 / 活动列表 / 分桶余量 |
 | POST | /api/auth/register · /login · /refresh | 注册 / 登录 / 换一对新凭证。这三个是 `/api/**` 里**仅有的**免 access token 入口（靠网关例外清单，见第四·五节）；refresh 只认请求体里的 refreshToken，且旧值重放 = 整条会话作废 |
-| GET·POST·PUT | /api/auth/me · /sessions · /logout · /password | 当前身份 / 我的会话列表 / 登出（当场失效，不等自然过期）/ 改密（成功后该账号全部会话作废）。都要带 access token |
+| GET·POST·PUT | /api/auth/me · /sessions · /logout · /password | 当前身份 / 我的会话列表 / 登出（当场失效，不等自然过期）/ 改密（成功后该账号全部会话作废——2026-09-29（H2）起覆盖范围按 **refresh 寿命**算：access 已过期但 refresh 未到期的会话一并吊销，改前这类"大多数活跃会话的常态"漏网，攻击者手里的 30 天 refresh 仍能换新凭证）。都要带 access token |
 | POST | /api/admin/auth/login · /logout · /password · GET /me | 后台登录 / 登出 / 改自己口令（成功后全会话作废）/ 当前身份。**用 admin token，不是消费者 token** |
 | GET | /api/admin/users · /sessions · /audits | 账号 / 在线会话 / 审计，统一 `PageResult`（含 total）；`?mine=true` 只看自己的会话 |
 | PUT | /api/admin/users/{id}/status?status= | 启停账号（仅 admin；停用同时作废其全部会话） |
@@ -654,7 +667,10 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 
 - **审计在哪个进程落**：admin 自己的动作直写 `admin_audit_log`；四个业务进程**不连这张表**，
   它们把 `AuditPayload` 投进 `mkt:audit:pending`（Stream，`MAXLEN 100000`，**不设 TTL**），
-  由 admin 每 5s drain 落表并 `XACK`+`XDEL`。为什么不用 ⑤ 候选的 `LPUSH+LTRIM+TTL`：
+  由 admin 每 5s drain 落表并 `XACK`+`XDEL`。2026-09-29（H5）起 drain 是
+  **落库成功才 ACK**（失败条目留 PEL，下一轮由 PEL 回收按空闲时长认领重试——
+  原实现无条件 ACK+XDEL，DB 故障窗口内的审计被"确认+删除"得无 DB 行、无 PEL 记录）。
+  为什么不用 ⑤ 候选的 `LPUSH+LTRIM+TTL`：
   TTL 淘汰等于**静默丢审计**。建组从 `0` 开始（默认的最新位置会让"先投递后建组"那批永远不被读）。
 - **乐观锁无处不在**：所有改配置的行都带 `version`，撞了回 `41008 已被他人修改`（附带你看到的
   与当前的两个数），而不是后写覆盖先写 —— 后台是多人的，运营 A 看到的页面可能已经过时十分钟。

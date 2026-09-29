@@ -18,7 +18,7 @@ import java.util.function.Supplier;
  * <ul>
  *   <li>首次请求：抢占 PROCESSING → 执行业务 → 回写 SUCCESS(缓存结果) / FAILED；</li>
  *   <li>重复请求且已成功：直接返回缓存结果（回放）；</li>
- *   <li>重复请求且处理中：抛 {@link ErrorCode#DUPLICATE_REQUEST}，由调用方轮询结果；</li>
+ *   <li>重复请求且处理中（租约内）：抛 {@link ErrorCode#DUPLICATE_REQUEST}，由调用方轮询结果；PROCESSING 停留超过租约（默认 120s）视为执行者已死，重试可接管（H11）——否则一次非优雅停机会把键永久砖化在「处理中」；</li>
  *   <li>上次失败：允许重新抢占执行。</li>
  * </ul>
  *
@@ -28,13 +28,28 @@ import java.util.function.Supplier;
 public class IdempotentExecutor {
 
     private static final String TABLE = "idempotent_record";
+    /** 默认租约：远大于业务动作的正常耗时（秒杀/领券毫秒级），足够区分「在执行」与「已死」 */
+    private static final long DEFAULT_PROCESSING_LEASE_SECONDS = 120;
     /** Void 结果的占位 JSON，避免空串与"未写入"歧义 */
     private static final String VOID_RESULT = "{}";
 
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * PROCESSING 租约（H11，2026-09-29 架构审查）：键停在 PROCESSING 超过该秒数，
+     * 视为上一个执行者已死（进程崩溃 / OOM 时 catch 不到 RuntimeException），
+     * 允许重抢占。此前没有租约——一次非优雅停机就会留下随机数量的死键，
+     * 同一 requestId 的所有重试永远吃 DUPLICATE_REQUEST，只能人工改库。
+     */
+    private final long processingLeaseSeconds;
+
     public IdempotentExecutor(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, DEFAULT_PROCESSING_LEASE_SECONDS);
+    }
+
+    public IdempotentExecutor(JdbcTemplate jdbcTemplate, long processingLeaseSeconds) {
         this.jdbcTemplate = jdbcTemplate;
+        this.processingLeaseSeconds = processingLeaseSeconds;
     }
 
     /**
@@ -90,8 +105,8 @@ public class IdempotentExecutor {
     private enum ClaimResult { ACQUIRED, REPLAY_SUCCESS, REPLAY_PROCESSING }
 
     private ClaimResult claim(String bizKey) {
-        String status = queryStatus(bizKey);
-        if (status == null) {
+        StateRow row = queryState(bizKey);
+        if (row == null) {
             try {
                 jdbcTemplate.update("INSERT INTO " + TABLE + " (biz_key, status) VALUES (?, ?)",
                         bizKey, IdempotentStatus.PROCESSING.name());
@@ -101,22 +116,60 @@ public class IdempotentExecutor {
                 return claim(bizKey);
             }
         }
-        if (IdempotentStatus.SUCCESS.name().equals(status)) {
+        if (IdempotentStatus.SUCCESS.name().equals(row.status())) {
             return ClaimResult.REPLAY_SUCCESS;
         }
-        if (IdempotentStatus.PROCESSING.name().equals(status)) {
+        if (IdempotentStatus.PROCESSING.name().equals(row.status())) {
+            // H11：PROCESSING 停留超过租约 → 上一个执行者已死，CAS 抢占（比对读到的
+            // update_time，抢到即接管；并发下只有一个人能成）。fresh 的 PROCESSING
+            // 才是真正的「处理中」，继续抛 DUPLICATE_REQUEST 让调用方轮询。
+            if (isLeaseExpired(row.updateTime())) {
+                int taken = jdbcTemplate.update(
+                        "UPDATE " + TABLE + " SET status = ?, update_time = CURRENT_TIMESTAMP "
+                                + "WHERE biz_key = ? AND status = ? AND update_time = ?",
+                        IdempotentStatus.PROCESSING.name(), bizKey,
+                        IdempotentStatus.PROCESSING.name(), row.updateTime());
+                if (taken == 1) {
+                    log.warn("[idempotent] 抢占过期 PROCESSING 租约 bizKey={}, 停留超过 {}s",
+                            bizKey, processingLeaseSeconds);
+                    return ClaimResult.ACQUIRED;
+                }
+            }
             return ClaimResult.REPLAY_PROCESSING;
         }
-        // FAILED：条件更新抢占，抢到返回执行，没抢到按处理中处理
-        int taken = jdbcTemplate.update("UPDATE " + TABLE + " SET status = ? WHERE biz_key = ? AND status = ?",
+        // FAILED：条件更新抢占，抢到返回执行，没抢到按处理中处理。
+        // update_time 显式推进：MySQL 有 ON UPDATE 兜底，H2 没有——不显式写，
+        // 租约判定在 H2 测试里会把刚抢占的 FAILED 又当成过期 PROCESSING。
+        int taken = jdbcTemplate.update(
+                "UPDATE " + TABLE + " SET status = ?, update_time = CURRENT_TIMESTAMP "
+                        + "WHERE biz_key = ? AND status = ?",
                 IdempotentStatus.PROCESSING.name(), bizKey, IdempotentStatus.FAILED.name());
         return taken == 1 ? ClaimResult.ACQUIRED : ClaimResult.REPLAY_PROCESSING;
     }
 
-    private String queryStatus(String bizKey) {
+    /** 租约判定。update_time 由 DB 时钟写入，这里用应用时钟比对——同机部署偏差远小于
+     *  租约量级（120s），可接受；跨机时钟漂移超过租约的部署不该存在。 */
+    private boolean isLeaseExpired(java.sql.Timestamp lastTransition) {
+        if (lastTransition == null) {
+            return false; // 读不到时间戳时宁可按「处理中」拒绝，也不误抢一个可能活着的执行
+        }
+        long leaseMillis = processingLeaseSeconds * 1000L;
+        return System.currentTimeMillis() - lastTransition.getTime() > leaseMillis;
+    }
+
+    private StateRow queryState(String bizKey) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT status FROM " + TABLE + " WHERE biz_key = ?", bizKey);
-        return rows.isEmpty() ? null : (String) rows.get(0).get("status");
+                "SELECT status, update_time FROM " + TABLE + " WHERE biz_key = ?", bizKey);
+        if (rows.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> row = rows.get(0);
+        Object time = row.get("update_time");
+        return new StateRow((String) row.get("status"),
+                time instanceof java.sql.Timestamp ts ? ts : null);
+    }
+
+    private record StateRow(String status, java.sql.Timestamp updateTime) {
     }
 
     private String loadResultJson(String bizKey) {
@@ -130,7 +183,8 @@ public class IdempotentExecutor {
 
     private void markSuccess(String bizKey, String resultJson) {
         int updated = jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET status = ?, result_json = ? WHERE biz_key = ? AND status = ?",
+                "UPDATE " + TABLE + " SET status = ?, result_json = ?, update_time = CURRENT_TIMESTAMP "
+                        + "WHERE biz_key = ? AND status = ?",
                 IdempotentStatus.SUCCESS.name(), resultJson, bizKey, IdempotentStatus.PROCESSING.name());
         if (updated == 0) {
             log.warn("[idempotent] markSuccess 未命中 PROCESSING, bizKey={}", bizKey);
@@ -139,7 +193,8 @@ public class IdempotentExecutor {
 
     private void markFailed(String bizKey, String errorMsg) {
         jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET status = ?, error_msg = ? WHERE biz_key = ? AND status = ?",
+                "UPDATE " + TABLE + " SET status = ?, error_msg = ?, update_time = CURRENT_TIMESTAMP "
+                        + "WHERE biz_key = ? AND status = ?",
                 IdempotentStatus.FAILED.name(), truncate(errorMsg), bizKey, IdempotentStatus.PROCESSING.name());
     }
 

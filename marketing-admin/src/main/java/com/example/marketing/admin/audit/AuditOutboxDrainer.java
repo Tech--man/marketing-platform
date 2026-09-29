@@ -40,12 +40,19 @@ public class AuditOutboxDrainer {
 
     /** 单批上限：5 秒一轮，一轮一万条也够消化任何人工操作量 */
     static final int BATCH = 500;
+    /** 每轮 PEL 回收最多认领的条数：回收是兜底路径，不该压过新消息的消化 */
+    static final int RECLAIM_BATCH = 100;
 
     private final StringRedisTemplate redis;
     private final AuditService auditService;
     private final MeterRegistry meters;
     private final long pollSeconds;
-    /** 每个进程一个消费者名：同组多实例会分摊消息，不会一条审计被两个 admin 各落一遍 */
+    /** PEL 回收门槛：条目读走后空闲超过它才认领——取 3 个 drain 周期（至少 15s），
+     *  短于一个周期的空闲只是"正在处理"，抢过来等于自己跟自己重试 */
+    private final long reclaimMinIdleMillis;
+    /** 每个进程一个消费者名：同组多实例会分摊消息，不会一条审计被两个 admin 各落一遍。
+     *  名字随进程随机没关系——死实例搁浅的条目由 reclaimStale 按"空闲时长"认领，
+     *  不依赖记住死者的名字 */
     private final String consumerName = "admin-" + UUID.randomUUID().toString().substring(0, 8);
 
     private volatile ScheduledExecutorService scheduler;
@@ -57,6 +64,7 @@ public class AuditOutboxDrainer {
         this.auditService = auditService;
         this.meters = meters;
         this.pollSeconds = Math.max(1L, pollSeconds);
+        this.reclaimMinIdleMillis = Math.max(15_000L, this.pollSeconds * 3 * 1000L);
     }
 
     @PostConstruct
@@ -99,6 +107,7 @@ public class AuditOutboxDrainer {
 
     /** 读一批 → 逐条落表 → 逐条 XACK。任何异常都吃掉，留给下一轮：Redis 抖一下不该停掉留痕 */
     void drainOnce() {
+        reclaimStale();
         try {
             List<MapRecord<String, Object, Object>> records = redis.opsForStream().read(
                     org.springframework.data.redis.connection.stream.Consumer
@@ -125,11 +134,19 @@ public class AuditOutboxDrainer {
             meters.counter("marketing.audit.drain.skipped").increment();
             log.warn("[audit] 载荷无法解析，已跳过并确认 id={}", record.getId());
         } else {
-            auditService.recordPayload(payload.get(),
+            boolean stored = auditService.tryRecordPayload(payload.get(),
                     java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochSecond(
                             payload.get().epochSecond()), java.time.ZoneId.systemDefault()));
-            // 计的是"搬动过几条"，不是"确认落库几条"：AuditService 沿用 ② 的语义，
-            // INSERT 失败只告警不外溢。④ 要的正是这个数与 XLEN 的对比（堆了多少 vs 过了多少）
+            if (!stored) {
+                // H5（2026-09-29 架构审查）：落库失败绝不 ACK/XDEL。原实现无条件确认+删除，
+                // DB 故障窗口（恰恰是最需要审计的时刻）里的条目被销毁得无 DB 行、无 PEL 记录，
+                // 只剩一条 warn——"消费组 + XACK 防静默丢"的整套机制在最后一公里失效。
+                // 条目留在 PEL 里由 reclaimStale 在 DB 恢复后认领重试；抛出中断本轮，
+                // DB 挂着时后面的条目大概率也落不进去。
+                meters.counter("marketing.audit.drain.deferred").increment();
+                log.warn("[audit] 落库失败，条目留在 PEL 等回收 id={}", record.getId());
+                throw new IllegalStateException("audit insert failed, keep entry in PEL");
+            }
             meters.counter("marketing.audit.drained").increment();
         }
         // 先 ACK 再删：反过来会在"已删未确认"的窗口里让这条审计彻底消失（无 DB 行、无 PEL 记录）。
@@ -139,5 +156,52 @@ public class AuditOutboxDrainer {
         redis.opsForStream().acknowledge(StreamKeys.auditPending(),
                 StreamKeys.ADMIN_DRAIN_GROUP, record.getId());
         redis.opsForStream().delete(StreamKeys.auditPending(), record.getId());
+    }
+
+    /**
+     * H5：认领"读走后长时间未确认"的 PEL 条目，每轮 drain 前跑一次。
+     *
+     * <p>条目滞留 PEL 的两个来源：上一轮落库失败主动留下的；实例读到一半崩溃后
+     * 随其随机消费者名永久搁浅的。原实现只读新消息（{@code >}），PEL 里的条目
+     * 永远无人再碰——④ 面板能看见 pending 数在涨，却"看得见、救不回"。
+     * 回收不依赖记住死者的名字：按"空闲时长"认领（XCLAIM min-idle），
+     * 活着的条目（空闲 &lt; 门槛）不会被误抢。</p>
+     */
+    void reclaimStale() {
+        try {
+            org.springframework.data.redis.connection.stream.PendingMessages pending =
+                    redis.opsForStream().pending(StreamKeys.auditPending(), StreamKeys.ADMIN_DRAIN_GROUP,
+                            org.springframework.data.domain.Range.unbounded(), RECLAIM_BATCH);
+            if (pending == null || !pending.iterator().hasNext()) {
+                return;
+            }
+            List<org.springframework.data.redis.connection.stream.RecordId> stale = new java.util.ArrayList<>();
+            for (org.springframework.data.redis.connection.stream.PendingMessage message : pending) {
+                if (message.getElapsedTimeSinceLastDelivery().toMillis() >= reclaimMinIdleMillis) {
+                    stale.add(message.getId());
+                }
+            }
+            if (stale.isEmpty()) {
+                return;
+            }
+            List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
+                    StreamKeys.auditPending(), StreamKeys.ADMIN_DRAIN_GROUP, consumerName,
+                    java.time.Duration.ofMillis(reclaimMinIdleMillis),
+                    stale.toArray(org.springframework.data.redis.connection.stream.RecordId[]::new));
+            if (claimed == null || claimed.isEmpty()) {
+                return;
+            }
+            log.info("[audit] 认领 {} 条滞留 PEL 的审计（落库失败重试 / 死实例接管）", claimed.size());
+            for (MapRecord<String, Object, Object> record : claimed) {
+                drainOne(record);
+            }
+        } catch (IllegalStateException e) {
+            // drainOne 的"落库失败"受控中断：本批到此为止（条目已留 PEL、已计数），
+            // 下轮回收再来。绝不能外抛——本方法跑在 drainOnce 的 try 之外，而
+            // scheduleWithFixedDelay 的任务一旦抛异常，后续调度会被静默取消。
+        } catch (RuntimeException e) {
+            meters.counter("marketing.audit.drain.error").increment();
+            log.warn("[audit] PEL 回收本轮失败（下轮再来）: {}", e.toString());
+        }
     }
 }

@@ -119,8 +119,20 @@ public class BudgetService implements CacheReheater, CacheConsistency {
             log.info("[budget] 重复扣减请求幂等回放 activityNo={}, bizKey={}", activityNo, bizKey);
             return DeductOutcome.REPLAYED;
         }
-        // 2. Redis 原子扣减
-        Long result = evalDeduct(activityNo, amountCents);
+        // 2. Redis 原子扣减（H4，2026-09-29 架构审查收口）：Redis 抛异常（超时/断连/池耗尽）时
+        // 占位必须回删——否则对账口径（以流水为权威）恒高于 Redis 值 X，多出的 X 会被后续
+        // 请求当可用余额花掉（真实超支）；更阴的是调用方按约定带同 bizKey 重试会命中
+        // inserted==0 走 REPLAYED（被当成功），而那笔钱从未在 Redis 扣过。
+        // 占位与扣减要么都成、要么都不成。
+        Long result;
+        try {
+            result = evalDeduct(activityNo, amountCents);
+        } catch (RuntimeException e) {
+            rollbackFlow(activityNo, bizKey);
+            log.warn("[budget] Redis 扣减不可达，已回删占位流水 activityNo={}, bizKey={}: {}",
+                    activityNo, bizKey, e.toString());
+            throw BizException.of(ErrorCode.SYSTEM_ERROR);
+        }
         if (result == null || result == -1L) {
             // 缺键：本笔已作为 DEDUCT 落进流水，所以直接把"对账后的余额"写出去，
             // 不能再 DECRBY 一次（会把这笔扣款算两遍，实测 Redis 恒比权威值少一笔）；

@@ -61,7 +61,9 @@ public class SeckillOrderService {
         int updated = orderMapper.update(null, new UpdateWrapper<SeckillOrderEntity>()
                 .eq("id", order.getId())
                 .eq("status", SeckillOrderStatus.CREATED.name())
-                .set("status", SeckillOrderStatus.CANCELLED.name()));
+                .set("status", SeckillOrderStatus.CANCELLED.name())
+                // H7：释放「一人一单」的占用，让该用户可以重新抢（唯一索引只约束 active=1 的行）
+                .set("active", 0));
         if (updated == 0) {
             return false; // 已被支付或已被其他实例取消
         }

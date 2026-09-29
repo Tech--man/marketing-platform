@@ -82,6 +82,13 @@ public class ConsumerSessionService {
     /**
      * 作废某个账号的全部会话：改密、停用、强制下线共用这一条。
      * <b>先写 bump 键再改库</b> —— 反过来的话中间窗口里旧 token 仍能通过网关。
+     *
+     * <p><b>覆盖范围按 refresh 寿命算</b>（H2，2026-09-29 架构审查收口）：任一时刻，
+     * 大多数活跃会话的 access 窗口都已过去（15 分钟不刷新就进入该状态），但它们的
+     * 30 天 refresh 仍能换出新凭证。原来按 {@link #activeSessions}（access 未过期）
+     * 遍历，改密杀不掉攻击者手里处于该窗口的 refresh——"作废全部会话"的承诺
+     * 对长寿命凭证失效。DB 的 {@code revoked_at} 是 refresh 路径的权威判定，
+     * 这里逐条落库后 refresh() 必拒。</p>
      */
     public void revokeAll(long userId, String reason) {
         long nowEpoch = LocalDateTime.now().atZone(ZoneId.systemDefault()).toEpochSecond();
@@ -89,15 +96,26 @@ public class ConsumerSessionService {
                 + 2 * properties.getClockSkewSeconds());
         redis.opsForValue().set(BUMP_PREFIX + userId, String.valueOf(nowEpoch), bumpTtl);
 
-        List<ConsumerSessionEntity> active = activeSessions(userId);
-        for (ConsumerSessionEntity session : active) {
+        List<ConsumerSessionEntity> refreshable = refreshableSessions(userId);
+        for (ConsumerSessionEntity session : refreshable) {
             Duration remaining = Duration.between(LocalDateTime.now(), session.getExpireAt());
             markRevoked(session.getJti(), reason);
             if (!remaining.isNegative() && !remaining.isZero()) {
                 redis.opsForValue().set(REVOKED_PREFIX + session.getJti(), reason, remaining);
             }
         }
-        log.info("[account] 会话批量作废 userId={}, count={}, reason={}", userId, active.size(), reason);
+        log.info("[account] 会话批量作废 userId={}, count={}, reason={}", userId, refreshable.size(), reason);
+    }
+
+    /** 整号作废要覆盖的会话范围：未吊销、且 refresh 还没到期（refresh_expire_at
+     *  为 NULL 视为仍在 refresh 寿命内，宁可多杀）。与配额用的 activeSessions 是两把尺子 */
+    private List<ConsumerSessionEntity> refreshableSessions(long userId) {
+        return sessionMapper.selectList(Wrappers.<ConsumerSessionEntity>lambdaQuery()
+                .eq(ConsumerSessionEntity::getUserId, userId)
+                .isNull(ConsumerSessionEntity::getRevokedAt)
+                .and(w -> w.isNull(ConsumerSessionEntity::getRefreshExpireAt)
+                        .or().gt(ConsumerSessionEntity::getRefreshExpireAt, LocalDateTime.now()))
+                .orderByDesc(ConsumerSessionEntity::getId));
     }
 
     public boolean isRevoked(String jti) {

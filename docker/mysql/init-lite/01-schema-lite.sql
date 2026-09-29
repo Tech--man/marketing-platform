@@ -287,13 +287,14 @@ CREATE TABLE IF NOT EXISTS seckill_order (
     status      VARCHAR(16) NOT NULL COMMENT 'CREATED/PAID/CANCELLED',
     token       VARCHAR(64) NOT NULL COMMENT '抢购排队 token',
     bucket      INT         NULL COMMENT '命中的库存分桶号',
+    active      TINYINT     NOT NULL DEFAULT 1 COMMENT '是否有效单：取消置 0。H7：唯一索引带 active，只约束有效单——取消后允许重抢',
     pay_time    DATETIME    NULL,
     version     INT         NOT NULL DEFAULT 0,
     create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uk_order_no (order_no),
-    UNIQUE KEY uk_activity_user (activity_no, user_id) COMMENT '防重复购买兜底（一人一单）',
+    UNIQUE KEY uk_activity_user (activity_no, user_id, active) COMMENT '防重复购买兜底（一人一张有效单；取消置 active=0 释放占用）',
     KEY idx_status_create (status, create_time)
 ) ENGINE = InnoDB COMMENT '秒杀订单';
 

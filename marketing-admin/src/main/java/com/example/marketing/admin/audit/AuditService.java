@@ -42,27 +42,43 @@ public class AuditService implements AuditSink {
      *                   用搬运时刻会让整条审计时间线位移，而审计的唯一用处就是还原时间线
      */
     public void recordPayload(AuditPayload p, LocalDateTime occurredAt) {
-        record(new AuditRecord(p.actorId(), p.actorName(), p.role(), p.action(), p.resourceType(),
+        record(toRecord(p), occurredAt);
+    }
+
+    /**
+     * drain 专用落表入口（H5，2026-09-29 架构审查）：同一套形状转换，但把落库成败
+     * 交还调用方。HTTP 路径的 {@link #record(AuditRecord, LocalDateTime)} 仍是
+     * "失败只 warn"——那里的动作已完成，不该让一条 INSERT 把它变 500；drain 路径
+     * 的正确语义是"失败不 ACK、条目留在 PEL 等重试"，把失败咽掉等于静默销毁审计。
+     */
+    public boolean tryRecordPayload(AuditPayload p, LocalDateTime occurredAt) {
+        return insert(toEntity(toRecord(p)), occurredAt);
+    }
+
+    private AuditRecord toRecord(AuditPayload p) {
+        return new AuditRecord(p.actorId(), p.actorName(), p.role(), p.action(), p.resourceType(),
                 p.resourceId(), p.method(), p.path(), p.requestSummary(), p.resultCode(),
-                p.errorMsg(), p.ip(), p.costMs()), occurredAt);
+                p.errorMsg(), p.ip(), p.costMs());
     }
 
     public void record(AuditRecord record, LocalDateTime occurredAt) {
         insert(toEntity(record), occurredAt);
     }
 
-    private void insert(AdminAuditLogEntity entity, LocalDateTime occurredAt) {
+    private boolean insert(AdminAuditLogEntity entity, LocalDateTime occurredAt) {
         if (occurredAt != null) {
             entity.setCreateTime(occurredAt);
         }
         try {
             auditMapper.insert(entity);
+            return true;
         } catch (RuntimeException e) {
             log.warn("[audit] 落库失败，动作结果不受影响 actor={}, action={}, resource={}#{}, "
                             + "code={}, msg={}, ip={}, cause={}",
                     entity.getActorName(), entity.getAction(), entity.getResourceType(),
                     entity.getResourceId(), entity.getResultCode(), entity.getErrorMsg(),
                     entity.getIp(), e.toString());
+            return false;
         }
     }
 

@@ -139,6 +139,19 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
                         event.getActivityNo(), event.getUserId(), event.getToken());
                 throw BizException.of(ErrorCode.DUPLICATE_REQUEST);
             }
+            if (SeckillOrderStatus.CANCELLED.name().equals(existing.getStatus())) {
+                // H7 防御分支：唯一索引已改为只约束有效单（带 active），正常流程不该走到这里——
+                // 留这条防御是防 schema 被回退成旧索引。那时把已取消单号当 SUCCESS 回放，
+                // 用户会拿着一个永远付不了款的单号，且本次重扣的名额无主：回补名额、写 FAIL。
+                Counter.builder("seckill.order.cancelled_replay_guard").register(meterRegistry).increment();
+                log.warn("[seckill-consumer] 幂等回放撞上已取消订单，回补本次名额并写 FAIL "
+                        + "activityNo={}, userId={}, oldOrder={}", event.getActivityNo(),
+                        event.getUserId(), existing.getOrderNo());
+                stockService.refill(event.getActivityNo(), event.getUserId(),
+                        event.getBucket() == null ? 1 : event.getBucket(), activity.getBuckets());
+                stockService.saveResult(event.getToken(), "FAIL:ORDER_CANCELLED_REGRAB");
+                return;
+            }
             stockService.saveResult(event.getToken(), "SUCCESS:" + existing.getOrderNo());
             log.info("[seckill-consumer] 重复下单幂等忽略 token={}, orderNo={}", event.getToken(), existing.getOrderNo());
             return;

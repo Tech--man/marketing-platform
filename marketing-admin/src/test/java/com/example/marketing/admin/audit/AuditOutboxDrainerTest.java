@@ -152,4 +152,55 @@ class AuditOutboxDrainerTest {
         assertEquals("0", offset.getValue().getOffset(),
                 "从最新消息建组 = 静默丢掉建组之前投递的所有审计");
     }
+
+    @Test
+    @DisplayName("H5：落库失败绝不 ACK/XDEL——条目留 PEL 等回收，DB 故障窗口的审计不能被销毁")
+    void insertFailureDefersToPel() {
+        stubRead(List.of(record("3-0", AuditPayloadCodec.write(payload()))));
+        when(auditMapper.insert(any(AdminAuditLogEntity.class)))
+                .thenThrow(new RuntimeException("db down"));
+
+        drainer.drainOnce();
+
+        verify(stream, org.mockito.Mockito.never()).acknowledge(eq(StreamKeys.auditPending()),
+                eq(StreamKeys.ADMIN_DRAIN_GROUP), any(RecordId[].class));
+        verify(stream, org.mockito.Mockito.never()).delete(eq(StreamKeys.auditPending()),
+                any(RecordId[].class));
+        assertEquals(1.0, meters.counter("marketing.audit.drain.deferred").count(),
+                "deferred 计数是 ④ 面板区分「落库失败在重试」与「搬运故障」的依据");
+    }
+
+    @Test
+    @DisplayName("H5：滞留 PEL 的过期条目被认领重试（死实例/上轮落库失败都靠这条路自愈）")
+    void reclaimsStalePendingEntries() {
+        // pending 里一条过期（空闲 60s >> 门槛 15s）、一条新鲜（不该被抢）
+        org.springframework.data.redis.connection.stream.Consumer deadConsumer =
+                org.springframework.data.redis.connection.stream.Consumer
+                        .from(StreamKeys.ADMIN_DRAIN_GROUP, "admin-deadbeef");
+        org.springframework.data.redis.connection.stream.PendingMessage stale =
+                new org.springframework.data.redis.connection.stream.PendingMessage(
+                        RecordId.of("9-0"), deadConsumer, java.time.Duration.ofSeconds(60), 1);
+        org.springframework.data.redis.connection.stream.PendingMessage fresh =
+                new org.springframework.data.redis.connection.stream.PendingMessage(
+                        RecordId.of("9-1"), deadConsumer, java.time.Duration.ofSeconds(1), 1);
+        when(stream.pending(eq(StreamKeys.auditPending()), eq(StreamKeys.ADMIN_DRAIN_GROUP),
+                any(org.springframework.data.domain.Range.class), eq(100L)))
+                .thenReturn(new org.springframework.data.redis.connection.stream.PendingMessages(
+                        StreamKeys.ADMIN_DRAIN_GROUP, java.util.List.of(stale, fresh)));
+        when(stream.claim(eq(StreamKeys.auditPending()), eq(StreamKeys.ADMIN_DRAIN_GROUP),
+                anyString(), any(java.time.Duration.class), any(RecordId[].class)))
+                .thenReturn(List.of(record("9-0", AuditPayloadCodec.write(payload()))));
+
+        drainer.drainOnce();
+
+        // 只认领过期的 9-0；新鲜的 9-1 没进 claim 的返回
+        org.mockito.ArgumentCaptor<RecordId[]> ids = org.mockito.ArgumentCaptor.forClass(RecordId[].class);
+        verify(stream).claim(eq(StreamKeys.auditPending()), eq(StreamKeys.ADMIN_DRAIN_GROUP),
+                anyString(), any(java.time.Duration.class), ids.capture());
+        assertEquals(1, ids.getValue().length);
+        assertEquals("9-0", ids.getValue()[0].getValue());
+        verify(auditMapper).insert(any(AdminAuditLogEntity.class));
+        verify(stream).acknowledge(eq(StreamKeys.auditPending()), eq(StreamKeys.ADMIN_DRAIN_GROUP),
+                any(RecordId[].class));
+    }
 }

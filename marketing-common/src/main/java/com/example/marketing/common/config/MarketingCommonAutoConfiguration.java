@@ -54,8 +54,11 @@ public class MarketingCommonAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public IdempotentExecutor idempotentExecutor(JdbcTemplate jdbcTemplate) {
-        return new IdempotentExecutor(jdbcTemplate);
+    public IdempotentExecutor idempotentExecutor(
+            JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${marketing.idempotent.processing-lease-seconds:120}") long processingLeaseSeconds) {
+        return new IdempotentExecutor(jdbcTemplate, processingLeaseSeconds);
     }
 
     /**

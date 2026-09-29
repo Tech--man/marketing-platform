@@ -52,16 +52,43 @@ public class RuleCacheManager {
         return rebuild(redisVersion < 0 ? 0 : redisVersion);
     }
 
-    /** 规则变更后推进版本号（时间戳），并让本实例立即失效 */
+    /**
+     * 规则变更后推进版本号，并让本实例立即失效。
+     *
+     * <p><b>H8（2026-09-29 架构审查）三处收口</b>：
+     * 1) 版本号从毫秒时间戳换成 Redis {@code INCR} 单调序号——时间戳同毫秒撞号会让
+     *    两次变更共用一个版本号，后一次永久丢失（admin 配置中心为同款问题改 INCR，
+     *    见 {@code mkt:cfg:seq} 的教训，规则侧此前没跟上）；
+     * 2) 只允许从事务提交后调用（{@code RuleAdminService} 用 afterCommit 注册）——
+     *    提交前 bump，其他实例在窗口内重建会拿到"新版本号 + 旧数据"的快照，
+     *    之后版本比对恒相等、永不重建；
+     * 3) bump 写失败时本实例立即按 DB 重建——此时数据必已提交（afterCommit 语义），
+     *    旧实现只打日志宣称"本实例仍生效"，实际 readRedisVersion 失败返回 -1，
+     *    连写入实例自己也继续用旧快照，永不自愈。</p>
+     */
     public long bumpVersion() {
-        long version = System.currentTimeMillis();
-        try {
-            redisTemplate.opsForValue().set(properties.getVersionKey(), String.valueOf(version));
-        } catch (Exception e) {
-            log.warn("[discount] 版本号写 Redis 失败（本实例仍生效，其他实例延迟感知）: {}", e.getMessage());
-        }
         localCheckedAt = 0;
-        return version;
+        try {
+            Long version = redisTemplate.opsForValue().increment(properties.getVersionKey());
+            return version == null ? 0L : version;
+        } catch (Exception e) {
+            log.warn("[discount] 版本号写 Redis 失败（本实例已按 DB 重建，其他实例等下次成功的 bump）: {}",
+                    e.getMessage());
+            forceRebuildFromDb();
+            return local == null ? 0L : local.getVersion();
+        }
+    }
+
+    /** 不看版本号、直接按 DB 当前已提交数据重建本地快照（bump 写失败的自愈路径） */
+    private synchronized void forceRebuildFromDb() {
+        long current = readRedisVersion();
+        if (current < 0) {
+            current = local == null ? 0L : local.getVersion();
+        }
+        // 置空绕过 rebuild 的版本 double-check——这条路径要的就是"无视版本号重建"。
+        // 与并发读者的竞态无害：它们看到 null 会进 synchronized 的 rebuild 等锁。
+        local = null;
+        rebuild(current);
     }
 
     /** 返回 Redis 当前版本号；key 不存在返回 0；异常返回 -1 */
@@ -103,6 +130,11 @@ public class RuleCacheManager {
         RuleSnapshot snapshot = RuleSnapshot.build(version, dslList);
         this.local = snapshot;
         this.localCheckedAt = System.currentTimeMillis();
+        // H8 双检：构建期间版本号又推进了（连续保存），标记让下一次 snapshot 立即重比，
+        // 杜绝"构建开始后才提交的数据"被版本相等掩护在快照外
+        if (readRedisVersion() > version) {
+            localCheckedAt = 0;
+        }
         log.info("[discount] 规则快照重建完成 version={}, rules={}", version, snapshot.getRules().size());
         return snapshot;
     }

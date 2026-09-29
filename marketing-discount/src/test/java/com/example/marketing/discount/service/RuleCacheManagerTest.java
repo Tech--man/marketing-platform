@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.when;
 
 /**
  * 规则缓存：冷路径并发重建合并（Redis 无版本号 key 时 version 恒为 0）。
@@ -72,5 +73,45 @@ class RuleCacheManagerTest {
         for (RuleSnapshot snapshot : got) {
             assertSame(got[0], snapshot);
         }
+    }
+
+    @Test
+    @DisplayName("H8：bump 用 Redis INCR 单调推进，不再写毫秒时间戳（同毫秒撞号=变更永久丢失）")
+    void bumpUsesIncrNotTimestamp() {
+        PromoRuleMapper mapper = countingMapper(0, new AtomicInteger());
+        org.springframework.data.redis.core.StringRedisTemplate redis =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        when(ops.increment("discount:rule:version")).thenReturn(7L);
+        RuleCacheManager manager = new RuleCacheManager(mapper, redis, new DiscountProperties());
+
+        long version = manager.bumpVersion();
+
+        org.mockito.Mockito.verify(ops).increment("discount:rule:version");
+        org.mockito.Mockito.verify(ops, org.mockito.Mockito.never())
+                .set(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        assertEquals(7L, version, "版本号必须是 INCR 的返回值，不该再出现时间戳");
+    }
+
+    @Test
+    @DisplayName("H8：bump 写 Redis 失败 → 本实例立即按 DB 重建（旧实现只打日志、永不自愈）")
+    void bumpFailureRebuildsFromDbImmediately() {
+        AtomicInteger queries = new AtomicInteger();
+        org.springframework.data.redis.core.StringRedisTemplate redis =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        // INCR 与后续的版本号回读全部失败（Redis 整体不可用）
+        when(ops.increment("discount:rule:version")).thenThrow(new RuntimeException("redis down"));
+        when(ops.get("discount:rule:version")).thenThrow(new RuntimeException("redis down"));
+        RuleCacheManager manager = new RuleCacheManager(
+                countingMapper(0, queries), redis, new DiscountProperties());
+
+        manager.bumpVersion();
+
+        assertEquals(1, queries.get(), "bump 失败必须触发一次 DB 重建，而不是只用旧快照");
     }
 }
