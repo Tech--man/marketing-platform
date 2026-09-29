@@ -30,7 +30,8 @@ class ActivityServiceTest {
     @Test
     @DisplayName("活动不存在返回 40400 NOT_FOUND")
     void missingActivityIsNotFound() {
-        ActivityService service = new ActivityService(mapperReturning(null), null);
+        ActivityService service = new ActivityService(mapperReturning(null), null,
+                org.mockito.Mockito.mock(ActivityGatePublisher.class));
 
         BizException e = assertThrows(BizException.class, () -> service.getByNo("ACT0000000"));
         assertEquals(ErrorCode.NOT_FOUND.getCode(), e.getCode(),
@@ -44,7 +45,8 @@ class ActivityServiceTest {
                 ActivityMapper.class.getClassLoader(),
                 new Class<?>[]{ActivityMapper.class},
                 (proxy, method, args) -> "exists".equals(method.getName()) ? Boolean.TRUE : null);
-        ActivityService service = new ActivityService(existsMapper, null);
+        ActivityService service = new ActivityService(existsMapper, null,
+                org.mockito.Mockito.mock(ActivityGatePublisher.class));
 
         BizException e = assertThrows(BizException.class,
                 () -> service.create(new com.example.marketing.activity.dto.CreateActivityRequest(

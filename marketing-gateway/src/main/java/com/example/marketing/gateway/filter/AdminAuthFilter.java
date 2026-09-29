@@ -71,7 +71,11 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String path = exchange.getRequest().getURI().getPath();
-        if (!path.startsWith(ADMIN_PREFIX)) {
+        // /api/admin（无尾斜杠）也归这片（B5-5，2026-09-29 审查）：判界只认
+        // startsWith("/api/admin/") 会把它漏给 ConsumerAuthFilter，后台 token 在自家
+        // 门口被报"凭证无效"——错误码错位会误导排障方向。归过来后由路由
+        // Path=/api/admin/** 兜底（PathPattern 的 ** 匹配空段），最终 404 而非 40100。
+        if (!path.startsWith(ADMIN_PREFIX) && !path.equals("/api/admin")) {
             return chain.filter(exchange);
         }
         if (isPermitted(path)) {

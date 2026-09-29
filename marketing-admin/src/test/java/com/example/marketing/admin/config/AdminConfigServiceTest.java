@@ -93,7 +93,7 @@ class AdminConfigServiceTest {
     @Test
     @DisplayName("写成功：行落库带 seq 版本、LITE 快照与版本都发出、审计记下 before/after")
     void happyPathWritesThenBroadcasts() {
-        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", "大促收口"), "127.0.0.1");
+        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", "大促收口", null), "127.0.0.1");
         assertEquals("120", store.findValue(KEY, "LITE"));
         assertEquals("11", store.detail().get(0).version());
         assertEquals("admin", store.detail().get(0).updatedBy());
@@ -110,7 +110,7 @@ class AdminConfigServiceTest {
     @DisplayName("未声明的键直接拒（不做「接受了但没人消费」的静默按钮）")
     void undeclaredKeyRejected() {
         BizException e = assertThrows(BizException.class, () -> service.set(ADMIN,
-                new ConfigSetRequest("nope.key", "LITE", "1", ""), "ip"));
+                new ConfigSetRequest("nope.key", "LITE", "1", "", null), "ip"));
         assertEquals(ErrorCode.BAD_REQUEST.getCode(), e.getCode());
         assertTrue(store.rows().isEmpty(), "被拒的写不许在库里留行");
         verify(ops, never()).increment(ConfigKeys.SEQUENCE);
@@ -120,7 +120,7 @@ class AdminConfigServiceTest {
     @DisplayName("越界值在碰 DB、序号与 Redis 之前就拒")
     void outOfRangeRejectedBeforeTouchingAnything() {
         assertThrows(BizException.class, () -> service.set(ADMIN,
-                new ConfigSetRequest(KEY, "LITE", "0", ""), "ip"));
+                new ConfigSetRequest(KEY, "LITE", "0", "", null), "ip"));
         assertTrue(store.rows().isEmpty());
         verify(ops, never()).set(anyString(), anyString());
         verify(ops, never()).increment(ConfigKeys.SEQUENCE);
@@ -130,7 +130,7 @@ class AdminConfigServiceTest {
     @DisplayName("非法 form 拒：写进一个没人读的形态就是幽灵配置")
     void unknownFormRejected() {
         BizException e = assertThrows(BizException.class, () -> service.set(ADMIN,
-                new ConfigSetRequest(KEY, "PREVIEW", "120", ""), "ip"));
+                new ConfigSetRequest(KEY, "PREVIEW", "120", "", null), "ip"));
         assertEquals(ErrorCode.BAD_REQUEST.getCode(), e.getCode());
         assertTrue(e.getMessage().contains("GLOBAL"), "报错要把允许的取值说清楚: " + e.getMessage());
     }
@@ -140,7 +140,7 @@ class AdminConfigServiceTest {
     void broadcastFailureSurfacesAs41009AndKeepsRow() {
         doThrow(new IllegalStateException("redis down")).when(ops).set(anyString(), anyString());
         BizException e = assertThrows(BizException.class, () -> service.set(ADMIN,
-                new ConfigSetRequest(KEY, "LITE", "120", ""), "ip"));
+                new ConfigSetRequest(KEY, "LITE", "120", "", null), "ip"));
         assertEquals(ErrorCode.CONFIG_NOT_BROADCAST.getCode(), e.getCode());
         assertEquals("120", store.findValue(KEY, "LITE"),
                 "已落库是事实，回滚只会让审计与库里状态对不上");
@@ -150,7 +150,7 @@ class AdminConfigServiceTest {
     @Test
     @DisplayName("删除命中才重广播；未命中 40400 且不占序号")
     void deleteIsRestoreToFactory() {
-        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", ""), "ip");
+        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", "", null), "ip");
         org.mockito.Mockito.clearInvocations(ops, redis);
         service.delete(ADMIN, KEY, "LITE", "ip");
         assertEquals(null, store.findValue(KEY, "LITE"));
@@ -165,8 +165,8 @@ class AdminConfigServiceTest {
     @Test
     @DisplayName("overview 报出自己的形态、生效值与来源，GLOBAL 行对 LITE 可见而 FULL 行不可见")
     void overviewExposesSourceOfTruth() {
-        service.set(ADMIN, new ConfigSetRequest(KEY, "GLOBAL", "150", ""), "ip");
-        service.set(ADMIN, new ConfigSetRequest(KEY, "FULL", "9999", ""), "ip");
+        service.set(ADMIN, new ConfigSetRequest(KEY, "GLOBAL", "150", "", null), "ip");
+        service.set(ADMIN, new ConfigSetRequest(KEY, "FULL", "9999", "", null), "ip");
         ConfigOverviewView view = service.overview();
         assertEquals("LITE", view.ownForm());
         var entry = view.entries().stream().filter(e -> e.key().equals(KEY)).findFirst().orElseThrow();
@@ -179,11 +179,33 @@ class AdminConfigServiceTest {
     @Test
     @DisplayName("重新广播是幂等的：只按 DB 现状重发并推进版本")
     void rebroadcastRepublishesFromDb() {
-        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", ""), "ip");
+        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", "", null), "ip");
         when(ops.increment(ConfigKeys.SEQUENCE)).thenReturn(21L);
         org.mockito.Mockito.clearInvocations(ops, redis);
         assertEquals(21L, service.rebroadcast(ADMIN, "ip"));
         verify(ops).set(eq(ConfigKeys.snapshot("LITE")), anyString());
         verify(ops).set(eq(ConfigKeys.version("LITE")), eq("21"));
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("B5-2：expectedVersion 过期 → 41008 且不落库、不广播")
+    void staleExpectedVersionRejected() {
+        // 第一笔落 version=11（H2 起始 seq），拿旧 version=3 再写：CAS 落空
+        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", "", null), "ip");
+        org.mockito.Mockito.clearInvocations(ops, redis);
+        BizException e = assertThrows(BizException.class,
+                () -> service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "200", "", 3L), "ip"));
+        assertEquals(41008, e.getCode());
+        assertEquals("120", store.findValue(KEY, "LITE"), "冲突写不许覆盖别人的值");
+        verify(ops, org.mockito.Mockito.never()).set(anyString(), anyString());
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("B5-2：expectedVersion 与行上一致 → 正常写入")
+    void matchingExpectedVersionWrites() {
+        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "120", "", null), "ip");
+        Long current = store.findRowVersion(KEY, "LITE");
+        service.set(ADMIN, new ConfigSetRequest(KEY, "LITE", "200", "", current), "ip");
+        assertEquals("200", store.findValue(KEY, "LITE"));
     }
 }

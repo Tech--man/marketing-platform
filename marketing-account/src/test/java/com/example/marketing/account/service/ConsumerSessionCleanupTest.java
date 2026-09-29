@@ -51,7 +51,7 @@ class ConsumerSessionCleanupTest {
             ((Runnable) inv.getArgument(2)).run();
             return null;
         }).when(lock).runExclusive(anyString(), any(), any());
-        cleanup = new ConsumerSessionCleanup(jdbc, lock, new SimpleMeterRegistry(), 7, 12);
+        cleanup = new ConsumerSessionCleanup(jdbc, lock, new SimpleMeterRegistry(), 7, 12, 90);
     }
 
     @AfterEach

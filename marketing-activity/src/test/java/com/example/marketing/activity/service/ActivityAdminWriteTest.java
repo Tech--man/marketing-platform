@@ -34,7 +34,8 @@ class ActivityAdminWriteTest {
 
     private final ActivityMapper mapper = mock(ActivityMapper.class);
     private final BudgetService budgetService = mock(BudgetService.class);
-    private final ActivityService service = new ActivityService(mapper, budgetService);
+    private final ActivityService service = new ActivityService(mapper, budgetService,
+                org.mockito.Mockito.mock(ActivityGatePublisher.class));
 
     private ActivityEntity existing(String budget, int version) {
         ActivityEntity e = new ActivityEntity();

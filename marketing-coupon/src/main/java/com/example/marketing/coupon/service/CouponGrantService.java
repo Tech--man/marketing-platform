@@ -36,6 +36,7 @@ public class CouponGrantService {
     private static final String SCENE = "COUPON_GRANT";
 
     private final IdempotentExecutor idempotentExecutor;
+    private final ActivityGate activityGate;
     private final CouponTemplateService templateService;
     private final CouponStockService stockService;
     private final LocalMessageService localMessageService;
@@ -84,6 +85,9 @@ public class CouponGrantService {
         }
         // 2. 模板校验（状态 + 时间窗）
         CouponTemplateEntity template = templateService.getRequiringGrantable(request.templateNo());
+        // 2.5 活动参与闸（2026-09-29 审查第五批）：父活动状态 + 灰度在服务端强制——
+        // 原先只拦 UI 入口，直接 POST 的领券绕过；键缺失 fail-open（迁移期语义不变）
+        activityGate.checkGrantable(template.getActivityNo(), request.userId());
         // 3. Redis 原子预扣（库存 + 个人限领）
         java.time.Duration userKeyTtl = CouponStockService.userKeyTtl(template.getEndTime());
         CouponStockService.DeductResult deduct = stockService.deduct(

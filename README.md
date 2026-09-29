@@ -399,7 +399,13 @@ POST /api/coupon/grant (requestId 幂等键)
   redrive`，置回 PENDING 由补偿定时器重投）。2026-09-29 第四批三处收口：refresh
   轮换改 CAS 于旧摘要（并发双花只有一个赢家，输家按重放吊销会话）；限领计数 TTL
   改为覆盖模板剩余有效期（固定 30 天会把"活动内限领 N 张"稀释成"每 30 天 N 张"）；
-  会话行有低频清理（默认保留 7 天、12h 一轮、RedisLeaseLock 防多副本）
+  会话行有低频清理（默认保留 7 天、12h 一轮、RedisLeaseLock 防多副本）。
+  2026-09-29 第五批：**活动状态与灰度在领券服务端强制**——activity 进程的
+  ActivityGatePublisher 把状态+灰度镜像进 Redis（流转/改灰度即时发布 + 5s 周期全量
+  重写），coupon 侧 ActivityGate 在预扣前校验（键缺失 fail-open=迁移期行为不变）；
+  admin_config 写路径带 expectedVersion CAS（UI 保存时自动携带，冲突 41008 提示刷新）；
+  DDL 两副本一致性有 SchemaParityTest 守卫（改一份忘另一侧=测试红）；admin_session
+  与 consumer_event_log 有保留期清理（7 天/90 天）；/api/admin 无尾斜杠的错误码错位修正
 - `LocalMessageRetryer`（common 内置 @Scheduled）补偿未确认消息；重启时 `StockWarmUpRunner` 按 DB 已发量重算 Redis 库存
 
 ### 2. 优惠计算（P99 < 20ms）

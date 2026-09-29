@@ -32,6 +32,7 @@ import static org.mockito.Mockito.when;
 class CouponGrantServiceTest {
 
     private final IdempotentExecutor idempotentExecutor = mock(IdempotentExecutor.class);
+    private final ActivityGate activityGate = mock(ActivityGate.class);
     private final CouponTemplateService templateService = mock(CouponTemplateService.class);
     private final CouponStockService stockService = mock(CouponStockService.class);
     private final LocalMessageService localMessageService = mock(LocalMessageService.class);
@@ -41,7 +42,10 @@ class CouponGrantServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new CouponGrantService(idempotentExecutor, templateService, stockService,
+        // 活动闸默认放行（fail-open 语义另有 ActivityGateTest 专测）
+        org.mockito.Mockito.doNothing().when(activityGate).checkGrantable(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
+        service = new CouponGrantService(idempotentExecutor, activityGate, templateService, stockService,
                 localMessageService, riskCheckService, userCouponMapper, new SimpleMeterRegistry());
         // 幂等执行器直通 action：本测试只关心 action 内部的补偿编排
         when(idempotentExecutor.execute(anyString(), any(), any()))

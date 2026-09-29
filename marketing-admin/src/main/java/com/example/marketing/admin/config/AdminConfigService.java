@@ -100,7 +100,11 @@ public class AdminConfigService {
         }
         String before = store.findValue(key, form);
         long seq = publisher.nextSequence();
-        store.upsert(key, form, value, seq, actor.username(), trimmed(request.remark()));
+        if (!store.upsertCas(key, form, value, seq, actor.username(), trimmed(request.remark()),
+                request.expectedVersion())) {
+            throw BizException.of(ErrorCode.CONFIG_VERSION_CONFLICT,
+                    "参数 " + key + " @ " + form + " 已被他人修改（version 冲突），请刷新后重试");
+        }
         broadcastOrThrow(actor, "config.set", key, form, before, value, ip, seq);
         log.info("[admin] 配置写入 key={}, form={}, {} -> {}, seq={}, actor={}",
                 key, form, before, value, seq, actor.username());

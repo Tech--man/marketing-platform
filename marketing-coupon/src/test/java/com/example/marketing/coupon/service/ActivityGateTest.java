@@ -1,0 +1,112 @@
+package com.example.marketing.coupon.service;
+
+import com.example.marketing.common.exception.BizException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * B5-1 回归（2026-09-29 审查第五批）：活动状态与灰度在领券服务端强制。
+ *
+ * <p>原先这层只拦 H5 入口（前端调 participatable/gray-hit 决定是否展示按钮），
+ * 直接 POST /api/coupon/grant 完全绕过——活动下线后券照发、灰度对任何登录用户无效。
+ * 判定公式必须与 activity 侧 GrayService.hit 逐字一致（floorMod(uid,100)&lt;percent），
+ * 两处漂移等于两种人看到两个活动。</p>
+ */
+class ActivityGateTest {
+
+    private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
+    private final ValueOperations<String, String> ops = mock(ValueOperations.class);
+    private final ActivityGate gate = new ActivityGate(redis);
+
+    @BeforeEach
+    void setUp() {
+        when(redis.opsForValue()).thenReturn(ops);
+    }
+
+    private void status(String value) {
+        when(ops.get("activity:gate:status:ACT1")).thenReturn(value);
+    }
+
+    private void gray(String value) {
+        when(ops.get("activity:gate:gray:ACT1")).thenReturn(value);
+    }
+
+    @Test
+    @DisplayName("活动 OFFLINE → 41007 拒绝：预案下线必须在服务端停发券，不只是收起入口")
+    void offlineActivityRejected() {
+        status("OFFLINE");
+
+        BizException e = assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70001L));
+        assertEquals(41007, e.getCode());
+    }
+
+    @Test
+    @DisplayName("状态键缺失 → 放行（fail-open：activity 侧未部署/未发布时行为与旧版一致）")
+    void missingKeysFailOpen() {
+        status(null);
+        gray(null);
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L));
+    }
+
+    @Test
+    @DisplayName("ONLINE + 未配灰度（percent=-）→ 全量放行")
+    void onlineWithoutGrayPasses() {
+        status("ONLINE");
+        gray("-|");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L));
+    }
+
+    @Test
+    @DisplayName("灰度 40%：uid%100<40 命中、≥40 拒——公式与 GrayService.hit 逐字一致")
+    void grayPercentMathMatchesActivitySide() {
+        status("ONLINE");
+        gray("40|");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 100L));       // 100%100=0 < 40 命中
+        BizException e = assertThrows(BizException.class,
+                () -> gate.checkGrantable("ACT1", 70041L));               // 70041%100=41 ≥40
+        assertEquals(41000, e.getCode());
+    }
+
+    @Test
+    @DisplayName("白名单直通：灰度 0% 也放行名单内用户")
+    void whitelistBypassesPercent() {
+        status("ONLINE");
+        gray("0|70001");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L));
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70002L));
+    }
+
+    @Test
+    @DisplayName("模板未挂活动（activityNo 空/null）→ 本闸不管，由模板自身状态控制")
+    void blankActivityNoSkipsGate() {
+        assertDoesNotThrow(() -> gate.checkGrantable(null, 70001L));
+        assertDoesNotThrow(() -> gate.checkGrantable(" ", 70001L));
+        verify(ops, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("灰度键形状不认识 → 放行（格式演化不该把领券全堵死），状态键仍强制")
+    void malformedGrayIgnoredButStatusStillEnforced() {
+        status("FINISHED");
+        gray("not-a-valid-shape");
+
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70001L),
+                "灰度形状不认识可以放行，状态键的强制不受影响");
+    }
+}

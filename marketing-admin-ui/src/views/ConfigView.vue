@@ -53,9 +53,14 @@ onMounted(load)
 function startEdit(entry) {
   const own = d.value?.ownForm
   // 默认落在"本档"上是有意的：改错档是这一页最贵的错，预填全局等于把坑摆在路上
+  // 各形态当前 version 随编辑带走：保存时作为 CAS 期望值，两人并发改同一键时
+  // 后写者拿到 41008 提示刷新，而不是静默覆盖先写（2026-09-29 审查第五批）
+  const formVersions = {}
+  for (const r of entry.rows || []) formVersions[r.form] = r.version
   editing.value = {
     key: entry.key,
     form: own && FORMS.includes(own) ? own : 'GLOBAL',
+    formVersions,
     value: entry.effectiveValue ?? entry.defaultValue ?? '',
     min: entry.min,
     max: entry.max,
@@ -74,11 +79,18 @@ async function save() {
       form: editing.value.form,
       value: editing.value.value,
       remark: editing.value.remark,
+      // 该 (key,form) 行编辑时的 version；无覆盖行（首写）带 null
+      expectedVersion: editing.value.formVersions[editing.value.form] ?? null,
     })
     notice.value = `已写入并广播：${editing.value.key} @ ${editing.value.form}`
     editing.value = null
     await load()
   } catch (e) {
+    if (e.code === E.CONFLICT) {
+      editing.value.error = '该参数已被他人修改，请关闭后重新打开编辑（列表会带来新版本）'
+      await load()
+      return
+    }
     if (e.code === E.NOT_BROADCAST) {
       // 半状态：库里有、快照没发。当成成功就等于把 41009 这个码从世界上抹掉
       notBroadcast.value = true

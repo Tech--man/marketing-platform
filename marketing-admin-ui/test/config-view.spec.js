@@ -131,6 +131,21 @@ describe('ConfigView', () => {
     expect(w.find('[data-act="rebroadcast"]').exists()).toBe(false)
   })
 
+  it('B5-2：保存携带编辑时的 version 做 CAS，41008 冲突给刷新提示而不是假成功', async () => {
+    reply(ok(overview), ko(41008, '参数已被他人修改（version 冲突），请刷新后重试'), ok(overview))
+    const w = mountView()
+    await flushPromises()
+    await w.get('[data-key="gateway.ratelimit.seckill-route.limit"] [data-act="edit"]').trigger('click')
+    await w.get('[data-field="value"]').setValue('7')
+    await w.get('[data-act="save"]').trigger('click')
+    await flushPromises()
+    // PUT 的 body 必须带 expectedVersion（夹具里 LITE 行 version='3'）
+    const put = global.fetch.mock.calls.find((c) => c[1] && c[1].method === 'PUT')
+    expect(JSON.parse(put[1].body).expectedVersion).toBe('3')
+    expect(w.text()).toContain('已被他人修改')
+    expect(w.text()).not.toContain('已写入并广播')
+  })
+
   it('删行的确认文案说清"退回出厂值"，不是"删成 0"', async () => {
     reply(ok(overview))
     const w = mountView()

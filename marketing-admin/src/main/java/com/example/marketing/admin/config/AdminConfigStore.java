@@ -65,6 +65,34 @@ public class AdminConfigStore {
         }
     }
 
+    /**
+     * 带 CAS 的写入（2026-09-29 审查第五批）：expectedVersion 非空时与行上 version
+     * 比对，不一致返回 false（调用方回 41008）。行不存在 + expectedVersion 非空
+     * 视为过期信息（行被人删了）同样 false；行不存在 + expectedVersion==0 视为
+     * "客户端确认过没有覆盖"的首写，放行。
+     */
+    /** 行上当前 version；行不存在返回 null（测试与 CAS 判定共用） */
+    public Long findRowVersion(String key, String form) {
+        var found = jdbc.queryForList(
+                "SELECT version FROM admin_config WHERE cfg_key = ? AND form = ?", key, form);
+        return found.isEmpty() ? null : ((Number) found.get(0).get("version")).longValue();
+    }
+
+    public boolean upsertCas(String key, String form, String value, long version, String by,
+                             String remark, Long expectedVersion) {
+        if (expectedVersion == null) {
+            upsert(key, form, value, version, by, remark);
+            return true;
+        }
+        int updated = jdbc.update("UPDATE admin_config SET cfg_value = ?, version = ?, updated_by = ?, remark = ? "
+                + "WHERE cfg_key = ? AND form = ? AND version = ?",
+                value, version, by, remark, key, form, expectedVersion);
+        if (updated > 0) {
+            return true;
+        }
+        return findValue(key, form) == null && expectedVersion == 0L;
+    }
+
     public int delete(String key, String form) {
         return jdbc.update("DELETE FROM admin_config WHERE cfg_key = ? AND form = ?", key, form);
     }

@@ -32,6 +32,7 @@ public class ActivityService {
 
     private final ActivityMapper activityMapper;
     private final BudgetService budgetService;
+    private final ActivityGatePublisher gatePublisher;
 
     public ActivityEntity create(CreateActivityRequest request) {
         if (activityMapper.exists(Wrappers.<ActivityEntity>lambdaQuery()
@@ -59,6 +60,9 @@ public class ActivityService {
         if (target == ActivityStatus.ONLINE) {
             budgetService.warmIfAbsent(activityNo, entity.getBudgetAmount());
         }
+        // 下线/暂停的生效不该等下一轮回源（那是最长 5s 的"已下线还在发券"窗口），
+        // 流转后即时发布参与闸门；发布失败由发布器的周期全量重写兜底
+        gatePublisher.publishNow(activityNo);
         log.info("[activity] {} 状态流转 {} -[{}]-> {}", activityNo, current, event, target);
         return entity;
     }
@@ -99,6 +103,7 @@ public class ActivityService {
         entity.setGrayPercent(grayPercent);
         entity.setGrayWhitelist(grayWhitelist);
         flushWithVersion(entity);
+        gatePublisher.publishNow(activityNo);
         log.info("[activity] 灰度变更 {} percent {} -> {} whitelist={}",
                 activityNo, from, grayPercent, grayWhitelist);
         return entity;
