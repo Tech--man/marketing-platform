@@ -114,14 +114,17 @@ public class AdminAuthService {
 
     private void reject(AdminUserEntity user, String username, LoginPolicy.Verdict verdict,
                         LocalDateTime now, String ip, long startedAt) {
+        // W3.8（2026-09-30 第二轮复审）：三态对外同话术——DISABLED/LOCKED 的专属文案
+        // 等于告诉探测者"这个用户名存在且状态非 ACTIVE"（账号枚举面）。差异只进审计
+        // （login.disabled / login.locked / login.bad_credentials 三条 action 运维可辨）。
         switch (verdict) {
             case DISABLED -> {
                 audit(user, username, "login.disabled", ip, startedAt);
-                throw BizException.of(ErrorCode.UNAUTHORIZED, "账号已停用，请联系管理员");
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "用户名或口令错误");
             }
             case LOCKED -> {
                 audit(user, username, "login.locked", ip, startedAt);
-                throw BizException.of(ErrorCode.UNAUTHORIZED, "失败次数过多，账号已临时锁定");
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "用户名或口令错误");
             }
             default -> {
                 if (user != null) {

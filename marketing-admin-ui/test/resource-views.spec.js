@@ -98,6 +98,8 @@ describe('CouponsView', () => {
     await flushPromises()
     await w.get('[data-act="toggle-status"]').trigger('click')
     await flushPromises()
+    await w.get('[data-act="confirm-toggle"]').trigger('click') // W4：先落确认抽屉
+    await flushPromises()
     expect(putUrl()).toBe('/api/admin/coupon/templates/CT2026001/status')
     expect(putBody()).toEqual({ status: 'INACTIVE', version: 3 })
   })
@@ -180,6 +182,8 @@ describe('SeckillView', () => {
     const w = mount(SeckillView)
     await flushPromises()
     await w.get('[data-act="toggle-status"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-act="confirm-toggle"]').trigger('click') // W4：先落确认抽屉
     await flushPromises()
     expect(putUrl()).toBe('/api/admin/seckill/activities/SK2026001/status')
     expect(putBody()).toEqual({ status: 'ONLINE', version: 5 })

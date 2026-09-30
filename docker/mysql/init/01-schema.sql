@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS idempotent_record (
     status      VARCHAR(16)  NOT NULL COMMENT 'INIT/PROCESSING/SUCCESS/FAIL',
     result_json TEXT         NULL COMMENT '成功结果快照（重放直接返回）',
     error_msg   VARCHAR(512) NULL,
+    claim_token  VARCHAR(36)  NULL COMMENT '执行代次（W1.1 fencing）：claim 时写入，mark 成功/失败都要比对——慢持有者被租约接管后的回写不会毒化接管者',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -172,6 +173,7 @@ CREATE TABLE IF NOT EXISTS idempotent_record (
     status      VARCHAR(16)  NOT NULL COMMENT 'INIT/PROCESSING/SUCCESS/FAIL',
     result_json TEXT         NULL,
     error_msg   VARCHAR(512) NULL,
+    claim_token  VARCHAR(36)  NULL COMMENT '执行代次（W1.1 fencing）：claim 时写入，mark 成功/失败都要比对——慢持有者被租约接管后的回写不会毒化接管者',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -236,6 +238,7 @@ CREATE TABLE IF NOT EXISTS idempotent_record (
     status      VARCHAR(16)  NOT NULL,
     result_json TEXT         NULL,
     error_msg   VARCHAR(512) NULL,
+    claim_token  VARCHAR(36)  NULL COMMENT '执行代次（W1.1 fencing）：claim 时写入，mark 成功/失败都要比对——慢持有者被租约接管后的回写不会毒化接管者',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -325,6 +328,7 @@ CREATE TABLE IF NOT EXISTS idempotent_record (
     status      VARCHAR(16)  NOT NULL,
     result_json TEXT         NULL,
     error_msg   VARCHAR(512) NULL,
+    claim_token  VARCHAR(36)  NULL COMMENT '执行代次（W1.1 fencing）：claim 时写入，mark 成功/失败都要比对——慢持有者被租约接管后的回写不会毒化接管者',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -409,11 +413,13 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
     result_code     INT          NOT NULL DEFAULT 0,
     error_msg       VARCHAR(512) NOT NULL DEFAULT '',
     ip              VARCHAR(64)  NOT NULL DEFAULT '',
+    source_id       VARCHAR(64)  NULL COMMENT '来源 Stream 消息 ID（W1.2 幂等）：drain 至少一次投递的去重键，NULL 为存量行/HTTP 直写',
     cost_ms         BIGINT       NOT NULL DEFAULT 0,
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_actor_time (actor_id, create_time),
-    KEY idx_resource (resource_type, resource_id)
+    KEY idx_resource (resource_type, resource_id),
+    UNIQUE KEY uk_source (source_id)
 ) ENGINE = InnoDB COMMENT '管理后台审计日志';
 
 -- 种子账号（BCrypt strength=10）。口令是演示用弱口令，README 已公示并提示改密；

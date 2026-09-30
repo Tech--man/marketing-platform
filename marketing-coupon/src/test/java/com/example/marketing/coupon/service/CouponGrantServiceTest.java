@@ -131,4 +131,28 @@ class CouponGrantServiceTest {
 
         verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt());
     }
+
+    @Test
+    @DisplayName("W2.5：无券且幂等终态 FAILED → 返回失败终态（不再永远 PROCESSING）")
+    void queryResultReturnsFailedTerminal() {
+        when(userCouponMapper.selectOne(any())).thenReturn(null);
+        when(idempotentExecutor.failureReasonOf(anyString()))
+                .thenReturn(java.util.Optional.of("消息超过最大重试次数转 FAILED"));
+
+        com.example.marketing.coupon.dto.GrantResultVO vo = service.queryResult("REQ-DEAD", 70001L);
+
+        org.junit.jupiter.api.Assertions.assertEquals("FAILED", vo.status(), "死信后必须有负向终态信号");
+        org.junit.jupiter.api.Assertions.assertEquals("消息超过最大重试次数转 FAILED", vo.message());
+    }
+
+    @Test
+    @DisplayName("W2.5：无券且非 FAILED（SUCCESS 在途/无行）→ 照旧 PROCESSING")
+    void queryResultStaysProcessingWhenNotFailed() {
+        when(userCouponMapper.selectOne(any())).thenReturn(null);
+        when(idempotentExecutor.failureReasonOf(anyString())).thenReturn(java.util.Optional.empty());
+
+        com.example.marketing.coupon.dto.GrantResultVO vo = service.queryResult("REQ-ALIVE", 70001L);
+
+        org.junit.jupiter.api.Assertions.assertEquals("PROCESSING", vo.status());
+    }
 }

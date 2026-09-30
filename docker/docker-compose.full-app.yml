@@ -31,6 +31,18 @@ x-app-defaults: &app-defaults
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
+  # W5.3（2026-09-30 第二轮复审）：容器级内存上限与探活——JVM 有界但容器无界，
+  # 多副本 scale 时 OOM 会杀掉整个容器而不是单进程；无 healthcheck 则 --wait 的
+  # 就绪语义缺失（镜像内有 curl 的 JRE 基础镜像没有，用 java 自身做 TCP 探活代理）。
+  mem_limit: 768m
+  healthcheck:
+    # 容器内 TCP 探活业务端口（$$ 转义 = 容器内环境变量 APP_PORT，各服务单独设）。
+    # 镜像是精简 JRE（无 curl/wget），bash 的 /dev/tcp 是可用的最小手段
+    test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/$${APP_PORT}' || exit 1"]
+    interval: 15s
+    timeout: 5s
+    retries: 10
+    start_period: 90s
   # mkt-data = 数据层所在网络（mysql/redis）；mkt-mw = 扩容档中间件网络（nacos/rocketmq）
   networks: [mkt-data, mkt-mw]
   environment: &app-env
@@ -64,21 +76,33 @@ services:
     <<: *app-defaults
     build: { context: ../marketing-activity }
     image: marketing-activity:full
+    environment:
+      <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
+      APP_PORT: "8081"
 
   marketing-coupon:
     <<: *app-defaults
     build: { context: ../marketing-coupon }
     image: marketing-coupon:full
+    environment:
+      <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
+      APP_PORT: "8082"
 
   marketing-discount:
     <<: *app-defaults
     build: { context: ../marketing-discount }
     image: marketing-discount:full
+    environment:
+      <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
+      APP_PORT: "8083"
 
   marketing-seckill:
     <<: *app-defaults
     build: { context: ../marketing-seckill }
     image: marketing-seckill:full
+    environment:
+      <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
+      APP_PORT: "8084"
 
   marketing-admin:
     <<: *app-defaults
@@ -88,6 +112,7 @@ services:
     # 与四个业务服务同构（它们同样不校验 token，鉴权在网关），见 README 的"端口暴露"一节
     environment:
       <<: *app-env
+      APP_PORT: "8086"
       JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
       # ④ 的抓取清单在容器形态下改成 compose service 名（admin 的 yml 默认值是 127.0.0.1，
       # 那是进程形态的拓扑，容器里指向的是自己）。self 保持回环：8086 就是本容器的 actuator。
@@ -115,6 +140,7 @@ services:
     # 逐服务注入 MYSQL_DB=marketing_account，容器形态没有那条路径，别指望这里自动分库。
     environment:
       <<: *app-env
+      APP_PORT: "8087"
       JAVA_OPTS: "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC"
 
   marketing-gateway:
@@ -128,6 +154,7 @@ services:
       - "127.0.0.1:8091:8091"
     environment:
       <<: *app-env
+      APP_PORT: "8090"
       # 容器形态走 nacos profile，后台路由是 lb://marketing-admin（按服务名发现），
       # 不需要 ADMIN_HOST/ADMIN_PORT —— 那两个只在 local profile 下生效（LITE 用）
       # 网关自己也要注册进 nacos，才能按服务名 lb:// 发现四个业务服务的副本

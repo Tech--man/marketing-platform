@@ -22,6 +22,7 @@ const total = ref(0)
 const page = ref(1)
 const busy = ref(false)
 const error = ref('')
+let seq = 0
 
 function query() {
   const q = new URLSearchParams({ page: String(page.value), size: String(props.pageSize) })
@@ -32,18 +33,24 @@ function query() {
 }
 
 async function load() {
+  // W4（2026-09-30 第二轮复审）：请求序号防乱序——快速翻页/切关键词时两个在飞
+  // 请求"先到先赢"，慢的旧响应后到会覆盖新状态（页码第 2 页、数据第 1 页）。
+  // 落盘前比对序号，只有最新一次请求的结果才生效。
+  const mySeq = ++seq
   busy.value = true
   error.value = ''
   try {
     const d = await api.get(query())
+    if (seq !== mySeq) return
     rows.value = d.records ?? []
     total.value = d.total ?? rows.value.length
   } catch (e) {
+    if (seq !== mySeq) return
     rows.value = []
     total.value = 0
     error.value = e.message || String(e)
   } finally {
-    busy.value = false
+    if (seq === mySeq) busy.value = false
   }
 }
 

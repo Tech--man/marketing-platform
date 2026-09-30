@@ -55,8 +55,15 @@ public class SeckillOrderService {
     /**
      * 超时取消（定时器调用）：条件更新抢到取消权后回补 Redis 库存与已售数。
      *
+     * <p>W2.7（2026-09-30 第二轮复审）：方法挂事务，把「状态 CAS + DB 已售回减」两个
+     * DB 写绑成一个原子对——此前三步各自 autocommit，中途进程死会留永久账差（状态已
+     * CANCELLED 而已售未回减）。Redis refill 参与不了事务：事务回滚而 refill 已执行的
+     * 残余 = 名额多还一份（偏保守方向，恒等式可见），比账差可接受。Job 经 Spring 代理
+     * 调用本方法，事务注解生效。</p>
+     *
      * @return true 表示本次调用完成了取消
      */
+    @org.springframework.transaction.annotation.Transactional
     public boolean cancelTimeout(SeckillOrderEntity order, int buckets) {
         int updated = orderMapper.update(null, new UpdateWrapper<SeckillOrderEntity>()
                 .eq("id", order.getId())

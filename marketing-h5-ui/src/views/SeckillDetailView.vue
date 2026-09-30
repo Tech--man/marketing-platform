@@ -32,12 +32,18 @@ const lostReason = ref("");
 let grabToken = null;
 let pollTimer = null;
 let stockTimer = null;
+let tickTimer = null;
 
 const PAY_WINDOW_MS = 5 * 60 * 1000;
 const payDeadline = ref(0);
 
+// W4（2026-09-30 第二轮复审）：now 做成每秒跳动的响应式源——此前 phase 里直接
+// Date.now()，computed 的依赖只有 session（加载后不变），开抢时刻到了按钮不解锁、
+// 结束后按钮不收起，必须整页刷新。1s ticker 足够（秒杀窗口是分钟级）。
+const nowTick = ref(Date.now());
+
 const phase = computed(() => {
-  const now = Date.now();
+  const now = nowTick.value;
   const start = toDate(session.value?.startTime)?.getTime() ?? 0;
   const end = toDate(session.value?.endTime)?.getTime() ?? 0;
   if (now < start) return "upcoming";
@@ -55,7 +61,8 @@ const canGrab = computed(() => phase.value === "live" && (remaining.value ?? 1) 
 function stopTimers() {
   pollTimer && clearTimeout(pollTimer);
   stockTimer && clearInterval(stockTimer);
-  pollTimer = stockTimer = null;
+  tickTimer && clearInterval(tickTimer);
+  pollTimer = stockTimer = tickTimer = null;
 }
 
 async function refreshStock() {
@@ -79,6 +86,7 @@ async function load() {
     }
     await refreshStock();
     stockTimer = setInterval(refreshStock, 5000);
+    tickTimer = setInterval(() => (nowTick.value = Date.now()), 1000);
   } catch (e) {
     if (e instanceof ApiError) noteThrottle(e);
     error.value = e instanceof ApiError ? messageFor(e) : "加载失败";
@@ -87,9 +95,19 @@ async function load() {
   }
 }
 
+const POLL_TIMEOUT_MS = 30_000;
+let pollStartedAt = 0;
+
 function pollResult() {
   stage.value = "polling";
   pollTimer = setTimeout(async () => {
+    // W4：轮询带总时长上限——消息被 Stream 容器放弃后要等本地消息表补偿（最长
+    // 数分钟），无条件递归会让用户无限挂在"排队下单中"（与领券页 poll 的超时终态对齐）
+    if (Date.now() - pollStartedAt > POLL_TIMEOUT_MS) {
+      lostReason.value = "排队下单超时，请稍后在订单页查看结果";
+      stage.value = "lost";
+      return;
+    }
     try {
       const r = await seckillApi.grabResult(grabToken);
       const v = String(r?.result ?? "");
@@ -130,6 +148,7 @@ async function grab() {
     const t = await seckillApi.grab({ activityNo: NO });
     grabToken = t?.token;
     if (!grabToken) throw new ApiError(E.SYSTEM, "未获取到抢购凭证", null);
+    pollStartedAt = Date.now();
     pollResult();
   } catch (e) {
     if (e instanceof ApiError) noteThrottle(e);

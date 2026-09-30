@@ -7,4 +7,9 @@ EXPOSE 8081
 # 堆与元空间按服务给定；GC 用 G1（SerialGC 的 Full GC 停全部线程，不适用于常态服役）
 # APP_ARGS 用于注入 --spring.profiles.active=nacos 等程序参数
 ENV JAVA_OPTS="-Xmx512m -Xss512k -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+# W5.2（2026-09-30 第二轮复审）：非 root 运行——容器内 RCE 不直接是 root，
+# 与编排的回环绑定/最小暴露同一收口方向。应用无卷写需求，只 chown 工作目录。
+RUN useradd -r -u 10001 app
+USER app
+
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar $APP_ARGS"]

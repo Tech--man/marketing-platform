@@ -65,4 +65,19 @@ groups:
           severity: info
         annotations:
           summary: "终态归档单小时删除超 5 万行"
-          description: "终态行异常堆积或流量激增，核对是否需要调保留期或清理频率。"
+          description: "终态行异常堆积或流量激增，核对是否需要调保留期或清理频率。
+            W3.3 后归档已改为循环删空（单轮上限 50 万），该阈值恢复可达；持续触发
+            说明确认速率远超预期，核对业务流量。"
+      # W3 附（2026-09-30 第二轮复审）：抓取目标整体失联是最基本的可观测底线——
+      # 此前六条规则全是业务指标，job 全 down（网络重建/目标进程死）时静默。
+      # 只盯本项目的两个 job；形态切换时另一个 job 恒 down 属正常，所以按 job
+      # 维度聚合（任一 job 全体 target 失联才响），而不是按单 target。
+      - alert: ScrapeTargetDown
+        expr: min(up{job=~"marketing-local|marketing-full-container"}) by (job) == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus 抓取 job {{ $labels.job }} 全部目标失联超过 3 分钟"
+          description: "整个 job 的所有实例 up=0：目标进程死/网络不通/prometheus 配置漂移。
+            先看是哪个形态的 job——另一形态恒 down 属正常，当前形态的 job 全 down 才是事故。"

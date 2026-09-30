@@ -94,7 +94,11 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
                     continue;
                 }
                 if (records == null || records.isEmpty()) {
-                    reclaimStale(handler, key, consumer);
+                    // W3.10：PEL 回收只由 index==0 的 worker 跑——每 topic 8 个 worker
+                    // 空闲时各自打一轮 XPENDING 是全空闲下 ~80 次/s 的 Redis 空转
+                    if (index == 0) {
+                        reclaimStale(handler, key, consumer);
+                    }
                     sleepQuietly(POLL_IDLE_MS);
                     continue;
                 }
@@ -149,6 +153,16 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
     }
 
     private void deliver(StreamMessageHandler handler, String key, MapRecord<String, Object, Object> record) {
+        // W3.10（2026-09-30 第二轮复审）：tag 校验——Redis Stream 通道不消费 tag（FULL 形态
+        // RocketMQ 按 selectorExpression 路由），将来有人在已有 topic 上加第二个 tag 时，
+        // LITE 会把消息错投给原 handler 且无任何线索。留一条 WARN 把两形态的行为分叉显式化。
+        Object tag = record.getValue().get(RedisStreamEventPublisher.FIELD_TAG);
+        if (tag != null && !String.valueOf(tag).isBlank()
+                && !handler.acceptsTag(String.valueOf(tag))) {
+            log.warn("[stream-consumer] 消息 tag={} 不属于本 handler（topic={}）：Stream 通道不做 tag 路由，"
+                            + "FULL 形态可能按 tag 分给了别的消费者——两形态行为分叉，仍按无差别投递处理",
+                    tag, handler.topic());
+        }
         Object payload = record.getValue().get(RedisStreamEventPublisher.FIELD_PAYLOAD);
         boolean ok = false;
         for (int attempt = 1; attempt <= HANDLE_RETRY && !ok; attempt++) {

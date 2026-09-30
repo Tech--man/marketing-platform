@@ -21,7 +21,12 @@ async function submit() {
   try {
     await s.login(username.value, password.value)
     await s.whoAmI()
-    router.replace(route.query.next || '/')
+    // W4（2026-09-30 第二轮复审）：next 是用户可感的输入，按输入对待——只接受站内
+    // 绝对路径（`//evil.example` 以 / 开头但浏览器当协议相对地址跳外站）。与 h5 的
+    // safeRedirect 同一判据，两套前端对同类输入不再双标。
+    const next = route.query.next
+    const safe = typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\')
+    router.replace(safe ? next : '/')
   } catch (e) {
     if (e.code === E.THROTTLED) {
       // LoginGuard 每 IP 10 次/分钟且**含成功尝试**。不显示还要等多久，

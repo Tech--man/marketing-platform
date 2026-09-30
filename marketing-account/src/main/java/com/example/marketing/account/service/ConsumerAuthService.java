@@ -318,15 +318,18 @@ public class ConsumerAuthService {
      */
     private void onFailure(ConsumerUserEntity user, ConsumerLoginPolicy.Verdict verdict,
                            String identifier, String ip, String userAgent) {
+        // W3.8（2026-09-30 第二轮复审）：三态同码同话术（40100）——话术早已统一，
+        // 但 DISABLED/LOCKED 走 40300：HTTP 状态维度仍可枚举"该账号存在且状态非 ACTIVE"。
+        // 差异只进事件表（DISABLED/LOCKED/记录在案）。
         switch (verdict) {
             case DISABLED -> {
                 events.record("LOGIN_FAILED", user == null ? null : user.getId(), identifier,
                         null, ip, userAgent, "DISABLED");
-                throw BizException.of(ErrorCode.FORBIDDEN, "账号或口令不正确");
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "账号或口令不正确");
             }
             case LOCKED -> {
                 events.record("LOGIN_FAILED", user.getId(), identifier, null, ip, userAgent, "LOCKED");
-                throw BizException.of(ErrorCode.FORBIDDEN, "账号或口令不正确");
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "账号或口令不正确");
             }
             default -> {
                 if (user != null) {

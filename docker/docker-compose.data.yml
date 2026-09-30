@@ -27,10 +27,12 @@ services:
     platform: linux/amd64
     container_name: mkt-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      # W5.1（2026-09-30 第二轮复审）：口令可注入——默认值只服务本机演示，
+      # 任何对外部署都该用环境变量覆盖（与 JWT 密钥"落盘文件而非写死仓库"同一纪律）
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
       MYSQL_DATABASE: marketing
       MYSQL_USER: marketing
-      MYSQL_PASSWORD: marketing123
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-marketing123}
     ports:
       - "127.0.0.1:3307:3306"   # 只绑回环；宿主机 3306 常被本地 mysqld 占用
     volumes:
@@ -49,7 +51,7 @@ services:
     restart: unless-stopped
     logging: *log
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
       interval: 5s
       timeout: 5s
       retries: 30

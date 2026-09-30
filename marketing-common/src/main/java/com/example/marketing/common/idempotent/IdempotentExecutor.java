@@ -60,8 +60,8 @@ public class IdempotentExecutor {
      * @param action     真实业务逻辑（仅在成功抢占后执行）
      */
     public <T> T execute(String bizKey, Class<T> resultType, Supplier<T> action) {
-        ClaimResult claim = claim(bizKey);
-        switch (claim) {
+        Claim claim = claim(bizKey);
+        switch (claim.result()) {
             case REPLAY_SUCCESS:
                 return JsonUtils.parse(loadResultJson(bizKey), resultType);
             case REPLAY_PROCESSING:
@@ -79,14 +79,14 @@ public class IdempotentExecutor {
             // 领券就是二次预扣）。留在 PROCESSING 让租约接管路径处理（接管者重执行或
             // 回放，状态机是安全的）；本请求照常把已拿到的结果还给调用方。
             try {
-                markSuccess(bizKey, json);
+                markSuccess(bizKey, claim.token(), json);
             } catch (RuntimeException markEx) {
                 log.error("[idempotent] markSuccess 写库失败（action 已成功，保留 PROCESSING 交租约接管）"
                         + " bizKey={}: {}", bizKey, markEx.toString());
             }
             return result;
         } catch (RuntimeException e) {
-            markFailed(bizKey, e.getMessage());
+            markFailed(bizKey, claim.token(), e.getMessage());
             throw e;
         }
     }
@@ -110,51 +110,80 @@ public class IdempotentExecutor {
         return !status.isEmpty() && IdempotentStatus.SUCCESS.name().equals(status.get(0));
     }
 
+    /**
+     * 失败原因查询（W2.5，2026-09-30 第二轮复审）：键处于 FAILED 终态时返回其
+     * error_msg，供结果查询接口给客户端一个负向终态（领券消息死信后用户端不再
+     * 永远 PROCESSING）。非 FAILED 或无行返回 empty——调用方据此继续按处理中展示。
+     */
+    public java.util.Optional<String> failureReasonOf(String bizKey) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT status, error_msg FROM " + TABLE + " WHERE biz_key = ?", bizKey);
+        if (rows.isEmpty() || !IdempotentStatus.FAILED.name().equals(rows.get(0).get("status"))) {
+            return java.util.Optional.empty();
+        }
+        Object msg = rows.get(0).get("error_msg");
+        return java.util.Optional.of(msg == null ? "处理失败" : String.valueOf(msg));
+    }
+
     // ---------------- private ----------------
 
     private enum ClaimResult { ACQUIRED, REPLAY_SUCCESS, REPLAY_PROCESSING }
 
-    private ClaimResult claim(String bizKey) {
+    /**
+     * claim 结果 + 执行代次（W1.1 fencing，2026-09-30 第二轮复审）：token 在抢占成功
+     * 时生成并写入行，mark 成功/失败的 WHERE 必须带上它。旧持有者（动作超租约被接管
+     * 后才回来）的 token 已不是行上的值，回写一律落空——不会把接管者的 PROCESSING
+     * 打成 FAILED 放开第三次执行，也不会覆盖接管者已写入的结果。
+     */
+    private record Claim(ClaimResult result, String token) {
+        static Claim acquired(String token) {
+            return new Claim(ClaimResult.ACQUIRED, token);
+        }
+    }
+
+    private Claim claim(String bizKey) {
+        String token = java.util.UUID.randomUUID().toString();
         StateRow row = queryState(bizKey);
         if (row == null) {
             try {
-                jdbcTemplate.update("INSERT INTO " + TABLE + " (biz_key, status) VALUES (?, ?)",
-                        bizKey, IdempotentStatus.PROCESSING.name());
-                return ClaimResult.ACQUIRED;
+                jdbcTemplate.update("INSERT INTO " + TABLE + " (biz_key, status, claim_token) VALUES (?, ?, ?)",
+                        bizKey, IdempotentStatus.PROCESSING.name(), token);
+                return Claim.acquired(token);
             } catch (DuplicateKeyException e) {
                 // 并发竞争失败：以先插入者为准，重读状态
                 return claim(bizKey);
             }
         }
         if (IdempotentStatus.SUCCESS.name().equals(row.status())) {
-            return ClaimResult.REPLAY_SUCCESS;
+            return new Claim(ClaimResult.REPLAY_SUCCESS, null);
         }
         if (IdempotentStatus.PROCESSING.name().equals(row.status())) {
             // H11：PROCESSING 停留超过租约 → 上一个执行者已死，CAS 抢占（比对读到的
             // update_time，抢到即接管；并发下只有一个人能成）。fresh 的 PROCESSING
             // 才是真正的「处理中」，继续抛 DUPLICATE_REQUEST 让调用方轮询。
+            // W1.1：接管同时换发新 token——此后旧持有者的任何回写都比对失败。
             if (isLeaseExpired(row.updateTime())) {
                 int taken = jdbcTemplate.update(
-                        "UPDATE " + TABLE + " SET status = ?, update_time = CURRENT_TIMESTAMP "
+                        "UPDATE " + TABLE + " SET status = ?, claim_token = ?, update_time = CURRENT_TIMESTAMP "
                                 + "WHERE biz_key = ? AND status = ? AND update_time = ?",
-                        IdempotentStatus.PROCESSING.name(), bizKey,
+                        IdempotentStatus.PROCESSING.name(), token, bizKey,
                         IdempotentStatus.PROCESSING.name(), row.updateTime());
                 if (taken == 1) {
                     log.warn("[idempotent] 抢占过期 PROCESSING 租约 bizKey={}, 停留超过 {}s",
                             bizKey, processingLeaseSeconds);
-                    return ClaimResult.ACQUIRED;
+                    return Claim.acquired(token);
                 }
             }
-            return ClaimResult.REPLAY_PROCESSING;
+            return new Claim(ClaimResult.REPLAY_PROCESSING, null);
         }
         // FAILED：条件更新抢占，抢到返回执行，没抢到按处理中处理。
         // update_time 显式推进：MySQL 有 ON UPDATE 兜底，H2 没有——不显式写，
         // 租约判定在 H2 测试里会把刚抢占的 FAILED 又当成过期 PROCESSING。
         int taken = jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET status = ?, update_time = CURRENT_TIMESTAMP "
+                "UPDATE " + TABLE + " SET status = ?, claim_token = ?, update_time = CURRENT_TIMESTAMP "
                         + "WHERE biz_key = ? AND status = ?",
-                IdempotentStatus.PROCESSING.name(), bizKey, IdempotentStatus.FAILED.name());
-        return taken == 1 ? ClaimResult.ACQUIRED : ClaimResult.REPLAY_PROCESSING;
+                IdempotentStatus.PROCESSING.name(), token, bizKey, IdempotentStatus.FAILED.name());
+        return taken == 1 ? Claim.acquired(token) : new Claim(ClaimResult.REPLAY_PROCESSING, null);
     }
 
     /** 租约判定。update_time 由 DB 时钟写入，这里用应用时钟比对——同机部署偏差远小于
@@ -191,21 +220,25 @@ public class IdempotentExecutor {
         return (String) rows.get(0).get("result_json");
     }
 
-    private void markSuccess(String bizKey, String resultJson) {
+    private void markSuccess(String bizKey, String token, String resultJson) {
         int updated = jdbcTemplate.update(
                 "UPDATE " + TABLE + " SET status = ?, result_json = ?, update_time = CURRENT_TIMESTAMP "
-                        + "WHERE biz_key = ? AND status = ?",
-                IdempotentStatus.SUCCESS.name(), resultJson, bizKey, IdempotentStatus.PROCESSING.name());
+                        + "WHERE biz_key = ? AND status = ? AND claim_token = ?",
+                IdempotentStatus.SUCCESS.name(), resultJson, bizKey,
+                IdempotentStatus.PROCESSING.name(), token);
         if (updated == 0) {
-            log.warn("[idempotent] markSuccess 未命中 PROCESSING, bizKey={}", bizKey);
+            // W1.1 fencing：落空的最常见原因是自己被租约接管（动作超 120s）——
+            // 接管者已写的结果不被覆盖，这正是本守卫的目的。
+            log.warn("[idempotent] markSuccess 未命中 PROCESSING/claim_token, bizKey={}", bizKey);
         }
     }
 
-    private void markFailed(String bizKey, String errorMsg) {
+    private void markFailed(String bizKey, String token, String errorMsg) {
         jdbcTemplate.update(
                 "UPDATE " + TABLE + " SET status = ?, error_msg = ?, update_time = CURRENT_TIMESTAMP "
-                        + "WHERE biz_key = ? AND status = ?",
-                IdempotentStatus.FAILED.name(), truncate(errorMsg), bizKey, IdempotentStatus.PROCESSING.name());
+                        + "WHERE biz_key = ? AND status = ? AND claim_token = ?",
+                IdempotentStatus.FAILED.name(), truncate(errorMsg), bizKey,
+                IdempotentStatus.PROCESSING.name(), token);
     }
 
     private String truncate(String s) {

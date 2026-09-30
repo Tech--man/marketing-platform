@@ -6,4 +6,9 @@ COPY target/marketing-account-1.0.0-SNAPSHOT-exec.jar app.jar
 # 不 EXPOSE：账号服务只走网关的 /api/auth/**，容器形态不发布宿主端口
 # 堆与后台同档：登录口是人点出来的低频操作，BCrypt 单次 50-100ms 只在注册/登录/改密上
 ENV JAVA_OPTS="-Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+# W5.2（2026-09-30 第二轮复审）：非 root 运行——容器内 RCE 不直接是 root，
+# 与编排的回环绑定/最小暴露同一收口方向。应用无卷写需求，只 chown 工作目录。
+RUN useradd -r -u 10001 app
+USER app
+
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar $APP_ARGS"]

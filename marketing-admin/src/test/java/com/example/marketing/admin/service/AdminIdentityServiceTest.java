@@ -31,7 +31,24 @@ class AdminIdentityServiceTest {
 
     private final AdminTokenCodec codec = new AdminTokenCodec("unit-test-secret", Duration.ofSeconds(30));
     private final AdminSessionService sessions = mock(AdminSessionService.class);
-    private final AdminIdentityService identity = new AdminIdentityService(codec, sessions);
+    private final AdminIdentityService identity = new AdminIdentityService(codec, sessions,
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("W3.1：Redis 查询挂掉时仅验签放行（与网关同口径降级），不 50000")
+    void redisFailureDegradesToSignatureOnly() {
+        org.mockito.Mockito.when(sessions.isRevoked(org.mockito.ArgumentMatchers.anyString()))
+                .thenThrow(new RuntimeException("redis down"));
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest();
+        request.addHeader("Authorization",
+                "Bearer " + codec.issue(claims()));
+
+        AdminPrincipal p = identity.resolve(request); // 不抛即通过
+
+        org.junit.jupiter.api.Assertions.assertEquals(1L, p.uid(),
+                "降级只跳过吊销位查询，验签身份照常解析");
+    }
 
     private AdminClaims claims() {
         Instant now = Instant.now();

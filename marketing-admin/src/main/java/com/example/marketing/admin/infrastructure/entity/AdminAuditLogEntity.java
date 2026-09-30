@@ -28,6 +28,11 @@ public class AdminAuditLogEntity {
     private Integer resultCode;
     private String errorMsg;
     private String ip;
+    /**
+     * 来源 Stream 消息 ID（W1.2 幂等，2026-09-30 第二轮复审）：drain 至少一次投递
+     * 的去重键，uk_source 撞键按已落库处理。null = 存量行 / HTTP 直写路径。
+     */
+    private String sourceId;
     private Long costMs;
     private LocalDateTime createTime;
 }

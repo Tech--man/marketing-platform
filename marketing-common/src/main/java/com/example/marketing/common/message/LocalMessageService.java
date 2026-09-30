@@ -53,6 +53,17 @@ public class LocalMessageService {
      * 返回 false 表示这条已登记过，调用方据此区分"新建"与"重复"，不能静默。</p>
      */
     public boolean recordIfAbsent(String topic, String tag, String bizKey, String payload) {
+        // W3.9（2026-09-30 第二轮复审）：长度预算前置——payload 是 TEXT(64KB)、tag/biz_key
+        // 是 VARCHAR(64)/(128)。INSERT IGNORE 会把超长截断降级成 warning 静默入库，
+        // 消费端 JsonUtils.parse 永远失败，叠加重发就是无限毒循环；显式拒绝让调用方
+        // 在业务侧拿到失败（预扣回滚路径会接住），而不是事后死信排查。
+        if (payload != null && payload.length() > 60_000) {
+            throw new IllegalArgumentException("payload 超过 60KB 预算（TEXT 64KB 减安全余量）: "
+                    + payload.length() + " 字符");
+        }
+        if (tag != null && tag.length() > 64) {
+            throw new IllegalArgumentException("tag 超 VARCHAR(64) 列宽: " + tag.length());
+        }
         return jdbcTemplate.update(
                 "INSERT IGNORE INTO " + TABLE + " (topic, tag, biz_key, payload, status, retry_count, next_retry_time)"
                         + " VALUES (?, ?, ?, ?, ?, 0, ?)",
@@ -165,36 +176,55 @@ public class LocalMessageService {
     /**
      * 终态归档（2026-09-29 审查收口）：CONFIRMED 的消息与 SUCCESS 的幂等记录
      * 完成使命后仍永久留表（此前两表无界增长；FAILED 留 90 天给死信排查取证）。
-     * 分批删除（每批 {@code 1000}）避免长事务锁表；返回本轮删除总数。
+     * <p>W3.3（2026-09-30 第二轮复审）：批删升级为循环删空——原实现每类每轮只删
+     * 一批 1000 行（每小时一次），持续确认速率高于 1000/h 时表仍无界增长。
+     * 现按批循环直到删空，配单轮总量上限（50 万）防极端积压把归档轮跑成小时级。
+     * W3.4：幂等记录保留期独立成参（marketing.idempotent.retention-days），与消息域
+     * 保留期解耦——幂等键语义不该被改消息配置的人顺手改掉。</p>
      */
-    public int purgeTerminated(int confirmedRetentionDays) {
+    public int purgeTerminated(int confirmedRetentionDays, int idempotentRetentionDays) {
         int total = 0;
+        final int batch = 1000;
+        final int hardCap = 500_000;
         LocalDateTime confirmedCutoff = LocalDateTime.now().minusDays(confirmedRetentionDays);
-        LocalDateTime failedCutoff = LocalDateTime.now().minusDays(Math.max(confirmedRetentionDays, 90));
+        LocalDateTime idempotentCutoff = LocalDateTime.now().minusDays(idempotentRetentionDays);
+        LocalDateTime failedCutoff = LocalDateTime.now().minusDays(Math.max(idempotentRetentionDays, 90));
         // H2 的 MySQL 模式不认 DELETE ... LIMIT（MySQL 方言），换等价的子查询写法——
-        // 两边都走主键序子查询取前 N 条再 IN，语义不变
-        int deleted;
-        deleted = jdbcTemplate.update(
-                "DELETE FROM local_message WHERE status = ? AND create_time < ? "
-                        + "AND id IN (SELECT id FROM local_message WHERE status = ? AND create_time < ? "
-                        + "AND id IN (SELECT id FROM (SELECT id FROM local_message "
-                        + "WHERE status = ? AND create_time < ? ORDER BY id LIMIT 1000) t))",
-                STATUS_CONFIRMED, Timestamp.valueOf(confirmedCutoff),
-                STATUS_CONFIRMED, Timestamp.valueOf(confirmedCutoff),
-                STATUS_CONFIRMED, Timestamp.valueOf(confirmedCutoff));
-        total += deleted;
-        deleted = jdbcTemplate.update(
-                "DELETE FROM idempotent_record WHERE status = 'SUCCESS' AND create_time < ? "
-                        + "AND id IN (SELECT id FROM (SELECT id FROM idempotent_record "
-                        + "WHERE status = 'SUCCESS' AND create_time < ? ORDER BY id LIMIT 1000) t)",
-                Timestamp.valueOf(confirmedCutoff), Timestamp.valueOf(confirmedCutoff));
-        total += deleted;
-        deleted = jdbcTemplate.update(
-                "DELETE FROM idempotent_record WHERE status = 'FAILED' AND create_time < ? "
-                        + "AND id IN (SELECT id FROM (SELECT id FROM idempotent_record "
-                        + "WHERE status = 'FAILED' AND create_time < ? ORDER BY id LIMIT 1000) t)",
-                Timestamp.valueOf(failedCutoff), Timestamp.valueOf(failedCutoff));
-        total += deleted;
+        // 主键序子查询取前 N 条再 IN，两边语义一致
+        total += deleteInBatches("local_message", "status = '" + STATUS_CONFIRMED + "'",
+                confirmedCutoff, batch, hardCap);
+        total += deleteInBatches("idempotent_record", "status = 'SUCCESS'",
+                idempotentCutoff, batch, hardCap - total);
+        total += deleteInBatches("idempotent_record", "status = 'FAILED'",
+                failedCutoff, batch, hardCap - total);
+        return total;
+    }
+
+    /** 兼容旧签名（测试/内部调用）：两表同保留期 */
+    public int purgeTerminated(int retentionDays) {
+        return purgeTerminated(retentionDays, retentionDays);
+    }
+
+    /**
+     * 按主键序分批循环删除，直到条件不再命中或触达本轮上限。每批一次独立
+     * autocommit，避免长事务锁表；取不满一批 = 没有更多匹配行，提前收束。
+     */
+    private int deleteInBatches(String table, String statusCondition, LocalDateTime cutoff,
+                                int batch, int remainingCap) {
+        int total = 0;
+        while (total < remainingCap) {
+            int size = Math.min(batch, remainingCap - total);
+            int deleted = jdbcTemplate.update(
+                    "DELETE FROM " + table + " WHERE " + statusCondition + " AND create_time < ? "
+                            + "AND id IN (SELECT id FROM (SELECT id FROM " + table
+                            + " WHERE " + statusCondition + " AND create_time < ? ORDER BY id LIMIT " + size
+                            + ") t)",
+                    Timestamp.valueOf(cutoff), Timestamp.valueOf(cutoff));
+            total += deleted;
+            if (deleted < size) {
+                break;
+            }
+        }
         return total;
     }
 

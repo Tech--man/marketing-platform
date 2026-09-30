@@ -178,8 +178,11 @@ public class MarketingCommonAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService,
-                RedisLeaseLock leaseLock, MeterRegistry meterRegistry) {
-            return new LocalMessageRetryer(localMessageService, leaseLock, meterRegistry);
+                RedisLeaseLock leaseLock, MeterRegistry meterRegistry,
+                @Value("${marketing.message.retry-interval-ms:10000}") long retryIntervalMs,
+                @Value("${marketing.idempotent.retention-days:30}") int idempotentRetentionDays) {
+            return new LocalMessageRetryer(localMessageService, leaseLock, meterRegistry,
+                    retryIntervalMs, idempotentRetentionDays);
         }
     }
 
@@ -213,8 +216,11 @@ public class MarketingCommonAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         public LocalMessageRetryer localMessageRetryer(LocalMessageService localMessageService,
-                RedisLeaseLock leaseLock, MeterRegistry meterRegistry) {
-            return new LocalMessageRetryer(localMessageService, leaseLock, meterRegistry);
+                RedisLeaseLock leaseLock, MeterRegistry meterRegistry,
+                @Value("${marketing.message.retry-interval-ms:10000}") long retryIntervalMs,
+                @Value("${marketing.idempotent.retention-days:30}") int idempotentRetentionDays) {
+            return new LocalMessageRetryer(localMessageService, leaseLock, meterRegistry,
+                    retryIntervalMs, idempotentRetentionDays);
         }
     }
 }

@@ -98,7 +98,14 @@ public class ConsumerSessionService {
 
         List<ConsumerSessionEntity> refreshable = refreshableSessions(userId);
         for (ConsumerSessionEntity session : refreshable) {
-            Duration remaining = Duration.between(LocalDateTime.now(), session.getExpireAt());
+            // W3.7：TTL 取 access/refresh 两个到期时刻的较晚者——只按 access 算时
+            // 登录 15 分钟后恒负、吊销键不落（靠 bump 键与 DB 兜底，但多一层总没坏处）
+            LocalDateTime accessExp = session.getExpireAt();
+            LocalDateTime refreshExp = session.getRefreshExpireAt();
+            LocalDateTime later = refreshExp == null || (accessExp != null && accessExp.isAfter(refreshExp))
+                    ? accessExp : refreshExp;
+            Duration remaining = later == null ? Duration.ofSeconds(properties.getAccessTtlSeconds())
+                    : Duration.between(LocalDateTime.now(), later);
             markRevoked(session.getJti(), reason);
             if (!remaining.isNegative() && !remaining.isZero()) {
                 redis.opsForValue().set(REVOKED_PREFIX + session.getJti(), reason, remaining);
@@ -140,10 +147,15 @@ public class ConsumerSessionService {
 
     /** 有效会话（未吊销且 access 未到期），按最近登录倒序 */
     public List<ConsumerSessionEntity> activeSessions(long userId) {
+        // W3.7（2026-09-30 第二轮复审）：改按 refresh 口径——rotate 只更新 refresh_hash/
+        // refresh_expire_at 不续 expire_at（access 时刻），原 access 口径在登录 15 分钟后
+        // 恒空：配额（trimToQuota）从不触发淘汰、GET /api/auth/sessions 的"在线会话"
+        // 清空，而用户的 refresh 会话实际可用 30 天。与 refreshableSessions 同一把尺子。
         return sessionMapper.selectList(Wrappers.<ConsumerSessionEntity>lambdaQuery()
                 .eq(ConsumerSessionEntity::getUserId, userId)
                 .isNull(ConsumerSessionEntity::getRevokedAt)
-                .gt(ConsumerSessionEntity::getExpireAt, LocalDateTime.now())
+                .and(w -> w.isNull(ConsumerSessionEntity::getRefreshExpireAt)
+                        .or().gt(ConsumerSessionEntity::getRefreshExpireAt, LocalDateTime.now()))
                 .orderByDesc(ConsumerSessionEntity::getId));
     }
 

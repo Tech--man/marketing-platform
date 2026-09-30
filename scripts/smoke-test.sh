@@ -868,6 +868,28 @@ expect "本轮活动写动作确实进了审计表" "\"resourceId\":\"$ACT_NO\""
 curl -s -m 10 -X POST -H "$AAUTH" "$GW/api/admin/auth/logout" >/dev/null
 expect "登出后会话立即失效" '"code":40102' "$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/users")"
 
+# W5.4（2026-09-30 第二轮复审）：清掉本轮的 smoke-* 演示账号及其业务行。
+# 此前每轮冒烟永久留下 4 个 consumer_user + 其券/单/会话行，跨形态共享的 MySQL 卷
+# 越积越多（注册限速 10 次/小时还会先撞上）；按标识符前缀清本轮一切痕迹。
+# 顺序：先删引用方（user_coupon/seckill_order/consumer_session/event）再删账号行。
+SMOKE_UIDS=$(mysql_admin -N -B -e \
+  "SELECT GROUP_CONCAT(id) FROM ${ACCOUNT_DB:-marketing}.consumer_user WHERE identifier LIKE 'smoke-%'" \
+  2>/dev/null | tr -d '[:space:]')
+if [ -n "${SMOKE_UIDS:-}" ]; then
+  for stmt in \
+    "DELETE FROM ${MYSQL_DB:-marketing}.user_coupon WHERE user_id IN ($SMOKE_UIDS)" \
+    "DELETE FROM ${MYSQL_DB:-marketing}.seckill_order WHERE user_id IN ($SMOKE_UIDS)" \
+    "DELETE FROM ${ACCOUNT_DB:-marketing}.consumer_session WHERE user_id IN ($SMOKE_UIDS)" \
+    "DELETE FROM ${ACCOUNT_DB:-marketing}.consumer_event_log WHERE user_id IN ($SMOKE_UIDS)" \
+    "DELETE FROM ${ACCOUNT_DB:-marketing}.consumer_user WHERE id IN ($SMOKE_UIDS)"; do
+    mysql_admin -e "$stmt" >/dev/null 2>&1 \
+      && ok "冒烟痕迹已清（$stmt 已执行）" \
+      || bad "冒烟清理失败（账号堆积将加速注册限速撞顶）" "$stmt"
+  done
+else
+  ok "没有 smoke-% 残留账号（本轮注册可能失败或已被清）"
+fi
+
 echo
 echo "================ 冒烟结果：通过 $PASS / 失败 $FAIL ================"
 [ $FAIL -eq 0 ]

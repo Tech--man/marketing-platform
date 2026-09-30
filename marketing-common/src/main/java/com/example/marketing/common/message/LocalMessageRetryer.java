@@ -2,6 +2,7 @@ package com.example.marketing.common.message;
 
 import lombok.extern.slf4j.Slf4j;
 import com.example.marketing.common.schedule.RedisLeaseLock;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Duration;
@@ -16,18 +17,33 @@ import java.time.Duration;
 @Slf4j
 public class LocalMessageRetryer {
 
-    /** 与 retry-interval-ms 同长：一个周期只让一个实例认领 */
-    private static final Duration INTERVAL = Duration.ofSeconds(10);
+    /**
+     * 租约时长与 retry-interval-ms 同源注入（W3.5，2026-09-30 第二轮复审）：原实现
+     * 硬编码 10s——运维把间隔调大到 30s 降噪时锁先过期，每轮所有实例全部认领，
+     * 多实例重复扫描投递静默回到无锁状态。单轮处理超过锁时长的插入窗口属
+     * at-least-once 已声明的边界。
+     */
+    private final Duration lockLease;
 
     private final LocalMessageService localMessageService;
     private final RedisLeaseLock leaseLock;
     private final io.micrometer.core.instrument.MeterRegistry meters;
+    /**
+     * 幂等记录归档保留期（W3.4）：与消息域分离——幂等键的对外契约是"永久有效"，
+     * 实际按本配置的窗口收窄，业务表唯一索引（user_coupon.request_id 等）才是最后
+     * 一道闸。挂在消息域配置下会让改消息保留期的人无意中改掉幂等语义。
+     */
+    private final int idempotentRetentionDays;
 
     public LocalMessageRetryer(LocalMessageService localMessageService, RedisLeaseLock leaseLock,
-                               io.micrometer.core.instrument.MeterRegistry meters) {
+                               io.micrometer.core.instrument.MeterRegistry meters,
+                               @Value("${marketing.message.retry-interval-ms:10000}") long retryIntervalMs,
+                               @Value("${marketing.idempotent.retention-days:30}") int idempotentRetentionDays) {
         this.localMessageService = localMessageService;
         this.leaseLock = leaseLock;
         this.meters = meters;
+        this.lockLease = Duration.ofMillis(Math.max(retryIntervalMs, 10_000L));
+        this.idempotentRetentionDays = idempotentRetentionDays;
         // gauge 持有的 service 是容器强引用的 bean，不会被弱引用回收；
         // 每次抓取一次 COUNT 查询，量级与 ④ 的抓取节奏相当
         io.micrometer.core.instrument.Gauge
@@ -40,7 +56,7 @@ public class LocalMessageRetryer {
 
     @Scheduled(fixedDelayString = "${marketing.message.retry-interval-ms:10000}")
     public void retry() {
-        leaseLock.runExclusive("local-message-retry", INTERVAL, () -> {
+        leaseLock.runExclusive("local-message-retry", lockLease, () -> {
             try {
                 localMessageService.retryPending(200);
                 // 对账兜底信号（2026-09-29 审查）：FAILED 死信出现即告警——
@@ -51,14 +67,17 @@ public class LocalMessageRetryer {
                             failed);
                 }
                 if (cycles.incrementAndGet() % 360 == 0) {
-                    // 终态归档（2026-09-29）：CONFIRMED/SUCCESS 超保留期删、FAILED 留 90 天。
+                    // 终态归档（2026-09-29）：CONFIRMED 消息超消息域保留期删、SUCCESS
+                    // 幂等记录超幂等域保留期删（W3.4 起两个配置分离）、FAILED 留 90 天。
                     // 与重发同锁同线程：归档不该与投递抢 DB，也不值得再配一把锁
                     int purged = localMessageService.purgeTerminated(
                             Integer.parseInt(System.getProperty(
-                                    "marketing.message.terminal-retention-days", "30")));
+                                    "marketing.message.terminal-retention-days", "30")),
+                            idempotentRetentionDays);
                     if (purged > 0) {
                         meters.counter("marketing.message.purged").increment(purged);
-                        log.info("[local-message] 终态归档删除 {} 行（CONFIRMED/SUCCESS 超 30 天）", purged);
+                        log.info("[local-message] 终态归档删除 {} 行（消息 CONFIRMED 与幂等 SUCCESS 各按各的保留期）",
+                                purged);
                     }
                 }
             } catch (Exception e) {

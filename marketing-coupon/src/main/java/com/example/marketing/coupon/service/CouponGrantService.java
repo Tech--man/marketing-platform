@@ -70,13 +70,12 @@ public class CouponGrantService {
         if (coupon != null) {
             return GrantResultVO.success(coupon.getCouponCode());
         }
-        // P2（2026-09-30 复审）：手拼 "grant:" 会绕过 BizKey 的 trim/折叠——requestId
-        // 带空白时受理键与查询键不一致，isDone 永远 false。统一拼法。
-        if (idempotentExecutor.isDone(BizKey.of("grant", requestId))) {
-            // 受理成功但券未落库：仍在削峰队列中
-            return GrantResultVO.processing();
-        }
-        return GrantResultVO.processing();
+        // W2.5（2026-09-30 第二轮复审）：受理终态 FAILED 时给客户端负向终态——
+        // 此前 GrantResultVO.failed 是死代码，消息死信后用户端永远 PROCESSING，
+        // 没有任何负向信号。失败原因来自幂等表的 error_msg。
+        return idempotentExecutor.failureReasonOf(BizKey.of("grant", requestId))
+                .map(GrantResultVO::failed)
+                .orElseGet(GrantResultVO::processing);
     }
 
     private GrantTicket doGrant(GrantRequest request) {

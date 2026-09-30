@@ -38,11 +38,19 @@ export function pct(part, whole) {
   return Math.max(0, Math.min(100, Math.round((NUM(part) / NUM(whole)) * 100)));
 }
 
-/** 把后端 LocalDateTime 序列（"2026-09-24T15:04:05" 或带毫秒）解析成 Date */
+/** 把后端 LocalDateTime 序列（"2026-09-24T15:04:05" 或带毫秒）解析成 Date。
+ *  W4（2026-09-30 第二轮复审）：无时区后缀的 ISO 串按 ES 规范走浏览器本地时区，
+ *  而服务端口径是 Asia/Shanghai（serverTimezone=+08:00）——浏览器时区不对时，
+ *  秒杀 phase/倒计时/时间显示全部平移。解析时显式拼 +08:00，再交给 Date 转
+ *  本地显示：一处收口，全站统一。 */
 export function toDate(s) {
   if (!s) return null;
   if (s instanceof Date) return Number.isNaN(s.getTime()) ? null : s;
-  const d = new Date(typeof s === "number" ? s : String(s).replace(" ", "T"));
+  let str = typeof s === "number" ? null : String(s).replace(" ", "T");
+  if (str != null && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(str)) {
+    str += "+08:00"; // 后端 LocalDateTime 无时区：按服务端时区补全
+  }
+  const d = new Date(typeof s === "number" ? s : str);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 

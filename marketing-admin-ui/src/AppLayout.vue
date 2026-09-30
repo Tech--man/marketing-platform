@@ -79,7 +79,12 @@ onMounted(() => {
   ticker = setInterval(() => {
     left.value = s.secondsLeft();
     // 归零前一分钟提示一次，别等表单填了一半才被 40101 打断
-    if (s.authed && left.value === 0) s.clear();
+    // W4（2026-09-30 第二轮复审）：清会话后直接回登录页——只清不跳的话用户停在
+    // 原页，下一发请求才以 40101 被弹走（填了一半的表单被吞，正是注释想避免的）
+    if (s.authed && left.value === 0) {
+      s.clear();
+      router.replace({ name: 'login' });
+    }
   }, 1000);
 });
 onUnmounted(() => clearInterval(ticker));

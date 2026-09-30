@@ -1,0 +1,1 @@
+import{a as t,c as a,g as l,L as n,J as o}from"./index-Cx-VCyGS.js";const r={key:0,class:"dot dot--pulse"},p={__name:"MStatusPill",props:{tone:{type:String,default:"neutral"},pulse:Boolean},setup(e){return(s,c)=>(t(),a("span",{class:o(["pill",e.tone!=="neutral"&&`pill--${e.tone}`])},[e.pulse?(t(),a("span",r)):l("",!0),n(s.$slots,"default")],2))}};export{p as _};

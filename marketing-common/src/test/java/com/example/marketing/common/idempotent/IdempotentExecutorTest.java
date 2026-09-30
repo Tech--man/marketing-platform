@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -35,6 +36,7 @@ class IdempotentExecutorTest {
                     status VARCHAR(16) NOT NULL,
                     result_json TEXT,
                     error_msg VARCHAR(512),
+                    claim_token VARCHAR(36) NULL,
                     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT uk_biz_key UNIQUE (biz_key)
@@ -148,5 +150,82 @@ class IdempotentExecutorTest {
                 jdbcTemplate.queryForObject(
                         "SELECT status FROM idempotent_record WHERE biz_key = ?", String.class, "REQ-007"),
                 "markSuccess 失败时标 FAILED = 已成功的动作被放开重试闸（领券即二次预扣）");
+    }
+
+    /**
+     * W1.1 fencing 回归（2026-09-30 第二轮复审，变体 b）：慢持有者的动作超过租约被接管后，
+     * 它的 markFailed 绝不能命中接管者的 PROCESSING——否则行被打成 FAILED 放开第三次执行，
+     * 且接管者的 markSuccess 随后落空，一笔成功被记成失败（领券：二次预扣 + 用户一张拿不到）。
+     *
+     * <p>三 latch 控制确定性时序：t1 claim(token1) 后把行拨成过期；t2 接管(token2) 进入
+     * action 但尚未 markSuccess——此刻行是 PROCESSING/token2；t1 恢复并失败，markFailed
+     * 必须落空（新实现比对 token）；随后 t2 完成，markSuccess 命中 → 行 SUCCESS。</p>
+     */
+    @Test
+    @DisplayName("W1.1：慢持有者被接管、接管者尚未落定时，其 markFailed 不得毒化接管者")
+    void staleClaimantCannotPoisonTakeover() throws Exception {
+        IdempotentExecutor shortLease = new IdempotentExecutor(jdbcTemplate, 1); // 租约 1s，便于制造过期
+        java.util.concurrent.CountDownLatch t1Claimed = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch t2InAction = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch t1Settled = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> t1Error = new java.util.concurrent.atomic.AtomicReference<>();
+
+        Thread t1 = new Thread(() -> {
+            try {
+                shortLease.execute("REQ-FENCE", String.class, () -> {
+                    // 模拟"执行超过了租约"：把自己行的 update_time 拨回 60s 前
+                    jdbcTemplate.update(
+                            "UPDATE idempotent_record SET update_time = ? WHERE biz_key = ?",
+                            java.sql.Timestamp.valueOf(java.time.LocalDateTime.now().minusSeconds(60)),
+                            "REQ-FENCE");
+                    t1Claimed.countDown();
+                    try {
+                        assertTrue(t2InAction.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                                "t2 应在超时前接管并进入 action");
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    throw new IllegalStateException("slow action finally failed");
+                });
+            } catch (Throwable e) {
+                t1Error.set(e);
+            } finally {
+                // execute 的 catch（含 markFailed）已跑完，此刻 t1 对行的全部写影响已发生
+                t1Settled.countDown();
+            }
+        }, "fencing-stale");
+        t1.start();
+        assertTrue(t1Claimed.await(5, java.util.concurrent.TimeUnit.SECONDS), "t1 应先完成 claim");
+
+        // t2：读到过期租约 → 接管（换发 token2）→ action 挂起，等 t1 的失败回写先落地
+        java.util.concurrent.atomic.AtomicReference<Object> t2Result = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread t2 = new Thread(() -> t2Result.set(
+                shortLease.execute("REQ-FENCE", String.class, () -> {
+                    t2InAction.countDown();
+                    try {
+                        assertTrue(t1Settled.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                                "t1 的 markFailed 应在超时前完成");
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return "TAKEOVER";
+                })), "fencing-takeover");
+        t2.start();
+
+        t1.join(5000);
+        t2.join(5000);
+
+        assertNotNull(t1Error.get(), "t1 的动作失败必须向上抛（调用方拿到失败）");
+        assertEquals("TAKEOVER", t2Result.get(), "t2 接管者应正常拿到自己的结果");
+        // 核心断言：行最终是接管者的 SUCCESS——旧实现（markFailed 只判 PROCESSING）会把它
+        // 打成 FAILED，随后 t2 的 markSuccess 落空，一笔成功被记成失败
+        assertEquals(IdempotentStatus.SUCCESS.name(),
+                jdbcTemplate.queryForObject(
+                        "SELECT status FROM idempotent_record WHERE biz_key = ?", String.class, "REQ-FENCE"),
+                "旧实现里 markFailed 的 WHERE 只判 PROCESSING——命中接管者把它打成 FAILED，放开第三次执行");
+        assertEquals("\"TAKEOVER\"",
+                jdbcTemplate.queryForObject(
+                        "SELECT result_json FROM idempotent_record WHERE biz_key = ?", String.class, "REQ-FENCE"),
+                "接管者写入的结果不被旧持有者覆盖");
     }
 }

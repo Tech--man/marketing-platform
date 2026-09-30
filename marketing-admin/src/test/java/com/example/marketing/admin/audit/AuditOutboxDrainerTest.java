@@ -74,16 +74,36 @@ class AuditOutboxDrainerTest {
     }
 
     @Test
-    @DisplayName("读到就落表并 XACK：不确认的条目会永远留在 PEL 里")
+    @DisplayName("读到就落表并 XACK：不确认的条目会永远留在 PEL 里；sourceId 携消息 ID（W1.2 幂等键）")
     void acksAfterPersisting() {
         stubRead(List.of(record("1-0", AuditPayloadCodec.write(payload()))));
 
         drainer.drainOnce();
 
-        verify(auditMapper).insert(any(AdminAuditLogEntity.class));
+        ArgumentCaptor<AdminAuditLogEntity> captor = ArgumentCaptor.forClass(AdminAuditLogEntity.class);
+        verify(auditMapper).insert(captor.capture());
+        assertEquals("1-0", captor.getValue().getSourceId(),
+                "sourceId 必须是 Stream 消息 ID——重投时靠它撞 uk_source 去重");
         verify(stream).acknowledge(eq(StreamKeys.auditPending()), eq(StreamKeys.ADMIN_DRAIN_GROUP),
                 any(RecordId[].class));
         verify(stream).delete(eq(StreamKeys.auditPending()), any(RecordId[].class));
+    }
+
+    @Test
+    @DisplayName("W1.2：uk_source 撞键（重投/认领交接）按已落库处理——照常 ACK，不重落行")
+    void duplicateSourceIdIsIdempotentSuccess() {
+        stubRead(List.of(record("9-9", AuditPayloadCodec.write(payload()))));
+        when(auditMapper.insert(any(AdminAuditLogEntity.class)))
+                .thenThrow(new org.springframework.dao.DuplicateKeyException("uk_source"));
+
+        drainer.drainOnce();
+
+        // 不抛（不进 deferred/PEL 循环）、照常 ACK+XDEL——这条消息已经落过库了
+        verify(stream).acknowledge(eq(StreamKeys.auditPending()), eq(StreamKeys.ADMIN_DRAIN_GROUP),
+                any(RecordId[].class));
+        verify(stream).delete(eq(StreamKeys.auditPending()), any(RecordId[].class));
+        assertEquals(1.0, meters.counter("marketing.audit.drained").count());
+        assertEquals(0.0, meters.counter("marketing.audit.drain.deferred").count());
     }
 
     @Test

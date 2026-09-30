@@ -115,6 +115,23 @@ async function submit() {
   }
 }
 
+// W4（2026-09-30 第二轮复审）：状态流转是高影响动作（FINISH 不可逆、OFFLINE 是预案
+// 开关），单击即发误触代价太大——统一先落确认抽屉（UsersView 停用同款模式）。
+const confirmFlow = ref(/** @type {any} */ (null))
+
+const FLOW_WARN = {
+  FINISH: '这是<b>不可逆终态</b>：活动永久结束，预算/灰度快照定格，只剩历史可查。',
+  OFFLINE: '这是<b>预案开关</b>：领券入口即时关闭（在途请求跑完），可再 RE_ONLINE。',
+  PROMOTE: '灰度全量上线：所有用户立即可参与（通过灰度判定）。',
+  RE_ONLINE: '下线活动重新上线：预算按对账公式重建。',
+}
+
+function askTransition(row, event) {
+  confirmFlow.value = { row, event }
+  notice.value = ''
+  conflict.value = ''
+}
+
 async function transition(row, event) {
   notice.value = ''
   conflict.value = ''
@@ -125,6 +142,8 @@ async function transition(row, event) {
   } catch (e) {
     // 41001 原文显示：前端这张表只是省事，判定在后端
     notice.value = `流转被拒：${e.message}`
+  } finally {
+    confirmFlow.value = null
   }
 }
 
@@ -163,7 +182,7 @@ async function reloadAfterConflict() {
             variant="accent-ghost"
             :data-event="e"
             :disabled="!s.canWrite"
-            @click="transition(row, e)"
+            @click="askTransition(row, e)"
           >
             {{ LABEL[e] || e }}
           </Button>
@@ -222,6 +241,20 @@ async function reloadAfterConflict() {
         </Button>
         <Button v-else variant="primary" data-act="save-gray" @click="submit()">保存</Button>
         <Button variant="ghost" @click="editor = null">取消</Button>
+      </div>
+    </section>
+
+    <section v-if="confirmFlow" class="drawer">
+      <div class="drawer__head"><h2 class="drawer__title">执行 {{ confirmFlow.event }}？</h2></div>
+      <p class="drawer__warn" data-testid="flow-confirm-warn">
+        对 <b>{{ confirmFlow.row.activityNo }}</b> 执行 <b>{{ confirmFlow.event }}</b>：
+        <span v-html="FLOW_WARN[confirmFlow.event] || '请确认操作对象与方向。'"></span>
+      </p>
+      <div class="drawer__foot">
+        <Button variant="danger" data-act="confirm-flow" @click="transition(confirmFlow.row, confirmFlow.event)">
+          确认执行
+        </Button>
+        <Button variant="ghost" @click="confirmFlow = null">取消</Button>
       </div>
     </section>
   </main>

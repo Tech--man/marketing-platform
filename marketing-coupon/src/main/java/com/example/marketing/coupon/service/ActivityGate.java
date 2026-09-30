@@ -40,13 +40,23 @@ public class ActivityGate {
         if (activityNo == null || activityNo.isBlank()) {
             return; // 模板没挂活动：领券资格由模板自身状态/时间窗控制，本闸不管
         }
-        String status = redis.opsForValue().get("activity:gate:status:" + activityNo);
+        // W2.1（2026-09-30 第二轮复审）：状态值形状升级为 status|version（发布侧 Lua CAS
+        // 用版本比大小防旧快照回滚）。消费侧只取状态段；旧形状（裸 status，迁移期
+        // activity 旧代码写的值）整串即状态，语义不变。
+        String raw = redis.opsForValue().get("activity:gate:status:" + activityNo);
+        String status = raw;
+        if (raw != null) {
+            int sep = raw.indexOf('|');
+            if (sep >= 0) {
+                status = raw.substring(0, sep);
+            }
+        }
         // P1（2026-09-30 第二轮复审）：可参与 = ONLINE <b>或 GRAY</b>——activity 侧
         // ActivityStatus.participatable() 本来就含 GRAY（状态机的正规路径
         // AUDITING--APPROVE--&gt;GRAY），只认 ONLINE 等于灰度放量阶段对所有用户
         // （含白名单内测账号）关闭领券。GRAY 继续走下面的灰度命中判定放量；
         // OFFLINE/FINISHED/DRAFT/AUDITING 照旧拒绝。
-        if (status != null && !"ONLINE".equals(status) && !"GRAY".equals(status)) {
+        if (status != null && !status.isBlank() && !"ONLINE".equals(status) && !"GRAY".equals(status)) {
             throw BizException.of(ErrorCode.ACTIVITY_NOT_ONLINE,
                     "活动 " + activityNo + " 当前状态 " + status + "，不可参与");
         }

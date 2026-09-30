@@ -134,9 +134,13 @@ public class AuditOutboxDrainer {
             meters.counter("marketing.audit.drain.skipped").increment();
             log.warn("[audit] 载荷无法解析，已跳过并确认 id={}", record.getId());
         } else {
+            // W1.2（2026-09-30 第二轮复审）：record.getId()（Stream 消息 ID，XADD 全局
+            // 唯一）作为落库幂等键——insert 成功后进程死在 ACK 前、reclaimStale 认领
+            // 重投时，uk_source 撞键按"已落库"处理，同一动作不再出现两行审计。
             boolean stored = auditService.tryRecordPayload(payload.get(),
                     java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochSecond(
-                            payload.get().epochSecond()), java.time.ZoneId.systemDefault()));
+                            payload.get().epochSecond()), java.time.ZoneId.systemDefault()),
+                    record.getId().getValue());
             if (!stored) {
                 // H5（2026-09-29 架构审查）：落库失败绝不 ACK/XDEL。原实现无条件确认+删除，
                 // DB 故障窗口（恰恰是最需要审计的时刻）里的条目被销毁得无 DB 行、无 PEL 记录，

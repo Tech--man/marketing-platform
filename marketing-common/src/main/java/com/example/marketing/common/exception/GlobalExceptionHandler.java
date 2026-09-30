@@ -66,6 +66,41 @@ public class GlobalExceptionHandler {
         return Result.fail(ErrorCode.BAD_REQUEST, "请求体不是可解析的 JSON，检查引号与字段名");
     }
 
+    /**
+     * Boot 3.4 / Spring 6.2 的参数校验异常族（W3.2，2026-09-30 第二轮复审）：
+     * 升级 3.4.7 后这些类型是活跃路径——@RequestParam/PathVariable 上的约束默认抛
+     * HandlerMethodValidationException，query 类型不匹配抛 MethodArgumentTypeMismatch，
+     * 服务层 @Validated 抛 ConstraintViolation……没有对应 handler 时全部落进
+     * handleUnknown 的 50000"系统繁忙" + 全栈 ERROR 噪音，客户端错误被说成服务器忙。
+     */
+    @ExceptionHandler({
+            org.springframework.web.method.annotation.HandlerMethodValidationException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            jakarta.validation.ConstraintViolationException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class
+    })
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<Void> handleClientParameterErrors(Exception e) {
+        log.warn("[biz] 参数校验错误（客户端问题）: {}", e.getMessage());
+        return Result.fail(ErrorCode.BAD_REQUEST, "请求参数不合法: " + briefOf(e));
+    }
+
+    /** 请求方式不支持：同样是客户端错误，HTTP 状态给 405 而非 500 */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
+    public Result<Void> handleMethodNotSupported(org.springframework.web.HttpRequestMethodNotSupportedException e) {
+        log.warn("[biz] 请求方式不支持: {}", e.getMessage());
+        return Result.fail(ErrorCode.BAD_REQUEST, "请求方式不支持: " + briefOf(e));
+    }
+
+    private static String briefOf(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            return e.getClass().getSimpleName();
+        }
+        return msg.length() > 120 ? msg.substring(0, 120) : msg;
+    }
+
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Result<Void> handleUnknown(Exception e) {

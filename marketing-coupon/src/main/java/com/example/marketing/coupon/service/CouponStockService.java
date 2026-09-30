@@ -30,6 +30,7 @@ public class CouponStockService {
     private static final Duration USER_KEY_TTL_FLOOR = Duration.ofDays(30);
 
     private final StringRedisTemplate redisTemplate;
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     /** 预扣结果 */
     @Getter
@@ -78,10 +79,23 @@ public class CouponStockService {
         return remaining.compareTo(USER_KEY_TTL_FLOOR) > 0 ? remaining : USER_KEY_TTL_FLOOR;
     }
 
-    /** 回补（异步落库最终失败/人工回收时） */
+    /**
+     * 回补（异步落库最终失败/人工回收时）。
+     *
+     * <p>W2.2（2026-09-30 第二轮复审）：库存键不存在时 Lua 返回 -1（两边都不动）——
+     * 原实现对缺失键无条件 INCRBY，会凭空创建幽灵库存键（Redis 重启/overwrite 窗口/
+     * reheat(force) 后的迟到回补）。落空只计数告警，残余差值由 coupon mismatch
+     * 恒等式暴露（方向偏少，不会超发）。</p>
+     */
     public void rollback(Long templateId, Long userId, int quantity) {
-        redisTemplate.execute(ROLLBACK,
+        Long result = redisTemplate.execute(ROLLBACK,
                 List.of(stockKey(templateId), userKey(templateId, userId)), String.valueOf(quantity));
+        if (result != null && result == -1L) {
+            io.micrometer.core.instrument.Counter.builder("coupon.grant.rollback_nokey")
+                    .register(meterRegistry).increment();
+            log.warn("[stock] 回补时库存键不存在，跳过（幽灵键防护；残余差值由 mismatch 暴露）templateId={}",
+                    templateId);
+        }
     }
 
     /** 预热库存（SETNX：重复调用/多实例并发安全；已存在则不覆盖，防止重启回涨库存） */

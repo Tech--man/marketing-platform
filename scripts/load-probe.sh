@@ -91,27 +91,40 @@ if [ "$PL" -lt "$LIMIT_NEED" ]; then
 fi
 echo "   压测模板 $TPL per_user_limit=$PL >= 每轮 $LIMIT_NEED，继续"
 
+# W5.4（2026-09-30 第二轮复审）：固定名临时文件 + 无互斥——两实例并发跑会互写
+# /tmp/probe-codes.$r（统计失真）且单账号限领让双方假红。mktemp 唯一化 + flock。
+PROBE_LOCK=$(mktemp /tmp/mkt-load-probe.XXXXXX.lock)
+exec 9>"$PROBE_LOCK"
+if ! flock -n 9; then
+  echo "!! 另一个 load-probe 实例正在跑（$PROBE_LOCK 被持有）。" >&2
+  echo "   并发两份会互写统计文件、且共用账号限领额度，结论不可信。" >&2
+  exit 1
+fi
+PROBE_DIR=$(mktemp -d /tmp/mkt-load-probe.XXXXXX)
+trap 'rm -f "$PROBE_LOCK"; rm -rf "$PROBE_DIR"' EXIT
+
 export -f grant
 for r in $(seq 1 "$ROUNDS"); do
   RUN="PROBE$(date +%s)$r"
   export RUN
+  CODES="$PROBE_DIR/codes.$r"
   T0=$(now)
-  seq 1 "$N" | xargs -P "$PAR" -I@ bash -c 'grant @' > /tmp/probe-codes.$r
+  seq 1 "$N" | xargs -P "$PAR" -I@ bash -c 'grant @' > "$CODES"
   T1=$(now)
   L=$(xl)
   # 受理 = HTTP 200 且业务码 0。两者都要：42900 是 HTTP 429，41000 是 HTTP 200 + 业务码
-  OK=$(awk '$2=="0"{c++} END{print c+0}' /tmp/probe-codes.$r)
+  OK=$(awk '$2=="0"{c++} END{print c+0}' "$CODES")
   if [ "$OK" = "0" ]; then
     # 一条都没受理就别等排空：等 900 秒只会得到一条"排空很慢"的假结论。
     echo "!! 本轮 0 条受理（$N 发全被同步拒绝）。单账号身份下最常见的原因是" >&2
     echo "   这个登录名已经把模板 $TPL 的每人限领额度用完了 —— 换 CONSUMER_IDENTIFIER" >&2
     echo "   指向一个新账号，或建一张 per_user_limit 更大且未消耗的专用压测模板。" >&2
-    echo "   业务码分布: $(awk '{print $2}' /tmp/probe-codes.$r | sort | uniq -c | tr '\n' ' ')" >&2
+    echo "   业务码分布: $(awk '{print $2}' "$CODES" | sort | uniq -c | tr '\n' ' ')" >&2
     exit 1
   fi
   for _ in $(seq 1 900); do [ "$(persisted)" -ge "$OK" ] && break; sleep 1; done
   T2=$(now)
-  python3 - "$N" "$T0" "$T1" "$L" "$T2" "$r" /tmp/probe-codes.$r <<'PY'
+  python3 - "$N" "$T0" "$T1" "$L" "$T2" "$r" "$CODES" <<'PY'
 import sys, collections
 n = int(sys.argv[1]); t0, t1 = float(sys.argv[2]), float(sys.argv[3]); L = int(sys.argv[4]); t2 = float(sys.argv[5]); rnd = sys.argv[6]
 codes = collections.Counter(l.strip() for l in open(sys.argv[7]) if l.strip())

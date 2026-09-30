@@ -53,4 +53,23 @@ class ActivityServiceTest {
                         "ACT2026001", "重复活动", null, null, null, null)));
         assertEquals(ErrorCode.BIZ_ERROR.getCode(), e.getCode());
     }
+
+    @Test
+    @DisplayName("W2.4：startTime >= endTime 的创建直接拒（40000）——时间窗交叉此前无任何校验")
+    void createRejectsInvertedTimeWindow() {
+        ActivityService service = new ActivityService(mapperReturning(null), null,
+                org.mockito.Mockito.mock(ActivityGatePublisher.class));
+        java.time.LocalDateTime start = java.time.LocalDateTime.now();
+        java.time.LocalDateTime end = start.minusDays(1);
+
+        BizException e = assertThrows(BizException.class,
+                () -> service.create(new com.example.marketing.activity.dto.CreateActivityRequest(
+                        "ACT9009", "倒窗口", start, end, java.math.BigDecimal.TEN, null)));
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), e.getCode());
+        // 相等也不行（窗口长度为 0 的活动没有参与意义）
+        BizException equal = assertThrows(BizException.class,
+                () -> service.create(new com.example.marketing.activity.dto.CreateActivityRequest(
+                        "ACT9010", "零窗口", start, start, java.math.BigDecimal.TEN, null)));
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), equal.getCode());
+    }
 }

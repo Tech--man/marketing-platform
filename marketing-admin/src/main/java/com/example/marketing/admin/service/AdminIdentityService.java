@@ -47,6 +47,7 @@ public class AdminIdentityService {
 
     private final AdminTokenCodec codec;
     private final AdminSessionService sessionService;
+    private final io.micrometer.core.instrument.MeterRegistry meters;
 
     public AdminPrincipal resolve(HttpServletRequest request) {
         // 网关流量 Authorization 已被剥掉，只剩 X-Admin-Token；直连流量则带 Authorization。
@@ -80,12 +81,26 @@ public class AdminIdentityService {
             };
         }
         AdminClaims claims = result.claims();
-        if (sessionService.isRevoked(claims.jti())) {
-            throw BizException.of(ErrorCode.SESSION_REVOKED);
-        }
-        Long bumpedAt = sessionService.bumpedAt(claims.uid());
-        if (bumpedAt != null && claims.iat() < bumpedAt) {
-            throw BizException.of(ErrorCode.SESSION_REVOKED, "该账号已改密或被停用，请重新登录");
+        // W3.1（2026-09-30 第二轮复审）：Redis 查询与网关同口径降级——fail-open
+        // （仅验签放行 + degraded 计数），代价上界 accessTtl 内已吊销 token 仍可用，
+        // 与 Redis 被清空时相同（网关 AdminAuthFilter 根因 C 的同款取舍）。原实现
+        // 这里无降级：Redis 一挂全部 /api/admin/** 50000，网关精心做的降级被服务侧
+        // fail-closed 击穿。3s 命令超时 × 两跳的长尾也一并消除。
+        try {
+            if (sessionService.isRevoked(claims.jti())) {
+                throw BizException.of(ErrorCode.SESSION_REVOKED);
+            }
+            Long bumpedAt = sessionService.bumpedAt(claims.uid());
+            if (bumpedAt != null && claims.iat() < bumpedAt) {
+                throw BizException.of(ErrorCode.SESSION_REVOKED, "该账号已改密或被停用，请重新登录");
+            }
+        } catch (BizException be) {
+            throw be;
+        } catch (RuntimeException e) {
+            meters.counter("marketing.admin.auth.degraded", "stage", "identity-check").increment();
+            org.slf4j.LoggerFactory.getLogger(AdminIdentityService.class).warn(
+                    "[admin-identity] 吊销位/作废时刻查询不可用，退化为仅验签放行"
+                            + "（bounded by accessTtl，恢复即自愈）: {}", e.toString());
         }
         return new AdminPrincipal(claims.uid(), claims.sub(), claims.role(), claims.jti());
     }

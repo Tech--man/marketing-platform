@@ -95,6 +95,11 @@ public class ReheatDispatcher {
     void drainAll() {
         for (String type : registry.types()) {
             try {
+                // W3.6（2026-09-30 第二轮复审）：先回收搁浅 PEL——executeOne 的回执写/ACK
+                // 之间进程死掉后条目滞留 PEL，而 consumerName 每次重启换名，旧消费者名下的
+                // 条目永远无人认领（admin 后台只见 sent、永等不到回执）。门槛取
+                // max(15s, 3×poll)，与审计 drain 同款。
+                reclaimStale(type);
                 List<MapRecord<String, Object, Object>> records = redis.opsForStream().read(
                         Consumer.from(StreamKeys.OWNING_CONSUMER_GROUP, consumerName),
                         StreamReadOptions.empty().count(BATCH),
@@ -107,6 +112,50 @@ public class ReheatDispatcher {
                 meters.counter("marketing.reheat.dispatch.error").increment();
                 log.warn("[reheat] type={} 本轮读取失败: {}", type, e.toString());
             }
+        }
+    }
+
+    /**
+     * 认领空闲超门槛的 PEL 条目（XPENDING 过滤 + XCLAIM 抢到本消费者名下重执行）。
+     * XCLAIM 原子保证一条只会被一个实例认领；min-idle 门槛防止抢到正在执行的条目。
+     * 受控中断（Redis 不可用）绝不能外抛——drainAll 之外抛异常会静默取消调度线程。
+     */
+    private void reclaimStale(String type) {
+        try {
+            long minIdleMs = Math.max(15_000L, pollSeconds * 1000L * 3);
+            // XPENDING 找出空闲超门槛的条目 ID，再 XCLAIM 原子认领（一个条目只会被
+            // 一个实例抢到）。直接 claim 全段也行，但先过滤空闲能把"正在执行的条目"
+            // 排除在外。
+            org.springframework.data.redis.connection.stream.PendingMessages pending =
+                    redis.opsForStream().pending(StreamKeys.reheatPending(type),
+                            StreamKeys.OWNING_CONSUMER_GROUP,
+                            org.springframework.data.domain.Range.unbounded(),
+                            BATCH);
+            if (pending == null || pending.isEmpty()) {
+                return;
+            }
+            java.util.List<org.springframework.data.redis.connection.stream.RecordId> stale = new java.util.ArrayList<>();
+            for (org.springframework.data.redis.connection.stream.PendingMessage msg : pending) {
+                if (msg.getElapsedTimeSinceLastDelivery().toMillis() >= minIdleMs) {
+                    stale.add(msg.getId());
+                }
+            }
+            if (stale.isEmpty()) {
+                return;
+            }
+            java.util.List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
+                    StreamKeys.reheatPending(type), StreamKeys.OWNING_CONSUMER_GROUP, consumerName,
+                    java.time.Duration.ofMillis(minIdleMs),
+                    stale.toArray(new org.springframework.data.redis.connection.stream.RecordId[0]));
+            if (claimed != null && !claimed.isEmpty()) {
+                meters.counter("marketing.reheat.dispatch.reclaimed").increment(claimed.size());
+                log.warn("[reheat] 认领搁浅 PEL {} 条 type={}（原消费者已死或回执写失败）",
+                        claimed.size(), type);
+                claimed.forEach(record -> executeOne(type, record));
+            }
+        } catch (RuntimeException e) {
+            meters.counter("marketing.reheat.dispatch.reclaim_degraded").increment();
+            log.debug("[reheat] PEL 回收不可用（下轮再试）type={}: {}", type, e.toString());
         }
     }
 

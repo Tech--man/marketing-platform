@@ -141,4 +141,27 @@ class ActivityGateTest {
                 "带空格的 CSV 与 GrayRuleCache 同口径 trim，不能 NFE→50000");
         assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70003L));
     }
+
+    @Test
+    @DisplayName("W2.1：状态值新形状 status|version——取状态段判定，发布侧 CAS 防旧快照回滚")
+    void versionedStatusValueParsedByStatusSegment() {
+        status("OFFLINE|9");
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70001L),
+                "OFFLINE|9 应按 OFFLINE 拒绝（值带版本段，状态判定只看 | 前段）");
+
+        status("ONLINE|1");
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L));
+
+        status("GRAY|4");
+        gray("0|70001");
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L),
+                "GRAY|version 的灰度语义与裸 GRAY 一致");
+    }
+
+    @Test
+    @DisplayName("W2.1：旧形状（裸 status，迁移期 activity 旧代码写的值）照常工作")
+    void legacyBareStatusStillWorks() {
+        status("OFFLINE");
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70001L));
+    }
 }

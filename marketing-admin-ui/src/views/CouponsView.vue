@@ -17,6 +17,8 @@ const s = useSession()
 const table = ref(null)
 const notice = ref('')
 const editor = ref(/** @type {any} */ (null))
+// W4（2026-09-30 第二轮复审）：上下线是放领/停领的动作，先落确认抽屉
+const confirmToggle = ref(/** @type {any} */ (null))
 const form = ref({})
 
 const columns = [
@@ -56,6 +58,11 @@ async function saveStock() {
   }
 }
 
+function askToggle(row) {
+  confirmToggle.value = row
+  notice.value = ''
+}
+
 async function toggleStatus(row) {
   const next = row.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
   try {
@@ -70,6 +77,8 @@ async function toggleStatus(row) {
     await table.value?.reload()
   } catch (e) {
     notice.value = `上下线被拒：${e.message}`
+  } finally {
+    confirmToggle.value = null
   }
 }
 </script>
@@ -100,7 +109,7 @@ async function toggleStatus(row) {
             variant="accent-ghost"
             data-act="toggle-status"
             :disabled="!s.canWrite"
-            @click="toggleStatus(row)"
+            @click="askToggle(row)"
           >
             {{ row.status === 'ACTIVE' ? '下线' : '上线' }}
           </Button>
@@ -121,6 +130,28 @@ async function toggleStatus(row) {
       <div class="drawer__foot">
         <Button variant="primary" data-act="save" @click="saveStock()">保存</Button>
         <Button variant="ghost" @click="editor = null">取消</Button>
+      </div>
+    </section>
+
+    <section v-if="confirmToggle" class="drawer">
+      <div class="drawer__head">
+        <h2 class="drawer__title">
+          {{ confirmToggle.status === 'ACTIVE' ? '下线' : '上线' }}：{{ confirmToggle.templateNo }}
+        </h2>
+      </div>
+      <p class="hint" data-testid="toggle-confirm-warn">
+        <template v-if="confirmToggle.status !== 'ACTIVE'">
+          上线 = 恢复领取：<b>只补预热缺失的缓存</b>，已发出的券不会被收回，也不会重置已领计数。
+        </template>
+        <template v-else>
+          下线后新的领券请求被拒，<b>已发出的券不受影响</b>（照常核销/过期）。
+        </template>
+      </p>
+      <div class="drawer__foot">
+        <Button variant="danger" data-act="confirm-toggle" @click="toggleStatus(confirmToggle)">
+          确认执行
+        </Button>
+        <Button variant="ghost" @click="confirmToggle = null">取消</Button>
       </div>
     </section>
   </main>

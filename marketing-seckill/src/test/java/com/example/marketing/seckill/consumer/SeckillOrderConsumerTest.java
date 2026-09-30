@@ -118,4 +118,21 @@ class SeckillOrderConsumerTest {
         verify(stockService).saveResult(eq("tk-regrab"), eq("FAIL:ACTIVE_ORDER_EXISTS"));
         verify(stockService, never()).saveResult(anyString(), org.mockito.ArgumentMatchers.startsWith("SUCCESS"));
     }
+
+    @Test
+    @DisplayName("W2.6：撞 uk_order_no（单号随机碰撞，非重复购买）→ 换号重试落库成功，不误判在途重复")
+    void orderNoCollisionRetriesWithNewOrderNo() {
+        activityOnline();
+        // 第一次 insert 撞单号；防重索引口径（selectOne active=1）查无单；单号已存在（selectCount=1）
+        when(orderMapper.insert(any(SeckillOrderEntity.class)))
+                .thenThrow(new DuplicateKeyException("uk_order_no"))
+                .thenReturn(1);
+        when(orderMapper.selectOne(any())).thenReturn(null);
+        when(orderMapper.selectCount(any())).thenReturn(1L);
+
+        consumer.handle(JsonUtils.toJson(event()));
+
+        verify(orderMapper, org.mockito.Mockito.times(2)).insert(any(SeckillOrderEntity.class));
+        verify(stockService).saveResult(eq("tk-regrab"), org.mockito.ArgumentMatchers.startsWith("SUCCESS:SK"));
+    }
 }

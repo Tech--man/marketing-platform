@@ -35,6 +35,13 @@ public class ActivityService {
     private final ActivityGatePublisher gatePublisher;
 
     public ActivityEntity create(CreateActivityRequest request) {
+        // W2.4（2026-09-30 第二轮复审）：时间窗交叉校验——endTime 可空=不限，
+        // 但两个都给了就必须 start<end，否则到期 Job 与展示口径全乱了
+        if (request.startTime() != null && request.endTime() != null
+                && !request.startTime().isBefore(request.endTime())) {
+            throw BizException.of(ErrorCode.BAD_REQUEST,
+                    "开始时间必须早于结束时间（start=" + request.startTime() + ", end=" + request.endTime() + "）");
+        }
         try {
             if (activityMapper.exists(Wrappers.<ActivityEntity>lambdaQuery()
                     .eq(ActivityEntity::getActivityNo, request.activityNo()))) {

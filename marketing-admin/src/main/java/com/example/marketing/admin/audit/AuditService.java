@@ -50,9 +50,16 @@ public class AuditService implements AuditSink {
      * 交还调用方。HTTP 路径的 {@link #record(AuditRecord, LocalDateTime)} 仍是
      * "失败只 warn"——那里的动作已完成，不该让一条 INSERT 把它变 500；drain 路径
      * 的正确语义是"失败不 ACK、条目留在 PEL 等重试"，把失败咽掉等于静默销毁审计。
+     *
+     * <p><b>W1.2 幂等（2026-09-30 第二轮复审）</b>：sourceId 是 Stream 消息 ID，
+     * 落库携带（uk_source 去重）。drain 是至少一次投递——insert 成功后进程死在
+     * ACK 前、reclaimStale 认领重投是常态路径，撞 uk_source 视为"这条已落过"返回
+     * true 照常 ACK，同一动作不再出现两行时间内容全同的审计。</p>
      */
-    public boolean tryRecordPayload(AuditPayload p, LocalDateTime occurredAt) {
-        return insert(toEntity(toRecord(p)), occurredAt);
+    public boolean tryRecordPayload(AuditPayload p, LocalDateTime occurredAt, String sourceId) {
+        AdminAuditLogEntity entity = toEntity(toRecord(p));
+        entity.setSourceId(cut(sourceId, 64));
+        return insert(entity, occurredAt);
     }
 
     private AuditRecord toRecord(AuditPayload p) {
@@ -71,6 +78,10 @@ public class AuditService implements AuditSink {
         }
         try {
             auditMapper.insert(entity);
+            return true;
+        } catch (org.springframework.dao.DuplicateKeyException alreadyStored) {
+            // W1.2：uk_source 撞键 = 这条消息已落过库（重投/认领交接窗口），幂等成功
+            log.info("[audit] source_id 已落库，按幂等成功处理 sourceId={}", entity.getSourceId());
             return true;
         } catch (RuntimeException e) {
             log.warn("[audit] 落库失败，动作结果不受影响 actor={}, action={}, resource={}#{}, "

@@ -57,6 +57,12 @@ class BudgetServiceTest {
 
     /** 只拦 selectOne 的 Mapper 桩；BaseMapper 抽象方法太多，不值得手写全。 */
     private static ActivityMapper mapperReturning(String budgetYuan) {
+        return mapperReturning(budgetYuan, "ONLINE", null);
+    }
+
+    /** W2.4 变体：可指定状态与 endTime（deduct 参与闸的两种拒绝形态） */
+    private static ActivityMapper mapperReturning(String budgetYuan, String status,
+                                                  java.time.LocalDateTime endTime) {
         return (ActivityMapper) Proxy.newProxyInstance(
                 ActivityMapper.class.getClassLoader(),
                 new Class<?>[]{ActivityMapper.class},
@@ -65,7 +71,8 @@ class BudgetServiceTest {
                         ActivityEntity entity = new ActivityEntity();
                         entity.setActivityNo("ACT2026001");
                         entity.setName("测试活动");
-                        entity.setStatus("ONLINE");
+                        entity.setStatus(status);
+                        entity.setEndTime(endTime);
                         entity.setBudgetAmount(new BigDecimal(budgetYuan));
                         return entity;
                     }
@@ -211,6 +218,75 @@ class BudgetServiceTest {
     }
 
     @Test
+    @DisplayName("W2.2：孤儿 DEDUCT（Redis 高于退后期望）→ 退款按差额封顶，绝不凭空造钱")
+    void refundCappedWhenRedisAboveFormula() {
+        org.springframework.data.redis.core.StringRedisTemplate redis =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        when(redis.hasKey("activity:budget:ACT2026001")).thenReturn(true);
+        // 公式（含本笔 REFUND 流水）：10000 - 3000(DEDUCT) + 500(REFUND) = 7500
+        // Redis 当前 7600 —— 高于退后期望：全额退 500 会把余额推到 8100，凭空多出 600
+        when(ops.get("activity:budget:ACT2026001")).thenReturn("7600");
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("DEDUCT"),
+                org.mockito.ArgumentMatchers.eq("ACT2026001"),
+                org.mockito.ArgumentMatchers.eq("bk-orphan")))
+                .thenReturn(java.util.List.of(java.util.Map.of("amount_cents", -3000)));
+        when(jdbc.update(org.mockito.ArgumentMatchers.contains("REFUND"),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(1);
+        when(jdbc.queryForObject(org.mockito.ArgumentMatchers.contains("SUM(amount_cents)"),
+                org.mockito.ArgumentMatchers.eq(Long.class),
+                org.mockito.ArgumentMatchers.eq("ACT2026001")))
+                .thenReturn(-2500L);
+        BudgetService refundable = new BudgetService(redis, jdbc, mapperReturning("100.00"));
+
+        assertEquals(BudgetService.RefundOutcome.REFUNDED,
+                refundable.refund("ACT2026001", "bk-orphan", 500L));
+
+        // Redis 已高于退后期望（孤儿流水/漂移）→ 实退 0：一次 INCRBY 都不该有
+        verify(ops, org.mockito.Mockito.never())
+                .increment(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("W2.2：Redis 低于公式（保守方向）→ 差额充足时全额退")
+    void refundFullWhenRoomSufficient() {
+        org.springframework.data.redis.core.StringRedisTemplate redis =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        when(redis.hasKey("activity:budget:ACT2026001")).thenReturn(true);
+        when(ops.get("activity:budget:ACT2026001")).thenReturn("7000"); // 低于期望 7500
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("DEDUCT"),
+                org.mockito.ArgumentMatchers.eq("ACT2026001"),
+                org.mockito.ArgumentMatchers.eq("bk-1")))
+                .thenReturn(java.util.List.of(java.util.Map.of("amount_cents", -3000)));
+        when(jdbc.update(org.mockito.ArgumentMatchers.contains("REFUND"),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any(),
+                org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(1);
+        when(jdbc.queryForObject(org.mockito.ArgumentMatchers.contains("SUM(amount_cents)"),
+                org.mockito.ArgumentMatchers.eq(Long.class),
+                org.mockito.ArgumentMatchers.eq("ACT2026001")))
+                .thenReturn(-2500L);
+        BudgetService refundable = new BudgetService(redis, jdbc, mapperReturning("100.00"));
+
+        assertEquals(BudgetService.RefundOutcome.REFUNDED,
+                refundable.refund("ACT2026001", "bk-1", 500L));
+
+        verify(ops).increment("activity:budget:ACT2026001", 500L);
+    }
+
+    @Test
     @DisplayName("A3：没有配对 DEDUCT 的退款 → 40400（退款不能凭空造钱）")
     void refundWithoutDeductRejected() {
         JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
@@ -296,5 +372,34 @@ class BudgetServiceTest {
                 org.mockito.ArgumentMatchers.contains("DELETE FROM budget_flow"),
                 org.mockito.ArgumentMatchers.eq("ACT2026001"),
                 org.mockito.ArgumentMatchers.eq("bk-missing-key-set-down"));
+    }
+
+    @Test
+    @DisplayName("W2.4：OFFLINE 活动的扣减被参与闸拒绝（41007），不落流水")
+    void deductRejectedWhenActivityOffline() {
+        BudgetService offline = new BudgetService(null, jdbc, mapperReturning("100.00", "OFFLINE", null));
+
+        BizException e = assertThrows(BizException.class,
+                () -> offline.deduct("ACT2026001", 100L, "bk-gate-1"));
+
+        assertEquals(41007, e.getCode());
+        Integer flows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM budget_flow WHERE biz_key = 'bk-gate-1'", Integer.class);
+        assertEquals(0, flows, "闸在流水占位之前——被拒的请求不留任何写痕迹");
+    }
+
+    @Test
+    @DisplayName("W2.4：endTime 已过的活动扣减被拒（41007），不落流水")
+    void deductRejectedWhenPastEndTime() {
+        BudgetService expired = new BudgetService(null, jdbc,
+                mapperReturning("100.00", "ONLINE", java.time.LocalDateTime.now().minusMinutes(1)));
+
+        BizException e = assertThrows(BizException.class,
+                () -> expired.deduct("ACT2026001", 100L, "bk-gate-2"));
+
+        assertEquals(41007, e.getCode());
+        Integer flows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM budget_flow WHERE biz_key = 'bk-gate-2'", Integer.class);
+        assertEquals(0, flows);
     }
 }

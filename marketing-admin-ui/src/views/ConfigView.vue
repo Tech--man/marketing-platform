@@ -134,9 +134,14 @@ function rowsOf(entry) {
   return entry.rows || []
 }
 
-/** 删行先落在这个确认面板上：删的是"覆盖"，效果是"回出厂"，这句话必须在点下去之前就看到 */
-function askDelete(entry) {
-  confirmDel.value = { key: entry.key, form: rowsOf(entry)[0].form }
+/** 删行先落在这个确认面板上：删的是"覆盖"，效果是"回出厂"，这句话必须在点下去之前就看到。
+ *  W4（2026-09-30 第二轮复审）：同键多行（GLOBAL + 档位覆盖）时默认删第一行——运营
+ *  想删"本档覆盖"可能实际删掉 GLOBAL 行（影响所有档）。确认抽屉带档位选择，默认本档。 */
+function askDelete(entry, preferredForm) {
+  const forms = rowsOf(entry).map((r) => r.form)
+  const own = preferredForm || d.value?.ownForm
+  const form = forms.includes(own) ? own : forms[0]
+  confirmDel.value = { key: entry.key, form, forms }
   notice.value = ''
 }
 </script>
@@ -228,7 +233,7 @@ function askDelete(entry) {
                   size="sm"
                   variant="accent-ghost"
                   data-act="delete"
-                  @click="askDelete(e)"
+                  @click="askDelete(e, d?.ownForm)"
                 >
                   删行
                 </Button>
@@ -263,8 +268,14 @@ function askDelete(entry) {
     <section v-if="confirmDel" class="drawer">
       <div class="drawer__head"><h2 class="drawer__title">删掉这一行？</h2></div>
       <p class="drawer__warn">
-        删除 <b>{{ confirmDel.key }}</b> 在 <b>{{ confirmDel.form }}</b> 档的覆盖行 =
-        <b>恢复出厂</b>：这一档退回本进程 yml 的出厂值，不是删成 0，也不会去改别的档。
+        删除 <b>{{ confirmDel.key }}</b> 在所选档的覆盖行 =
+        <b>恢复出厂</b>：该档退回本进程 yml 的出厂值，不是删成 0，也不会去改别的档。
+      </p>
+      <p v-if="confirmDel.forms.length > 1" class="drawer__warn" data-testid="delete-form-picker">
+        这个键在多个档有覆盖行，删错档会影响别的档——请确认要删的档位：
+        <select v-model="confirmDel.form" data-act="delete-form">
+          <option v-for="f in confirmDel.forms" :key="f" :value="f">{{ f }}</option>
+        </select>
       </p>
       <div class="drawer__foot">
         <Button variant="danger" data-act="confirm-delete" @click="doDelete">确认删除</Button>

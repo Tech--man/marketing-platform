@@ -43,6 +43,14 @@ public class ActivityGatePublisher {
     public static final String GRAY_KEY_PREFIX = "activity:gate:gray:";
     /** 灰度键值形状：{@code percent|uid1,uid2}；percent 为 {@code -} 表示列 NULL（未配=全量） */
     public static final String GRAY_NO_RULE = "-";
+    /**
+     * 状态键值形状（W2.1，2026-09-30 第二轮复审）：{@code status|version}。
+     * version 取 activity 行的乐观锁值（每次流转/编辑 +1），写入经 gate_cas.lua
+     * 比大小——旧快照（publishAll 的 SELECT 与 SET 之间发生了流转）不再能把
+     * 已发布的新状态覆盖回去，OFFLINE 预案不被 5 秒旧值回滚。
+     */
+    private static final org.springframework.data.redis.core.script.RedisScript<Long> STATUS_CAS =
+            com.example.marketing.common.redis.LuaScripts.ofLong("lua/gate_cas.lua");
 
     private final ActivityMapper activityMapper;
     private final StringRedisTemplate redis;
@@ -79,16 +87,13 @@ public class ActivityGatePublisher {
     /** 全量重写当前所有活动的两把键。任务自身吞异常：发布失败下一轮再来 */
     void publishAll() {
         try {
-            List<ActivityEntity> activities = activityMapper.selectList(
-                    Wrappers.<ActivityEntity>lambdaQuery());
-            for (ActivityEntity activity : activities) {
-                redis.opsForValue().set(STATUS_KEY_PREFIX + activity.getActivityNo(),
-                        activity.getStatus() == null ? "" : activity.getStatus());
-                String gray = (activity.getGrayPercent() == null ? GRAY_NO_RULE
-                        : String.valueOf(activity.getGrayPercent()))
-                        + "|"
-                        + (activity.getGrayWhitelist() == null ? "" : activity.getGrayWhitelist());
-                redis.opsForValue().set(GRAY_KEY_PREFIX + activity.getActivityNo(), gray);
+            List<ActivityEntity> snapshot = activityMapper.selectList(
+                    Wrappers.<ActivityEntity>lambdaQuery().select(ActivityEntity::getActivityNo));
+            for (ActivityEntity marker : snapshot) {
+                // W2.1：逐条即时重读——快照只用来定"有哪些活动"，行内容以发布时刻的
+                // 单行读为准（窗口从全表快照级缩到毫秒级），配合状态值的 version CAS
+                // 双保险：即便这毫秒里又发生流转，旧 version 的写入也会被 Lua 拒绝。
+                publishNow(marker.getActivityNo());
             }
         } catch (RuntimeException e) {
             log.warn("[activity-gate] 本轮发布失败（下轮再来，消费侧按旧值/fail-open）: {}", e.toString());
@@ -106,8 +111,11 @@ public class ActivityGatePublisher {
             if (activity == null) {
                 return;
             }
-            redis.opsForValue().set(STATUS_KEY_PREFIX + activityNo,
-                    activity.getStatus() == null ? "" : activity.getStatus());
+            long version = activity.getVersion() == null ? 0L : activity.getVersion();
+            String statusValue = (activity.getStatus() == null ? "" : activity.getStatus())
+                    + "|" + version;
+            redis.execute(STATUS_CAS, java.util.List.of(STATUS_KEY_PREFIX + activityNo),
+                    statusValue, String.valueOf(version));
             String gray = (activity.getGrayPercent() == null ? GRAY_NO_RULE
                     : String.valueOf(activity.getGrayPercent()))
                     + "|"

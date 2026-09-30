@@ -115,7 +115,12 @@ describe('ActivitiesView', () => {
     expect(draftEvents).toEqual(['SUBMIT'])
     expect(onlineEvents).toEqual(expect.arrayContaining(['OFFLINE', 'FINISH']))
     expect(onlineEvents).not.toContain('SUBMIT')
+    // W4：流转先落确认抽屉——点按钮只出抽屉，确认后才发请求
     await rows[0].get('[data-event="SUBMIT"]').trigger('click')
+    await flushPromises()
+    expect(w.text()).not.toContain('DRAFT 不能直接到 ONLINE')
+    expect(w.find('[data-act="confirm-flow"]').exists()).toBe(true)
+    await w.get('[data-act="confirm-flow"]').trigger('click')
     await flushPromises()
     expect(w.text()).toContain('DRAFT 不能直接到 ONLINE')
   })

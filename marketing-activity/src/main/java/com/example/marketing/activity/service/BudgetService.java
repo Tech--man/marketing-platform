@@ -109,8 +109,13 @@ public class BudgetService implements CacheReheater, CacheConsistency {
      */
     public DeductOutcome deduct(String activityNo, long amountCents, String bizKey) {
         if (amountCents <= 0) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "扣减金额必须为正");
+            throw BizException.of(ErrorCode.BAD_REQUEST, "扣减金额必须为正");
         }
+        // W2.4（2026-09-30 第二轮复审）：参与资格闸放在一切写动作之前——OFFLINE/
+        // FINISHED/草稿/过窗的活动不再接受扣款（此前 H10 只加了身份/频次/单笔三道
+        // 滥用闸，OFFLINE 活动每用户每分钟仍能抽走 100 元额度）。幂等重放（同 bizKey）
+        // 也要先过闸：闸挡住的是"这个活动还在不在参与窗口"，与请求是否重复无关。
+        requireParticipatable(activityNo);
         // 1. 流水占位（先落审计再扣 Redis，失败即回删，保证 Redis 与流水一致方向偏保守）
         int inserted = jdbcTemplate.update(
                 "INSERT IGNORE INTO budget_flow (activity_no, biz_key, amount_cents, type) VALUES (?, ?, ?, 'DEDUCT')",
@@ -215,7 +220,23 @@ public class BudgetService implements CacheReheater, CacheConsistency {
         }
         try {
             if (Boolean.TRUE.equals(redisTemplate.hasKey(budgetKey(activityNo)))) {
-                redisTemplate.opsForValue().increment(budgetKey(activityNo), amountCents);
+                // W2.2（2026-09-30 第二轮复审）：退款按公式差额封顶，堵"孤儿 DEDUCT 造钱"。
+                // deduct 进程级故障可能留下「流水在、Redis 未扣」的孤儿——全额 INCRBY 会把
+                // 从未扣掉的钱加回去，Redis 余额超过总预算继续被消费。此刻 REFUND 流水已落，
+                // computeRemainCents 已含本笔（= 退后期望余额）；实退 = min(金额, 期望-当前)，
+                // Redis 虚高（孤儿/漂移）时差额为 0 或负 → 退 0，只留流水由对账/重预热收敛。
+                String raw = redisTemplate.opsForValue().get(budgetKey(activityNo));
+                long current = raw == null || raw.isBlank() ? 0L : Long.parseLong(raw.trim());
+                long expectedAfter = computeRemainCents(activityNo);
+                long effective = Math.min(amountCents, Math.max(0L, expectedAfter - current));
+                if (effective < amountCents) {
+                    log.warn("[budget] 退款按公式差额封顶：请求 {} 分，实退 {} 分（Redis 当前 {} 已高于/逼近"
+                            + " 退后期望 {}，存在孤儿流水或漂移，由对账收敛）activityNo={}, bizKey={}",
+                            amountCents, effective, current, expectedAfter, activityNo, bizKey);
+                }
+                if (effective > 0) {
+                    redisTemplate.opsForValue().increment(budgetKey(activityNo), effective);
+                }
             } else {
                 log.info("[budget] 预算键缺失，退款只落流水（重建公式含 REFUND，余额自愈）activityNo={}",
                         activityNo);
@@ -272,6 +293,27 @@ public class BudgetService implements CacheReheater, CacheConsistency {
             throw new BizException(ErrorCode.NOT_FOUND, "活动不存在: " + activityNo);
         }
         return activity;
+    }
+
+    /**
+     * W2.4（2026-09-30 第二轮复审）：扣减前的参与资格闸——状态须 ONLINE/GRAY
+     * （与 {@code ActivityStatus.participatable} 同口径）且未过 endTime。与 coupon 侧
+     * ActivityGate 读 Redis 镜像不同，这里在 owning 进程内直接读 DB 行（真值）。
+     */
+    private void requireParticipatable(String activityNo) {
+        ActivityEntity activity = requireActivity(activityNo);
+        String status = activity.getStatus();
+        boolean online = com.example.marketing.activity.domain.ActivityStatus.ONLINE.name().equals(status)
+                || com.example.marketing.activity.domain.ActivityStatus.GRAY.name().equals(status);
+        if (!online) {
+            throw BizException.of(ErrorCode.ACTIVITY_NOT_ONLINE,
+                    "活动 " + activityNo + " 当前状态 " + status + "，不可扣减预算");
+        }
+        if (activity.getEndTime() != null
+                && activity.getEndTime().isBefore(java.time.LocalDateTime.now())) {
+            throw BizException.of(ErrorCode.ACTIVITY_NOT_ONLINE,
+                    "活动 " + activityNo + " 已于 " + activity.getEndTime() + " 结束，不可扣减预算");
+        }
     }
 
     /** 元 → 分。预算与流水的权威计算全在"分"上做，避免 BigDecimal 与 long 混算 */
