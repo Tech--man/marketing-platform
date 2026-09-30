@@ -9,5 +9,9 @@ ENV JAVA_OPTS="-Xmx192m -Xss512k -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:
 # 与编排的回环绑定/最小暴露同一收口方向。应用无卷写需求，只 chown 工作目录。
 RUN useradd -r -u 10001 app
 USER app
+# 实测踩坑（2026-09-30 全栈冒烟）：容器 JVM 默认 UTC，而 DB 链路是
+# serverTimezone=Asia/Shanghai——凡是 "DB 时间列 < LocalDateTime.now()" 的判定
+# （到期 FINISH Job、超时取消扫描）两边差 8 小时全部落空。TZ 与 DB 时区对齐。
+ENV TZ=Asia/Shanghai
 
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

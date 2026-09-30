@@ -23,7 +23,7 @@ REFRESH=$(echo "$LOGIN_BODY" | sed -n 's/.*"refreshToken":"\([^"]*\)".*/\1/p')
 # 取不到 token 必须立刻停：后面 60+ 条断言全都会拿到 40100，
 # 那会表现为"C 端整片坏"，而真因只是这一步的登录没成
 if [ -z "$TOKEN" ]; then
-  echo "❌ C 端登录失败（$GW/api/auth/login，identifier=$CID）—— 冒烟无法继续"; exit 1
+  echo "❌ C 端登录失败（$GW/api/auth/login，identifier=\${CID}）—— 冒烟无法继续"; exit 1
 fi
 [ -n "$REFRESH" ] || echo "⚠️ 登录响应里没有 refreshToken：链路 9 的轮换断言会红" >&2
 AUTH="Authorization: Bearer $TOKEN"
@@ -194,7 +194,7 @@ TS_END=$(date -v+2d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '+2 days' +%Y-%m-%
 # ③：创建/流转是配置类写，只存在于 /api/admin/activities（owning 进程发布，网关转给 activity）
 R=$(curl -s -m 15 -X POST -H "$AAUTH" -H "$JSON" "$GW/api/admin/activities" \
   -d "{\"activityNo\":\"$ACT_NO\",\"name\":\"冒烟活动\",\"startTime\":\"$TS_START\",\"endTime\":\"$TS_END\",\"budgetAmount\":100.00}")
-expect "创建草稿活动（$ACT_NO）" '"status":"DRAFT"' "$R"
+expect "创建草稿活动（\${ACT_NO}）" '"status":"DRAFT"' "$R"
 R=$(curl -s -H "$AUTH" "$GW/api/activity/$ACT_NO/participatable")
 expect "草稿态不可参与" '"data":false' "$R"
 R=$(curl -s -m 15 -X POST -H "$AAUTH" "$GW/api/admin/activities/$ACT_NO/transition?event=APPROVE")
@@ -322,7 +322,7 @@ if [ "$TOTAL" = "?" ] || [ "$REMAIN0" = "?" ]; then
   CONC=0
 else
   CONC=$(( REMAIN0 < 60 ? REMAIN0 : 60 ))
-  [ "$CONC" -gt 0 ] && ok "库存基线可读（total=$TOTAL sold=$SOLD0 余量=$REMAIN0，本轮并发 $CONC）" \
+  [ "$CONC" -gt 0 ] && ok "库存基线可读（total=$TOTAL sold=$SOLD0 余量=\${REMAIN0}，本轮并发 \${CONC}）" \
     || bad "余量为 0，无法做并发防超卖验证；先执行 ./scripts/reset-demo-data.sh" "remain=$REMAIN0"
 fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"; config_cleanup' EXIT
@@ -335,7 +335,7 @@ ACCEPTED=$(grep -l '"code":0' "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' ')
 REJECTED=$(ls "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' '); REJECTED=$((REJECTED-ACCEPTED))
 echo "  受理 $ACCEPTED / 拒绝 ${REJECTED}（售罄或限流）"
 [ "$CONC" = "$((ACCEPTED + REJECTED))" ] \
-  && ok "受理+拒绝守恒等于并发数（$CONC）" || bad "并发请求丢失应答" "accepted=$ACCEPTED rejected=$REJECTED conc=$CONC"
+  && ok "受理+拒绝守恒等于并发数（\${CONC}）" || bad "并发请求丢失应答" "accepted=$ACCEPTED rejected=$REJECTED conc=$CONC"
 # 多轮扫描未终态 token（broker 在 Rosetta 模拟下投递可能有分钟级抖动）
 OK_ALL=1
 PENDING=()
@@ -378,9 +378,9 @@ SUCC=$(grep -ho '"token":"[^"]*"' "$TMP"/*.resp 2>/dev/null | wc -l | tr -d ' ')
 # 恒等式而非增量：超时取消 Job 会在窗口内递减 sold_stock，用"增量==受理数"会偶发假失败；
 # 而 分桶余量 + DB 已售 == 总库存 对取消抖动免疫，且超卖/漏扣/桶与库不一致都会破坏它。
 if [ "$SOLD1" != "?" ] && [ "$REMAIN" != "?" ] && [ "$TOTAL" != "?" ]; then
-  echo "  DB sold_stock: $SOLD0 → $SOLD1；Redis 余量 $REMAIN；总库存 $TOTAL"
+  echo "  DB sold_stock: $SOLD0 → \${SOLD1}；Redis 余量 \${REMAIN}；总库存 $TOTAL"
   [ "$((REMAIN + SOLD1))" -eq "$TOTAL" ] \
-    && ok "账实一致：分桶余量 + DB 已售 == 总库存（$REMAIN + $SOLD1 == $TOTAL）" \
+    && ok "账实一致：分桶余量 + DB 已售 == 总库存（$REMAIN + $SOLD1 == \${TOTAL}）" \
     || bad "库存账实不符（超卖 / 漏扣 / 回补异常）" "remain=$REMAIN sold=$SOLD1 total=$TOTAL"
 else
   bad "读取库存基线或结算数失败" "sold=$SOLD1 remain=$REMAIN total=$TOTAL"
@@ -512,8 +512,8 @@ wait_cfg
 EFFECTIVE=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/config" \
   | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print([x['effectiveValue'] for x in d['entries'] if x['key']=='$SECKILL_LIMIT'][0])" \
   2>/dev/null || echo "?")
-[ "$EFFECTIVE" = "3" ] && ok "另一档（$OTHER_FORM）写 199999 不污染本档 form=$OWN_FORM" \
-  || bad "跨形态覆盖串了：本档生效值=$EFFECTIVE（期望 3）" "other=$OTHER_FORM"
+[ "$EFFECTIVE" = "3" ] && ok "另一档（\${OTHER_FORM}）写 199999 不污染本档 form=$OWN_FORM" \
+  || bad "跨形态覆盖串了：本档生效值=\${EFFECTIVE}（期望 3）" "other=$OTHER_FORM"
 
 # 4) 快照丢失 → 退回本进程 yml 出厂值，网关继续服务（既不过限也不拒绝服务）
 redis_admin DEL mkt:cfg:snapshot:GLOBAL mkt:cfg:version:GLOBAL \
@@ -710,7 +710,7 @@ if [ "$SCHEMA_HITS" = "0" ]; then
 else
   OPS_PENDING=$(python3 -c "import json;print(json.load(open('$OPS'))['data']['backlog']['totalPendingSent'])" 2>/dev/null || echo "?")
   [ "$OPS_PENDING" = "$TOTAL" ] \
-    && ok "④ 的未排空合计与直连 SQL 同式相等（$TOTAL）" \
+    && ok "④ 的未排空合计与直连 SQL 同式相等（\${TOTAL}）" \
     || bad "两处读数不一致：④=$OPS_PENDING 直查=$TOTAL" "见 $OPS"
 fi
 # ③ 通道差异按形态分岔（判据读面板自己说的，不猜环境变量）：
@@ -745,9 +745,9 @@ else
       sleep 2; curl -s -m 25 -H "$AAUTH" "$GW/api/admin/ops" -o "$OPS"
       BROKE=$(ops_mismatch budget)
       if [ -n "$BROKE" ] && [ "$BROKE" -gt "$BASE" ]; then
-        ok "缓存被改错后面板的不符条数涨了（$BASE → $BROKE，不是安静地显示 0）"
+        ok "缓存被改错后面板的不符条数涨了（$BASE → \${BROKE}，不是安静地显示 0）"
       else
-        bad "改错缓存后面板没反应：期望大于 $BASE，实际 $BROKE" "$(head -c 300 "$OPS")"
+        bad "改错缓存后面板没反应：期望大于 \${BASE}，实际 $BROKE" "$(head -c 300 "$OPS")"
       fi
       # 再要求它回到基线：只认"回落到不超过基线"，因为别的抽样项可能被定时任务改动，
       # 钉死等于 BASE 会把环境噪声变成红。
@@ -756,9 +756,9 @@ else
         curl -s -m 25 -H "$AAUTH" "$GW/api/admin/ops" -o "$OPS"
         FIXED=$(ops_mismatch budget)
         if [ -n "$FIXED" ] && [ "$FIXED" -le "$BASE" ]; then
-          ok "重预热后面板回落到基线（$BROKE → $FIXED，④ 只读、③ 才修，这条线是通的）"
+          ok "重预热后面板回落到基线（$BROKE → \${FIXED}，④ 只读、③ 才修，这条线是通的）"
         else
-          bad "重预热落了但面板没回落：期望 ≤$BASE，实际 $FIXED" "$(head -c 300 "$OPS")"
+          bad "重预热落了但面板没回落：期望 ≤\${BASE}，实际 $FIXED" "$(head -c 300 "$OPS")"
         fi
       else
         bad "重预热 30s 内没落地，面板这一条无从判（先查 owning 服务的消费组在不在）" "$RH"
@@ -778,7 +778,7 @@ head2 "链路 8：后台界面（加了界面 ≠ 加了口子；缓存头错了
 UIIDX=/tmp/mkt-smoke-ui.html
 R=$(curl -s -m 15 -o "$UIIDX" -w '%{http_code}' "$GW/ui/")
 [ "$R" = "200" ] && ok "后台首页可打开（200，不带任何 token）" \
-  || bad "后台首页 HTTP $R：ui-route 或白名单没配对" "$(head -c 200 "$UIIDX")"
+  || bad "后台首页 HTTP \${R}：ui-route 或白名单没配对" "$(head -c 200 "$UIIDX")"
 expect "索引页 no-store（缓存了它就会拿旧索引去要新指纹）" \
   'cache-control: no-store' "$(curl -sI -m 15 "$GW/ui/" | tr -d '\r' | tr 'A-Z' 'a-z')"
 # 深链必须回退到索引页：history 路由直接刷新 /ui/audits 不能 404
@@ -797,7 +797,7 @@ expect "界面不给数据开旁路：无凭证打后台读接口仍是 40100" '
   "$(curl -s -m 15 "$GW/api/admin/users")"
 
 head2 "链路 9：消费者身份语义（旧 refresh 重放 = 整条会话作废；登出与改密当场生效）"
-# 这一段刻意留在最后：它会把主 TOKEN 那条会话烧掉，而前面八条链路全在用 $AUTH。
+# 这一段刻意留在最后：它会把主 TOKEN 那条会话烧掉，而前面八条链路全在用 \${AUTH}。
 # 之所以必须有这一段：这些语义单靠单测盖不住——旧实现里"按 refresh 摘要找受害会话"
 # 在轮换之后必然查不到（rotate 是同一行就地换摘要），于是重放只被拒、会话不被吊销，
 # 而当时的 mock 恰好 stub 成"查得到"，两边各自绿着把洞盖住。端到端要断的是
@@ -808,7 +808,7 @@ me_with() { curl -s -m 10 -H "$1" "$GW/api/auth/me"; }
 # 服务侧收到的是残缺 JSON → 40000"请求体不是可解析的 JSON"。本轮实测：同一条命令
 # 拆成变量就好，且失败时每个请求还炸出两条解析错误。顶层赋值（R=$(curl -d "{...}")）
 # 不受影响 —— 这就是仓里其他链路一直写得对、而这一段新代码写错的原因。
-DEMO_AUTH="Authorization: Bearer $TOKEN"      # 注意不能用 $AUTH：链路 1 起它已被 require_consumer 覆写
+DEMO_AUTH="Authorization: Bearer $TOKEN"      # 注意不能用 \${AUTH}：链路 1 起它已被 require_consumer 覆写
 expect "当前身份可读，归属取自签名 token（不是请求体自报）" '"identifier":"demo' "$(me_with "$DEMO_AUTH")"
 R_BODY="{\"refreshToken\":\"$REFRESH\"}"
 ROT=$(curl -s -m 15 -X POST "$GW/api/auth/refresh" -H "$JSON" -d "$R_BODY")
