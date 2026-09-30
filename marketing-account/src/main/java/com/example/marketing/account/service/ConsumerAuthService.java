@@ -125,8 +125,15 @@ public class ConsumerAuthService {
 
     /**
      * 用 refresh 换一对新凭证。refresh token 不是访问凭证：它只能打这一个端点。
+     *
+     * <p><b>P1（2026-09-30 第二轮复审）：这里不能标 @Transactional</b>。方法里的写全是
+     * 单语句 autocommit（revoke 一条 UPDATE + Redis set、events.record 一条 insert、
+     * rotate 一条 CAS UPDATE），没有跨语句原子性需求；而各失败分支都是"先吊销、再抛
+     * BizException"——套上事务后吊销与事件随 RuntimeException 回滚，Redis 半边又因
+     * TTL 按 access 口径算（rotate 不续 expireAt，常态为负被钳 1 秒）几乎立即蒸发，
+     * 净效果是"重放即吊销"什么都没吊销，被盗 refresh 可无限续期。去掉事务后每个写
+     * 即时生效，失败分支的吊销才真正落地。</p>
      */
-    @Transactional
     public TokenPairVO refresh(String refreshToken) {
         String hash = sha256(refreshToken);
         // 已用过的 refresh 再次出现 = 要么被重放、要么被中间人抄了一份。
@@ -142,8 +149,11 @@ public class ConsumerAuthService {
                     ? sessionService.findByJti(pinnedJti)
                     : sessionService.findByRefreshHash(hash);
             if (victim != null) {
+                // P1（2026-09-30 复审）：吊销 TTL 必须按 refresh 寿命算（rotate 不续
+                // expireAt，access 口径在登录 15 分钟后恒为负、被钳 1 秒——Redis 半边
+                // 立即蒸发，等于没吊销）。DB 半边靠方法无事务即时生效。
                 sessionService.revoke(victim.getJti(), "REFRESH_REUSED",
-                        remaining(victim.getExpireAt()));
+                        remainingOfRefresh(victim));
                 events.record("REFRESH_REUSED", victim.getUserId(), victim.getIdentifier(),
                         victim.getJti(), null, null, "REVOKED");
                 log.warn("[account] refresh 重放，会话已吊销 uid={}, jti={}",
@@ -170,7 +180,9 @@ public class ConsumerAuthService {
         }
         ConsumerUserEntity user = userMapper.selectById(session.getUserId());
         if (user == null || !ConsumerLoginPolicy.STATUS_ACTIVE.equals(user.getStatus())) {
-            sessionService.revoke(session.getJti(), "DISABLED", remaining(session.getExpireAt()));
+            // 账号停用：吊销口径同样按 refresh 寿命（access 过期后 refresh 仍可再活
+            // 30 天，那才是这条要堵的通道）
+            sessionService.revoke(session.getJti(), "DISABLED", remainingOfRefresh(session));
             throw BizException.of(ErrorCode.FORBIDDEN, "账号不可用");
         }
 
@@ -285,9 +297,9 @@ public class ConsumerAuthService {
         if (!won) {
             // 输了 CAS：这枚 refresh 已被并发请求轮换。黑名单在 refresh() 入口已查过
             // （写它的人赢的时候会写）——这里赢家的黑名单写入与本请求之间存在窗口，
-            // 直接复用重放处置路径：吊销会话 + 事件留痕。
-            sessionService.revoke(session.getJti(), "REFRESH_REUSED",
-                    java.time.Duration.ofSeconds(properties.getAccessTtlSeconds()));
+            // 直接复用重放处置路径：吊销会话 + 事件留痕。TTL 按 refresh 寿命
+            // （jti 不变，赢家新签的 access 也是同一 jti，会被这个键立即拦下）。
+            sessionService.revoke(session.getJti(), "REFRESH_REUSED", remainingOfRefresh(session));
             events.record("REFRESH_REUSED", user.getId(), user.getIdentifier(), session.getJti(),
                     null, null, "REVOKED");
             log.warn("[account] refresh 并发轮换竞态，按重放吊销会话 uid={}, jti={}",
@@ -376,6 +388,22 @@ public class ConsumerAuthService {
         }
         Duration d = Duration.between(LocalDateTime.now(), until);
         return d.isNegative() || d.isZero() ? Duration.ofSeconds(1) : d;
+    }
+
+    /**
+     * 吊销 TTL 按 <b>refresh 寿命</b>算（P1，2026-09-30 复审）：会话的真正威胁面是
+     * refresh（最长 30 天），access 口径（expireAt，rotate 从不续）在登录 15 分钟后
+     * 恒为负——按它算 TTL 等于吊销键立即蒸发。refreshExpireAt 缺失/已过时退
+     * accessTtl 下限：键至少活一个 access 窗口，配合 DB revoked_at（无事务即时落）兜底。
+     */
+    private Duration remainingOfRefresh(ConsumerSessionEntity session) {
+        if (session.getRefreshExpireAt() != null) {
+            Duration d = Duration.between(LocalDateTime.now(), session.getRefreshExpireAt());
+            if (d.getSeconds() > properties.getAccessTtlSeconds()) {
+                return d;
+            }
+        }
+        return Duration.ofSeconds(properties.getAccessTtlSeconds());
     }
 
     private static String truncate(String value, int max) {

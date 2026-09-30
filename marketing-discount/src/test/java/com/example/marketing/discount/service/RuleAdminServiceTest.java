@@ -176,6 +176,53 @@ class RuleAdminServiceTest {
     }
 
     @Test
+    @DisplayName("P1：requiredTags 含 null/空白元素直接拒（引擎快照构建裸 startsWith 会 NPE）")
+    void nullTagElementRejected() {
+        RuleSaveRequest r = request("PR9009");
+        r.setRequiredTags(java.util.Set.of());
+
+        java.util.Set<String> withNull = new java.util.HashSet<>();
+        withNull.add("DIGITAL");
+        withNull.add(null);
+        r.setRequiredTags(withNull);
+
+        BizException e = assertThrows(BizException.class, () -> service.save(r, null));
+        assertEquals(40000, e.getCode());
+    }
+
+    @Test
+    @DisplayName("P1：乱序阶梯档按门槛升序落库（引擎 bestLadder 是存储顺序最后满足者胜）")
+    void outOfOrderLadderSortedOnPersist() {
+        RuleSaveRequest r = request("PR9010");
+        r.setType(RuleType.LADDER);
+        com.example.marketing.discount.domain.PromoRuleDsl.LadderStep high =
+                new com.example.marketing.discount.domain.PromoRuleDsl.LadderStep();
+        high.setThreshold(new java.math.BigDecimal("300"));
+        high.setDiscountValue(new java.math.BigDecimal("50"));
+        com.example.marketing.discount.domain.PromoRuleDsl.LadderStep low =
+                new com.example.marketing.discount.domain.PromoRuleDsl.LadderStep();
+        low.setThreshold(new java.math.BigDecimal("200"));
+        low.setDiscountValue(new java.math.BigDecimal("20"));
+        // 故意乱序提交：校验段排副本查重放行，落库若存原序，金额 350 时 200 档会覆盖 300 档
+        r.setLadderSteps(java.util.List.of(high, low));
+
+        org.mockito.Mockito.when(mapper.insert(any(PromoRuleEntity.class))).thenReturn(1);
+        service.save(r, null);
+
+        org.mockito.ArgumentCaptor<PromoRuleEntity> captor =
+                org.mockito.ArgumentCaptor.forClass(PromoRuleEntity.class);
+        org.mockito.Mockito.verify(mapper).insert(captor.capture());
+        com.example.marketing.discount.domain.PromoRuleDsl dsl =
+                com.example.marketing.common.util.JsonUtils.parse(
+                        captor.getValue().getRuleJson(), com.example.marketing.discount.domain.PromoRuleDsl.class);
+        java.math.BigDecimal first = dsl.getLadderSteps().get(0).getThreshold();
+        java.math.BigDecimal second = dsl.getLadderSteps().get(1).getThreshold();
+        org.junit.jupiter.api.Assertions.assertTrue(
+                first.compareTo(second) < 0,
+                "落库必须升序（first=" + first + ", second=" + second + "）——存原序则引擎取错档");
+    }
+
+    @Test
     @DisplayName("列表视图带 version：编辑时要拿它当乐观锁期望值")
     void viewCarriesVersion() {
         PromoRuleEntity e = existing("PR9001", 7);

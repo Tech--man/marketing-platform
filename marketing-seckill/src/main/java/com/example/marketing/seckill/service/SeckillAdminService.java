@@ -78,6 +78,12 @@ public class SeckillAdminService {
     /**
      * 改总库存。<b>只有 ONLINE 才重建分桶</b>：
      * 给停用中的活动 force 重置，等于绕过上下线动作悄悄把闸门打开（已售进度也会被冲掉）。
+     *
+     * <p><b>P1（2026-09-30 第二轮复审）：管理写路径禁止整实体回写</b>——消费端对
+     * sold_stock 走 {@code setSql("sold_stock = sold_stock + 1")} 原子自增、不参与
+     * version 协议，这里 {@code updateById(整实体)} 会把加载时的 stale sold_stock 一并
+     * SET 回去（丢更新）；随后 reheat(force) 按失真已售重建分桶，多放名额 = 超卖窗。
+     * 一律 UpdateWrapper 只 set 目标列 + version 条件推进。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     public SeckillActivityEntity updateStock(String activityNo, StockEditRequest body) {
@@ -89,10 +95,16 @@ public class SeckillAdminService {
                     "总库存不能小于已售数（已售 " + sold + "，试图设为 " + body.totalStock() + "）");
         }
         int before = activity.getTotalStock();
-        activity.setTotalStock(body.totalStock());
-        if (activityMapper.updateById(activity) == 0) {
+        int updated = activityMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SeckillActivityEntity>()
+                        .eq("activity_no", activityNo)
+                        .eq("version", activity.getVersion())
+                        .set("total_stock", body.totalStock())
+                        .set("version", activity.getVersion() + 1));
+        if (updated == 0) {
             throw VersionGuard.conflict("秒杀活动");
         }
+        activity.setTotalStock(body.totalStock());
         if (ONLINE.equals(activity.getStatus())) {
             warmUpService.reheat(activityNo, true);
             log.info("[seckill] 库存变更 {} totalStock {} -> {}，分桶已重建",
@@ -107,6 +119,7 @@ public class SeckillAdminService {
     /**
      * 上下线。上线用 {@code force=false}：只补建缺失的桶，
      * 已经在跑的进度不许被这次动作冲掉；下线不碰桶（在途的抢购该让它跑完）。
+     * 写路径同 {@link #updateStock}：只 set 目标列，绝不回写 sold_stock（P1）。
      */
     @Transactional(rollbackFor = Exception.class)
     public SeckillActivityEntity updateStatus(String activityNo, SeckillStatusRequest body) {
@@ -115,10 +128,16 @@ public class SeckillAdminService {
         }
         SeckillActivityEntity activity = getRequiringExists(activityNo);
         VersionGuard.requireEqual(body.version(), activity.getVersion(), "秒杀活动");
-        activity.setStatus(body.status());
-        if (activityMapper.updateById(activity) == 0) {
+        int updated = activityMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SeckillActivityEntity>()
+                        .eq("activity_no", activityNo)
+                        .eq("version", activity.getVersion())
+                        .set("status", body.status())
+                        .set("version", activity.getVersion() + 1));
+        if (updated == 0) {
             throw VersionGuard.conflict("秒杀活动");
         }
+        activity.setStatus(body.status());
         if (ONLINE.equals(body.status())) {
             warmUpService.reheat(activityNo, false);
         }

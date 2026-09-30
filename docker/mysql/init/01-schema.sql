@@ -308,7 +308,7 @@ CREATE TABLE IF NOT EXISTS seckill_order (
     status      VARCHAR(16) NOT NULL COMMENT 'CREATED/PAID/CANCELLED',
     token       VARCHAR(64) NOT NULL COMMENT '抢购排队 token',
     bucket      INT         NULL COMMENT '命中的库存分桶号',
-    active      TINYINT     NOT NULL DEFAULT 1 COMMENT '是否有效单：取消置 0。H7：唯一索引带 active，只约束有效单——取消后允许重抢',
+    active      TINYINT     NULL DEFAULT 1 COMMENT '是否有效单：有效=1，取消置 NULL。H7/P0：唯一索引带 active 且 NULL 不聚合——同一用户可有任意多张取消单，二次取消不再撞索引',
     pay_time    DATETIME    NULL,
     version     INT         NOT NULL DEFAULT 0,
     create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,

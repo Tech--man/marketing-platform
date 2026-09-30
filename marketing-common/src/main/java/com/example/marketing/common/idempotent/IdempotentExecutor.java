@@ -73,7 +73,17 @@ public class IdempotentExecutor {
         try {
             T result = action.get();
             String json = resultType == Void.class ? VOID_RESULT : JsonUtils.toJson(result);
-            markSuccess(bizKey, json);
+            // P2（2026-09-30 第二轮复审）：markSuccess 自身的失败（result_json 超 TEXT、
+            // DB 超时/死锁）绝不落 markFailed——action 已经成功（预扣/消息都完成了），
+            // 标 FAILED 会把"已成功的动作"判成可重试，客户端重试整体重跑 action（对
+            // 领券就是二次预扣）。留在 PROCESSING 让租约接管路径处理（接管者重执行或
+            // 回放，状态机是安全的）；本请求照常把已拿到的结果还给调用方。
+            try {
+                markSuccess(bizKey, json);
+            } catch (RuntimeException markEx) {
+                log.error("[idempotent] markSuccess 写库失败（action 已成功，保留 PROCESSING 交租约接管）"
+                        + " bizKey={}: {}", bizKey, markEx.toString());
+            }
             return result;
         } catch (RuntimeException e) {
             markFailed(bizKey, e.getMessage());

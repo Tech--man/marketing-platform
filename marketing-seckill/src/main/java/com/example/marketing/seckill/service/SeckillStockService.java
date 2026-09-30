@@ -62,7 +62,7 @@ public class SeckillStockService {
      * @return 实际初始化的桶数
      */
     public int warmUp(SeckillActivityEntity activity, List<Integer> bucketStocks) {
-        Duration ttl = Duration.ofSeconds(runtime.boughtMarkTtlSeconds());
+        Duration ttl = bucketTtl(activity);
         int initialized = 0;
         for (int i = 0; i < bucketStocks.size(); i++) {
             Boolean ok = redisTemplate.opsForValue()
@@ -72,26 +72,44 @@ public class SeckillStockService {
                 initialized++;
             }
         }
-        log.info("[seckill] 活动 {} 预热完成：{}/{} 个桶初始化", activity.getActivityNo(),
-                initialized, bucketStocks.size());
+        log.info("[seckill] 活动 {} 预热完成：{}/{} 个桶初始化（桶 TTL={}s）",
+                activity.getActivityNo(), initialized, bucketStocks.size(), ttl.toSeconds());
         return initialized;
     }
 
     /**
-     * 覆盖式重建分桶：逐桶 DEL 后按新配额 SET（保留 TTL）。
+     * 覆盖式重建分桶：逐桶 DEL 后按新配额 SET。
      *
      * <p>只在运营显式改了 total_stock 之后由 {@code reheat(force=true)} 触发 —— 它等于重新开闸，
      * 所以调用方必须先确认活动仍在 ONLINE 窗口内（见 SeckillWarmUpService 的守卫）。</p>
      */
-    public int resetBuckets(String activityNo, List<Integer> bucketStocks) {
-        Duration ttl = Duration.ofSeconds(runtime.boughtMarkTtlSeconds());
+    public int resetBuckets(SeckillActivityEntity activity, List<Integer> bucketStocks) {
+        Duration ttl = bucketTtl(activity);
         for (int i = 0; i < bucketStocks.size(); i++) {
-            String key = stockKey(activityNo, i + 1);
+            String key = stockKey(activity.getActivityNo(), i + 1);
             redisTemplate.delete(key);
             redisTemplate.opsForValue().set(key, String.valueOf(bucketStocks.get(i)), ttl);
         }
-        log.info("[seckill] 活动 {} 覆盖重建 {} 个桶", activityNo, bucketStocks.size());
+        log.info("[seckill] 活动 {} 覆盖重建 {} 个桶（桶 TTL={}s）",
+                activity.getActivityNo(), bucketStocks.size(), ttl.toSeconds());
         return bucketStocks.size();
+    }
+
+    /**
+     * 分桶 TTL（P2，2026-09-30 第二轮复审）：<b>与防重标记 TTL 彻底解耦</b>。
+     * 原实现复用 {@code boughtMarkTtlSeconds}（默认 24h）——种子活动窗口 31 天，
+     * 次日桶整体过期、grab 全量"未预热"拒绝；且那是个<b>在线可调</b>参数（合法下限
+     * 60s），运营把防重标记调小做灰度，库存桶 60 秒后被连带放倒，秒杀直接停摆。
+     * 桶的寿命应该由活动自己决定：覆盖到 endTime + 1h 缓冲；无 endTime 的长尾活动
+     * 给 30 天；下限 1h（活动将结束时新建/重建的桶不至于秒过期）。
+     */
+    static Duration bucketTtl(SeckillActivityEntity activity) {
+        if (activity == null || activity.getEndTime() == null) {
+            return Duration.ofDays(30);
+        }
+        Duration untilEnd = Duration.between(java.time.LocalDateTime.now(), activity.getEndTime())
+                .plusHours(1);
+        return untilEnd.getSeconds() < 3600 ? Duration.ofHours(1) : untilEnd;
     }
 
     /**

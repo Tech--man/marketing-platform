@@ -97,11 +97,15 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
         // 根因 C 降级（2026-09-29 审查）：Redis 异常时退化为"仅验签放行 + 计数告警"，
         // 代价与 Redis 被清空相同（已声明边界：已吊销 token 可用到自然过期，上界 accessTtl）
         // ——用有限降级窗口换"Redis 故障不放大成后台整片 5xx"。恢复即自愈。
+        // P1（2026-09-30 复审）：降级 fallback 只改变判定结果（按未吊销处理），绝不
+        // 在这里 chain.filter——fallback 里转发后管道还会继续走 checkBump，它的降级
+        // 分支再转发一次 = 同一请求上游收两份（管理面写无幂等键，重复副作用）。
+        // 唯一的转发点在管道末端（checkBump 的正常分支）。
         return redis.hasKey(REVOKED_PREFIX + claims.jti())
                 .defaultIfEmpty(false)
                 .onErrorResume(e -> {
                     degraded("revoked-check", e);
-                    return chain.filter(pass(exchange, claims)).then(Mono.just(false));
+                    return Mono.just(false);
                 })
                 .flatMap(revoked -> revoked
                         ? reject(exchange, HttpStatus.UNAUTHORIZED, 40102, "会话已失效，请重新登录")
@@ -114,7 +118,7 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
                 .defaultIfEmpty("")
                 .onErrorResume(e -> {
                     degraded("bump-check", e);
-                    return chain.filter(pass(exchange, claims)).then(Mono.just(""));
+                    return Mono.just("");
                 })
                 .flatMap(bumpedAt -> {
                     if (!bumpedAt.isEmpty() && claims.iat() < Long.parseLong(bumpedAt)) {

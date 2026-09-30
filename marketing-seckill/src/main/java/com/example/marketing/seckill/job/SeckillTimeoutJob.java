@@ -61,10 +61,21 @@ public class SeckillTimeoutJob {
         }
         Map<String, Integer> bucketCache = new HashMap<>();
         for (SeckillOrderEntity order : timeoutOrders) {
-            int buckets = bucketCache.computeIfAbsent(order.getActivityNo(), this::resolveBuckets);
-            if (orderService.cancelTimeout(order, buckets)) {
-                Counter.builder("seckill.order.timeout_cancelled").register(meterRegistry).increment();
-                log.info("[seckill] 超时取消并回补 orderNo={}, activityNo={}", order.getOrderNo(), order.getActivityNo());
+            // P0（2026-09-30 第二轮复审）：逐单隔离。任何一单的取消异常（数据问题、
+            // 残留唯一键冲突等）只能污染它自己——循环外抛会把整轮扫描冲掉，毒单按
+            // (status, create_time) 序靠前时每 5 秒重选重炸，后面所有用户的超时取消
+            // 全部停摆（名额不回补、bought 标记不删、已售不回减）。
+            try {
+                int buckets = bucketCache.computeIfAbsent(order.getActivityNo(), this::resolveBuckets);
+                if (orderService.cancelTimeout(order, buckets)) {
+                    Counter.builder("seckill.order.timeout_cancelled").register(meterRegistry).increment();
+                    log.info("[seckill] 超时取消并回补 orderNo={}, activityNo={}",
+                            order.getOrderNo(), order.getActivityNo());
+                }
+            } catch (Exception e) {
+                Counter.builder("seckill.order.timeout_cancel_failed").register(meterRegistry).increment();
+                log.error("[seckill] 超时取消单笔失败（跳过该单，继续处理其余）orderNo={}, activityNo={}: {}",
+                        order.getOrderNo(), order.getActivityNo(), e.toString());
             }
         }
     }

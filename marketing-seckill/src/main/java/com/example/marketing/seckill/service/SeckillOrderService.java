@@ -62,8 +62,12 @@ public class SeckillOrderService {
                 .eq("id", order.getId())
                 .eq("status", SeckillOrderStatus.CREATED.name())
                 .set("status", SeckillOrderStatus.CANCELLED.name())
-                // H7：释放「一人一单」的占用，让该用户可以重新抢（唯一索引只约束 active=1 的行）
-                .set("active", 0));
+                // H7/P0：释放「一人一单」的占用用 NULL 而不是 0——唯一索引
+                // (activity_no, user_id, active) 不聚合 NULL，同一用户可以有任意
+                // 多张取消单；置 0 时第二次「取消→重抢→再取消」的 UPDATE 会撞
+                // 自己第一张取消单（DuplicateKeyException），超时取消 Job 无逐单
+                // 隔离时毒单会卡死全站取消。
+                .set("active", null));
         if (updated == 0) {
             return false; // 已被支付或已被其他实例取消
         }

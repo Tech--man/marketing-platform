@@ -56,6 +56,17 @@ class ActivityStateMachineTest {
     }
 
     @Test
+    @DisplayName("P2：GRAY 可紧急下线（预案开关在灰度期不能缺席），OFFLINE 后仍可 RE_ONLINE")
+    void grayCanGoOfflineForEmergency() {
+        assertEquals(ActivityStatus.OFFLINE,
+                ActivityStateMachine.next(ActivityStatus.GRAY, ActivityEvent.OFFLINE),
+                "灰度放量中发现缺陷最需要立即下线——原矩阵只留 FINISH/PROMOTE，刹车缺席");
+        // 灰度下线后走 RE_ONLINE 退路（直接回 ONLINE 全量，不再回灰度）
+        assertEquals(ActivityStatus.ONLINE,
+                ActivityStateMachine.next(ActivityStatus.OFFLINE, ActivityEvent.RE_ONLINE));
+    }
+
+    @Test
     @DisplayName("GRAY / ONLINE 可参与，其余状态不可参与")
     void participatableStates() {
         assertTrue(ActivityStatus.GRAY.participatable());

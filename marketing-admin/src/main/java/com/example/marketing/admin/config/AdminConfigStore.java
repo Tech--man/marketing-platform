@@ -90,7 +90,20 @@ public class AdminConfigStore {
         if (updated > 0) {
             return true;
         }
-        return findValue(key, form) == null && expectedVersion == 0L;
+        // P1（2026-09-30 第二轮复审）：行不存在 + expectedVersion==0 是"客户端确认过
+        // 没有覆盖"的首写——必须真的写进去。原实现在这里直接 return true 而没有任何
+        // 写入：调用方照常广播/审计/回 200，配置却根本没落库（脚本首写协议路径静默 no-op）。
+        // INSERT 撞并发首写时按冲突返回 false（41008 语义正确）。
+        if (findRowVersion(key, form) == null && expectedVersion == 0L) {
+            try {
+                jdbc.update("INSERT INTO admin_config (cfg_key, form, cfg_value, version, updated_by, remark) "
+                        + "VALUES (?, ?, ?, ?, ?, ?)", key, form, value, version, by, remark);
+                return true;
+            } catch (DuplicateKeyException raced) {
+                return false;
+            }
+        }
+        return false;
     }
 
     public int delete(String key, String form) {

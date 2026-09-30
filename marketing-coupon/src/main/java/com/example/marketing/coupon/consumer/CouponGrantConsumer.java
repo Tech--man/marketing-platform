@@ -51,6 +51,7 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
 
     private final UserCouponMapper userCouponMapper;
     private final CouponTemplateMapper templateMapper;
+    private final com.example.marketing.coupon.service.CouponStockService stockService;
     private final LocalMessageService localMessageService;
     private final MeterRegistry meterRegistry;
 
@@ -77,7 +78,15 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
         CouponGrantEvent event = JsonUtils.parse(payload, CouponGrantEvent.class);
         // InnoDB 的唯一键冲突只回滚该语句、不中止事务，因此捕获后后续 confirm 仍可提交
         // （落库与确认合成单事务的吞吐理由见类注释）。
-        boolean inserted = insertCoupon(event); // DuplicateKeyException 外抛 → 重投，不 confirm
+        boolean inserted;
+        try {
+            inserted = insertCoupon(event); // DuplicateKeyException 外抛 → 重投，不 confirm
+        } catch (InvalidGrantPayloadException e) {
+            // P1（2026-09-30 复审）：载荷/数据问题重投永远不可愈（同一结局无限重演），
+            // 预扣已在 insertCoupon 内回补。confirm 终结补偿链路，失败面交给计数与日志。
+            localMessageService.confirm(MqTopics.TOPIC_COUPON_GRANT, BizKey.of("grant", event.getRequestId()));
+            return;
+        }
         if (inserted) {
             Counter.builder("coupon.grant.persisted").register(meterRegistry).increment();
         } else {
@@ -109,7 +118,9 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
     private boolean insertCoupon(CouponGrantEvent event) {
         CouponTemplateEntity template = templateMapper.selectById(event.getTemplateId());
         if (template == null) {
-            throw new IllegalStateException("券模板不存在: " + event.getTemplateId());
+            // 模板被删：受理时还在、消费时没了，重投等不回一个已删除的模板——
+            // 归入"不可重试载荷问题"（回补 + 终结），与 DataIntegrityViolation 同款处置
+            throw invalidPayload(event, "券模板不存在: " + event.getTemplateId(), null);
         }
         for (int attempt = 1; ; attempt++) {
             UserCouponEntity coupon = buildCoupon(event, template);
@@ -128,7 +139,42 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
                 Counter.builder("coupon.grant.code_collision").register(meterRegistry).increment();
                 log.warn("[grant-consumer] 券码随机撞码，换码重试 requestId={}, attempt={}/{}",
                         event.getRequestId(), attempt, CODE_COLLISION_RETRY);
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // P1（2026-09-30 复审）：非撞键的完整性违规——载荷超长被截断（requestId
+                // 绕过受理侧校验的存量/异构调用方）、NULL 约束等。重投永远同一个结局，
+                // 此前它会以 120s 一轮无限重投：库存已扣、券永不落库、除日志外零告警面。
+                // catch 顺序必须让子类 DuplicateKeyException 在前。
+                throw invalidPayload(event, "载荷违反数据约束（截断/约束冲突）", e);
             }
+        }
+    }
+
+    /**
+     * 不可重试的载荷/数据问题：回补预扣（受理侧已扣的库存与限领计数），抛
+     * {@link InvalidGrantPayloadException} 让 handle 以终态收线（confirm，不再重投）。
+     */
+    private InvalidGrantPayloadException invalidPayload(CouponGrantEvent event, String reason, Exception cause) {
+        int quantity = event.getQuantity() == null ? 1 : event.getQuantity();
+        try {
+            stockService.rollback(event.getTemplateId(), event.getUserId(), quantity);
+            Counter.builder("coupon.grant.rollback").register(meterRegistry).increment();
+        } catch (RuntimeException rollbackEx) {
+            Counter.builder("coupon.grant.rollback_failed").register(meterRegistry).increment();
+            log.error("[grant-consumer] 坏载荷回补失败（残余差值由 coupon mismatch 暴露）requestId={}: {}",
+                    event.getRequestId(), rollbackEx.toString());
+        }
+        Counter.builder("coupon.grant.invalid_payload").register(meterRegistry).increment();
+        log.error("[grant-consumer] 不可重试的载荷问题，已回补预扣并终结消息 requestId={}, userId={}: {}",
+                event.getRequestId(), event.getUserId(), reason);
+        return cause == null
+                ? new InvalidGrantPayloadException(reason)
+                : new InvalidGrantPayloadException(reason + ": " + cause.getClass().getSimpleName());
+    }
+
+    /** 见 {@link #invalidPayload}——类型即语义：handle 只对它走终态收线，其余异常照旧重投 */
+    static final class InvalidGrantPayloadException extends RuntimeException {
+        InvalidGrantPayloadException(String message) {
+            super(message);
         }
     }
 

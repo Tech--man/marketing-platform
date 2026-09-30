@@ -92,6 +92,11 @@ public class RuleAdminService {
      * 乱序时"最高档"算错，全部直接全量错价。输入侧拒绝比引擎里事后夹取便宜一百倍。
      */
     private void validateValueRanges(RuleSaveRequest request) {
+        // P1（2026-09-30 第二轮复审）：标签集合内禁 null/空白元素——引擎快照构建对
+        // null 元素曾是裸 startsWith（NPE 让全服务 calculate 50000 且无法自愈）。
+        // 第一道防在校验层（本处），RuleSnapshot.build 内还有第二道（跳过）。
+        rejectBlankTags("requiredTags", request.getRequiredTags());
+        rejectBlankTags("excludeTags", request.getExcludeTags());
         if (request.getDiscountRate() != null
                 && (request.getDiscountRate().signum() <= 0
                     || request.getDiscountRate().doubleValue() > 10)) {
@@ -200,11 +205,34 @@ public class RuleAdminService {
         dsl.setThreshold(request.getThreshold());
         dsl.setDiscountValue(request.getDiscountValue());
         dsl.setDiscountRate(request.getDiscountRate());
-        dsl.setLadderSteps(request.getLadderSteps());
+        // P1（2026-09-30 第二轮复审）：阶梯档<b>按门槛升序落库</b>。校验段排序的是副本、
+        // 这里若存原序，引擎 bestLadder 的"存储顺序最后满足者胜"就会在乱序输入时静默
+        // 取错档（[300,200] 金额 350 实得 200 档立减）。校验与存储必须同一份数据。
+        if (request.getLadderSteps() != null && !request.getLadderSteps().isEmpty()) {
+            java.util.List<com.example.marketing.discount.domain.PromoRuleDsl.LadderStep> sorted =
+                    new java.util.ArrayList<>(request.getLadderSteps());
+            sorted.sort(java.util.Comparator.comparing(
+                    s -> s.getThreshold() == null ? java.math.BigDecimal.ZERO : s.getThreshold()));
+            dsl.setLadderSteps(sorted);
+        } else {
+            dsl.setLadderSteps(request.getLadderSteps());
+        }
         dsl.setMutexGroup(request.getMutexGroup());
         dsl.setPriority(request.getPriority());
         dsl.setPerUserLimit(request.getPerUserLimit());
         return dsl;
+    }
+
+    private static void rejectBlankTags(String field, java.util.Set<String> tags) {
+        if (tags == null) {
+            return;
+        }
+        for (String tag : tags) {
+            if (tag == null || tag.isBlank()) {
+                throw BizException.of(ErrorCode.BAD_REQUEST,
+                        field + " 内不能有空标签（null/空白元素会让引擎快照构建 NPE）");
+            }
+        }
     }
 
     private void fill(PromoRuleEntity entity, RuleSaveRequest request, String ruleJson) {

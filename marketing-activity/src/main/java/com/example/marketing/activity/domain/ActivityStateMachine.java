@@ -10,10 +10,16 @@ import java.util.Map;
  *
  * <pre>
  * DRAFT --SUBMIT--> AUDITING --APPROVE--> GRAY --PROMOTE--> ONLINE --OFFLINE--> OFFLINE
- *   ^                  |                                     ^         |
- *   +-----REJECT-------+                                     +--RE_ONLINE+
- * ONLINE / GRAY / OFFLINE --FINISH--> FINISHED（终态）
+ *   ^                  |                    |               ^ ^     |         |
+ *   +-----REJECT-------+                    |   GRAY 紧急下线 | |     +--RE_ONLINE+
+ *                                          +---OFFLINE------&gt;+-+-+               |
+ * ONLINE / GRAY / OFFLINE --FINISH--> FINISHED（终态）&lt;---------------------------+
  * </pre>
+ *
+ * <p>GRAY 可 OFFLINE（P2，2026-09-30 第二轮复审）：OFFLINE 是"预案开关"，灰度放量中
+ * 发现资损缺陷时最需要立即下线的恰恰是 GRAY 阶段——原矩阵只给 GRAY 留了
+ * PROMOTE/FINISH（FINISH 不可逆、丢掉 RE_ONLINE 退路；PROMOTE 反而扩大放量），
+ * 紧急刹车在最需要它的时刻缺席。</p>
  */
 public final class ActivityStateMachine {
 
@@ -24,6 +30,7 @@ public final class ActivityStateMachine {
                     ActivityEvent.REJECT, ActivityStatus.DRAFT),
             ActivityStatus.GRAY, Map.of(
                     ActivityEvent.PROMOTE, ActivityStatus.ONLINE,
+                    ActivityEvent.OFFLINE, ActivityStatus.OFFLINE,
                     ActivityEvent.FINISH, ActivityStatus.FINISHED),
             ActivityStatus.ONLINE, Map.of(
                     ActivityEvent.OFFLINE, ActivityStatus.OFFLINE,

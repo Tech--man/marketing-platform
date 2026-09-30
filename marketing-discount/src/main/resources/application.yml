@@ -60,7 +60,7 @@ marketing:
 logging:
   # W12：印网关注入的 traceId（无头直连时为空，日志照常）——跨服务排障的钥匙
   pattern:
-    level: "%5p [${traceId:-}]"
+    level: "%5p [%X{traceId:-}]"
   level:
     com.example.marketing: INFO
 

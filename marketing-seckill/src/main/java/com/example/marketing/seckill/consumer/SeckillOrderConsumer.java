@@ -126,34 +126,60 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
         try {
             orderMapper.insert(order);
         } catch (DuplicateKeyException e) {
-            // 重复购买：幂等回放已有订单
+            // 撞唯一键：先按「有效单」口径查（新索引形状下撞的必是 active=1 的行）。
+            // 不带 active 过滤会命中「一张取消单 + 一张有效单」两行 → selectOne 抛
+            // TooManyResults → 外层 catch 写 FAIL 覆盖先前 SUCCESS（2026-09-30 复审 P1）。
             SeckillOrderEntity existing = orderMapper.selectOne(
                     new LambdaQueryWrapper<SeckillOrderEntity>()
                             .eq(SeckillOrderEntity::getActivityNo, event.getActivityNo())
-                            .eq(SeckillOrderEntity::getUserId, event.getUserId()));
+                            .eq(SeckillOrderEntity::getUserId, event.getUserId())
+                            .eq(SeckillOrderEntity::getActive, 1));
             if (existing == null) {
-                // 唯一索引撞上了、本事务的快照里却查不到 = 撞上一个尚未提交的并发插入
-                // （同一消息被重复投递时会出现）。此刻既不能当成功也不能当失败，抛回去重投。
+                // 撞了键却查不到有效单，两种形状：撞上未提交的并发插入（在途重复，
+                // 抛回去重投），或 schema 被回退成旧两列索引、撞上的是取消单（走
+                // 下面的取消防御分支）。用全量行区分。
+                SeckillOrderEntity cancelled = orderMapper.selectList(
+                                new LambdaQueryWrapper<SeckillOrderEntity>()
+                                        .eq(SeckillOrderEntity::getActivityNo, event.getActivityNo())
+                                        .eq(SeckillOrderEntity::getUserId, event.getUserId()))
+                        .stream()
+                        .filter(r -> SeckillOrderStatus.CANCELLED.name().equals(r.getStatus()))
+                        .findFirst().orElse(null);
+                if (cancelled != null) {
+                    // H7 防御分支：正常流程不该走到这里——留它是防 schema 被回退成
+                    // 旧索引。那时把已取消单号当 SUCCESS 回放，用户会拿着一个永远
+                    // 付不了款的单号，且本次重扣的名额无主：回补名额、写 FAIL。
+                    Counter.builder("seckill.order.cancelled_replay_guard").register(meterRegistry).increment();
+                    log.warn("[seckill-consumer] 幂等回放撞上已取消订单（旧索引形状？），回补本次名额并写 FAIL "
+                            + "activityNo={}, userId={}, oldOrder={}", event.getActivityNo(),
+                            event.getUserId(), cancelled.getOrderNo());
+                    stockService.refill(event.getActivityNo(), event.getUserId(),
+                            event.getBucket() == null ? 1 : event.getBucket(), activity.getBuckets());
+                    stockService.saveResult(event.getToken(), "FAIL:ORDER_CANCELLED_REGRAB");
+                    return;
+                }
                 Counter.builder("seckill.order.inflight_duplicate").register(meterRegistry).increment();
                 log.warn("[seckill-consumer] 撞上在途重复下单，交给重投 activityNo={}, userId={}, token={}",
                         event.getActivityNo(), event.getUserId(), event.getToken());
                 throw BizException.of(ErrorCode.DUPLICATE_REQUEST);
             }
-            if (SeckillOrderStatus.CANCELLED.name().equals(existing.getStatus())) {
-                // H7 防御分支：唯一索引已改为只约束有效单（带 active），正常流程不该走到这里——
-                // 留这条防御是防 schema 被回退成旧索引。那时把已取消单号当 SUCCESS 回放，
-                // 用户会拿着一个永远付不了款的单号，且本次重扣的名额无主：回补名额、写 FAIL。
-                Counter.builder("seckill.order.cancelled_replay_guard").register(meterRegistry).increment();
-                log.warn("[seckill-consumer] 幂等回放撞上已取消订单，回补本次名额并写 FAIL "
-                        + "activityNo={}, userId={}, oldOrder={}", event.getActivityNo(),
-                        event.getUserId(), existing.getOrderNo());
-                stockService.refill(event.getActivityNo(), event.getUserId(),
-                        event.getBucket() == null ? 1 : event.getBucket(), activity.getBuckets());
-                stockService.saveResult(event.getToken(), "FAIL:ORDER_CANCELLED_REGRAB");
+            if (existing.getToken() != null && existing.getToken().equals(event.getToken())) {
+                // 真重复投递（同一条消息）：幂等回放同一张单
+                stockService.saveResult(event.getToken(), "SUCCESS:" + existing.getOrderNo());
+                log.info("[seckill-consumer] 重复下单幂等忽略 token={}, orderNo={}",
+                        event.getToken(), existing.getOrderNo());
                 return;
             }
-            stockService.saveResult(event.getToken(), "SUCCESS:" + existing.getOrderNo());
-            log.info("[seckill-consumer] 重复下单幂等忽略 token={}, orderNo={}", event.getToken(), existing.getOrderNo());
+            // token 不同 = bought 标记过期后的重抢（用户已持有活单，TTL 错配见
+            // SeckillStockService）。本次 Lua 又扣了一个名额且无主——回补、写 FAIL，
+            // 不能回放旧单号装作成功（2026-09-30 复审 P1：此前每用户每天净烧 1 名额）。
+            Counter.builder("seckill.order.active_order_regrab_guard").register(meterRegistry).increment();
+            log.warn("[seckill-consumer] bought 标记过期后重抢已持有活单，回补本次名额并写 FAIL "
+                            + "activityNo={}, userId={}, liveOrder={}", event.getActivityNo(),
+                    event.getUserId(), existing.getOrderNo());
+            stockService.refill(event.getActivityNo(), event.getUserId(),
+                    event.getBucket() == null ? 1 : event.getBucket(), activity.getBuckets());
+            stockService.saveResult(event.getToken(), "FAIL:ACTIVE_ORDER_EXISTS");
             return;
         }
         // 已售数原子 +1（SQL 自增避免乐观锁冲突风暴）

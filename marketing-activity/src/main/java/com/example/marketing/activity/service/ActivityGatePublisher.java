@@ -95,19 +95,27 @@ public class ActivityGatePublisher {
         }
     }
 
-    /** 单活动即时发布：状态机流转后调用，让下线/暂停在一个周期内生效而不是等回源 */
+    /** 单活动即时发布：状态机流转后调用，让下线/暂停在一个周期内生效而不是等回源。
+     *  <b>自身吞异常</b>（P2，2026-09-30 第二轮复审）：它跑在 transition/updateGray 的
+     *  事务边界内，Redis 抖动时外抛会把已校验通过的状态变更一起回滚——"下线预案执行
+     *  失败"恰恰是最不该发生的路径。失败留给周期全量重写兜底（DB 才是权威）。 */
     void publishNow(String activityNo) {
-        ActivityEntity activity = activityMapper.selectOne(
-                Wrappers.<ActivityEntity>lambdaQuery().eq(ActivityEntity::getActivityNo, activityNo));
-        if (activity == null) {
-            return;
+        try {
+            ActivityEntity activity = activityMapper.selectOne(
+                    Wrappers.<ActivityEntity>lambdaQuery().eq(ActivityEntity::getActivityNo, activityNo));
+            if (activity == null) {
+                return;
+            }
+            redis.opsForValue().set(STATUS_KEY_PREFIX + activityNo,
+                    activity.getStatus() == null ? "" : activity.getStatus());
+            String gray = (activity.getGrayPercent() == null ? GRAY_NO_RULE
+                    : String.valueOf(activity.getGrayPercent()))
+                    + "|"
+                    + (activity.getGrayWhitelist() == null ? "" : activity.getGrayWhitelist());
+            redis.opsForValue().set(GRAY_KEY_PREFIX + activityNo, gray);
+        } catch (RuntimeException e) {
+            log.warn("[activity-gate] 即时发布失败（DB 已提交，等下轮全量重写收敛）activityNo={}: {}",
+                    activityNo, e.toString());
         }
-        redis.opsForValue().set(STATUS_KEY_PREFIX + activityNo,
-                activity.getStatus() == null ? "" : activity.getStatus());
-        String gray = (activity.getGrayPercent() == null ? GRAY_NO_RULE
-                : String.valueOf(activity.getGrayPercent()))
-                + "|"
-                + (activity.getGrayWhitelist() == null ? "" : activity.getGrayWhitelist());
-        redis.opsForValue().set(GRAY_KEY_PREFIX + activityNo, gray);
     }
 }

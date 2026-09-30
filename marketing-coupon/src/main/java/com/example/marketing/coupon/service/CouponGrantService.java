@@ -70,7 +70,9 @@ public class CouponGrantService {
         if (coupon != null) {
             return GrantResultVO.success(coupon.getCouponCode());
         }
-        if (idempotentExecutor.isDone("grant:" + requestId)) {
+        // P2（2026-09-30 复审）：手拼 "grant:" 会绕过 BizKey 的 trim/折叠——requestId
+        // 带空白时受理键与查询键不一致，isDone 永远 false。统一拼法。
+        if (idempotentExecutor.isDone(BizKey.of("grant", requestId))) {
             // 受理成功但券未落库：仍在削峰队列中
             return GrantResultVO.processing();
         }
@@ -112,18 +114,35 @@ public class CouponGrantService {
                         template.getId(), template.getActivityNo(), 1);
                 // 与幂等表同一个键（BizKey 统一拼法），消费端 confirm 能从事件里原样还原
                 String msgKey = BizKey.of("grant", request.requestId());
+                boolean recorded;
                 try {
-                    localMessageService.recordIfAbsent(MqTopics.TOPIC_COUPON_GRANT, MqTopics.TAG_GRANT,
+                    recorded = localMessageService.recordIfAbsent(MqTopics.TOPIC_COUPON_GRANT, MqTopics.TAG_GRANT,
                             msgKey, JsonUtils.toJson(event));
+                } catch (RuntimeException e) {
+                    // A1/A2（2026-09-29 审查，根因 A：预扣后无归还原语）：登记本身的
+                    // 失败（未落任何消息行）必须归还预扣——否则幂等键标 FAILED、客户端
+                    // 重试整体重跑 action 再扣一次（1 张券吃 2 份库存 + 2 次限领）。
+                    // 归还后重试从头来，预扣最多生效一次。
+                    rollbackPreDeduct(template.getId(), request.userId(), 1);
+                    throw e;
+                }
+                if (!recorded) {
+                    // P1（2026-09-30 第二轮复审）：这条消息此前已登记过（上次受理留下的
+                    // PENDING/SENT/CONFIRMED 行还在）。券的落库由那条消息负责，本次重跑
+                    // 刚做的预扣是多余的一份——归还，防止"一张券吃两份库存"；直接按
+                    // 受理成功返回（重投/补偿定时器会把券送到位）。
+                    rollbackPreDeduct(template.getId(), request.userId(), 1);
+                    Counter.builder("coupon.grant.replay_backfill").register(meterRegistry).increment();
+                    return GrantTicket.accepted(request.requestId());
+                }
+                try {
                     localMessageService.publish(MqTopics.TOPIC_COUPON_GRANT, msgKey);
                 } catch (RuntimeException e) {
-                    // A1/A2（2026-09-29 审查，根因 A：预扣后无归还原语）：预扣之后、
-                    // 消息登记/投递之前的失败必须归还预扣——否则幂等键标 FAILED、客户端
-                    // 重试整体重跑 action 再扣一次（1 张券吃 2 份库存 + 2 次限领，第二次
-                    // 多半直接 EXCEED_LIMIT，用户一张都拿不到）。归还后重试从头来，
-                    // 预扣最多生效一次。进程在两步之间被 kill 的残余窗口 try/catch 管不到，
-                    // 由 ④ 的 coupon mismatch 恒等式兜底可见（残留为库存偏少方向）。
-                    rollbackPreDeduct(template.getId(), request.userId(), 1);
+                    // P1（2026-09-30 第二轮复审）：登记已成功，publish 的 DB 异常（load/
+                    // scheduleRetry 自身抛错）绝不归还预扣——PENDING 行 10 秒内必被补偿
+                    // 定时器投出去出券，归还 = 相对 total_stock 超发一张（原实现把这段也
+                    // 并进回滚 catch，语义过宽）。上抛让幂等层标 FAILED，客户端重试会走
+                    // 上面 !recorded 分支归还重跑多扣的那份并直接 accepted，净预扣一份。
                     throw e;
                 }
                 Counter.builder("coupon.grant.accepted").register(meterRegistry).increment();

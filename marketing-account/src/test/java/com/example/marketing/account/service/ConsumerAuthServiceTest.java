@@ -214,7 +214,16 @@ class ConsumerAuthServiceTest {
                 "旧 refresh 第二次出现必须被拒");
 
         // 这两行就是那条承诺本身：按黑名单里的 jti 吊销，并且留下事件
-        verify(sessionService).revoke(eq("jti-live"), eq("REFRESH_REUSED"), any(Duration.class));
+        org.mockito.ArgumentCaptor<Duration> revokeTtl =
+                org.mockito.ArgumentCaptor.forClass(Duration.class);
+        verify(sessionService).revoke(eq("jti-live"), eq("REFRESH_REUSED"), revokeTtl.capture());
+        // P1（2026-09-30 复审）：吊销 TTL 必须按 refresh 寿命算（liveSession 的
+        // refreshExpireAt=+30 天、expireAt=+10 分钟）。按 access 口径（10 分钟=600s
+        // < accessTtl 900s）吊销键几乎立即失效，"重放即吊销"被架空——这条断言
+        // 同时钉住方法无 @Transactional（有事务时 DB 吊销随 BizException 回滚，
+        // mock 层验不出来，但 TTL 口径是同一根因的可见面）。
+        assertTrue(revokeTtl.getValue().getSeconds() > 900,
+                "吊销 TTL 应为 refresh 寿命（约 30 天），实际 " + revokeTtl.getValue());
         verify(events).record(eq("REFRESH_REUSED"), eq(70001L), eq("demo"), eq("jti-live"),
                 any(), any(), eq("REVOKED"));
     }

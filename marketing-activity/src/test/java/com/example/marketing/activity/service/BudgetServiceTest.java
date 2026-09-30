@@ -259,4 +259,42 @@ class BudgetServiceTest {
     void registersAsBudgetType() {
         assertEquals("budget", service.type());
     }
+
+    @Test
+    @DisplayName("P1：缺键分支的 SET 失败 → 回删占位流水并抛 50000，不留孤儿 DEDUCT")
+    void missingKeySetFailureRollsBackFlow() {
+        // 缺键（evalDeduct 返回 -1）后对账写回（SET）撞 Redis 故障——原实现这一段
+        // 在 try 之外：占位流水留存 + Redis 未扣，重试命中 REPLAYED 假成功，Redis
+        // 恒高于权威值（超支方向，H4 同根因的孪生窗口）。
+        org.springframework.data.redis.core.StringRedisTemplate redisDown =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.mockito.Mockito.when(redisDown.execute(
+                        org.mockito.ArgumentMatchers.<org.springframework.data.redis.core.script.RedisScript<Long>>any(),
+                        org.mockito.ArgumentMatchers.anyList(),
+                        org.mockito.ArgumentMatchers.<Object>any()))
+                .thenReturn(-1L); // Lua 判缺键
+        @SuppressWarnings("unchecked")
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        org.mockito.Mockito.when(redisDown.opsForValue()).thenReturn(ops);
+        org.mockito.Mockito.doThrow(new RuntimeException("connection refused"))
+                .when(ops).set(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyString());
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        org.mockito.Mockito.when(jdbc.update(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(1); // 占位 INSERT 成功
+        // 对账查询（computeRemainCents 走 jdbc.queryForList）默认返回空列表 → 对账值 0
+        BudgetService broken = new BudgetService(redisDown, jdbc, mapperReturning("100.00"));
+
+        BizException e = assertThrows(BizException.class,
+                () -> broken.deduct("ACT2026001", 100L, "bk-missing-key-set-down"));
+
+        assertEquals(50000, e.getCode());
+        org.mockito.Mockito.verify(jdbc).update(
+                org.mockito.ArgumentMatchers.contains("DELETE FROM budget_flow"),
+                org.mockito.ArgumentMatchers.eq("ACT2026001"),
+                org.mockito.ArgumentMatchers.eq("bk-missing-key-set-down"));
+    }
 }

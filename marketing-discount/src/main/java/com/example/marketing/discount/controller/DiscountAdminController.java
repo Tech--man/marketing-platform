@@ -52,16 +52,19 @@ public class DiscountAdminController {
     }
 
     /**
-     * 按 ruleNo upsert：带 version 是编辑、不带是新建（不需要两个端点）。
-     * 只有 admin 能改规则 —— operator 可写运维动作，但规则是业务配置（与 ⑤ 的阈值同一把尺子）。
+     * 按 ruleNo upsert：body.version 非空是编辑（与库中 version 比对，41008 守卫）、
+     * 空是新建。只有 admin 能改规则 —— operator 可写运维动作，但规则是业务配置
+     * （与 ⑤ 的阈值同一把尺子）。
+     * <p>P1（2026-09-30 第二轮复审）：version 原挂在 query param 上而 UI 从不携带，
+     * 既有规则的编辑/启停在管理界面恒 41008——并入 body 与券/活动同形（弃用 query 通道，
+     * UI 是唯一调用方；冒烟只打 GET）。</p>
      */
     @PostMapping("/rules")
     public Result<RuleView> save(@Valid @RequestBody RuleSaveRequest body,
-                                 @RequestParam(required = false) Integer version,
                                  HttpServletRequest request) {
         AdminPrincipal actor = identity.require(request, AdminRoles.ADMIN);
         RuleView before = ruleAdminService.findView(body.getRuleNo());
-        RuleView after = ruleAdminService.save(body, version);
+        RuleView after = ruleAdminService.save(body, body.getVersion());
         audit(actor, before == null ? "discount.rule.create" : "discount.rule.update",
                 body.getRuleNo(), request,
                 "from=" + (before == null ? "" : summaryOf(before))

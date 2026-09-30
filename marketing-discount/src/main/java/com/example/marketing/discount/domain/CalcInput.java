@@ -25,8 +25,11 @@ public class CalcInput {
     private String activityNo;
     /** 用户标签（会员等级、人群包等），与规则 requiredTags 匹配 */
     private Set<String> userTags;
-    /** 行项：@Valid 是逐行校验的开关，缺它则 CalcItem 上的约束全都形同不存在 */
+    /** 行项：@Valid 是逐行校验的开关，缺它则 CalcItem 上的约束全都形同不存在。
+     *  P1（2026-09-30 第二轮复审）：必须限行数——引擎位图构建是 O(items×tags×words)，
+     *  无上限的巨购物车可被单账号打满 8 线程计算池，全员降级原价。 */
     @NotEmpty(message = "购物车不能为空")
+    @jakarta.validation.constraints.Size(max = 200, message = "购物车最多 200 行")
     @Valid
     private List<CalcItem> items;
 

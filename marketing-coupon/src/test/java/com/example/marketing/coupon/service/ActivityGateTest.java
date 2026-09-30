@@ -109,4 +109,36 @@ class ActivityGateTest {
         assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70001L),
                 "灰度形状不认识可以放行，状态键的强制不受影响");
     }
+
+    @Test
+    @DisplayName("P1：GRAY 状态 = 可参与——命中的用户放行、未命中的拒（对齐 participatable 含 GRAY）")
+    void grayStatusParticipatesViaGrayRule() {
+        status("GRAY");
+        gray("40|");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 100L),
+                "灰度放量阶段命中用户必须能领（原实现只认 ONLINE，灰度期全拒）");
+        BizException e = assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70041L));
+        assertEquals(41000, e.getCode());
+    }
+
+    @Test
+    @DisplayName("P1：GRAY + 白名单直通——内测账号在灰度期可用")
+    void grayStatusWhitelistPasses() {
+        status("GRAY");
+        gray("0|70001");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L));
+    }
+
+    @Test
+    @DisplayName("P1：白名单带空格（activity 侧容错接受的格式）→ 逐项 trim，不炸全活动")
+    void whitelistWithSpacesTolerated() {
+        status("ONLINE");
+        gray("0| 70001 , 70002 ");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70002L),
+                "带空格的 CSV 与 GrayRuleCache 同口径 trim，不能 NFE→50000");
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70003L));
+    }
 }

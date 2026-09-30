@@ -22,8 +22,7 @@ class GlobalExceptionHandlerTest {
     @Test
     @DisplayName("业务异常原样带上自己的码与文案")
     void bizExceptionKeepsItsCode() {
-        Result<Void> r = handler.handleBiz(BizException.of(ErrorCode.BAD_REQUEST, "值非法"),
-                new org.springframework.mock.web.MockHttpServletResponse());
+        Result<Void> r = handler.handleBiz(BizException.of(ErrorCode.BAD_REQUEST, "值非法")).getBody();
         assertEquals(ErrorCode.BAD_REQUEST.getCode(), r.getCode());
         assertEquals("值非法", r.getMessage());
     }
@@ -38,11 +37,11 @@ class GlobalExceptionHandlerTest {
                 {40000, 200}, {40400, 200}, {41000, 200}, {50000, 200},
         };
         for (int[] c : cases) {
-            org.springframework.mock.web.MockHttpServletResponse response =
-                    new org.springframework.mock.web.MockHttpServletResponse();
-            handler.handleBiz(BizException.of(codeOf(c[0]), "x"), response);
-            assertEquals(c[1], response.getStatus(),
+            org.springframework.http.ResponseEntity<Result<Void>> entity =
+                    handler.handleBiz(BizException.of(codeOf(c[0]), "x"));
+            assertEquals(c[1], entity.getStatusCode().value(),
                     "code " + c[0] + " 应映射 HTTP " + c[1] + "（body.code 契约不变）");
+            assertEquals(c[0], entity.getBody().getCode(), "body.code 契约不变");
         }
     }
 

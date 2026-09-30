@@ -49,6 +49,9 @@ function bodyFrom(row, patch) {
     mutexGroup: row.mutexGroup ?? null,
     priority: row.priority,
     status: row.status,
+    // P1（2026-09-30 复审）：编辑/启停必带行上 version——后端 VersionGuard 对既有规则
+    // 要求 version 严格相等，不带就恒 41008"已被他人修改"。新建（行还不存在）不带。
+    version: row.version ?? null,
     ...dsl,
     ...patch,
   }
@@ -93,6 +96,7 @@ async function save() {
       mutexGroup: f.mutexGroup || null,
       priority: Number(f.priority),
       status: f.status,
+      version: editor.value?.row?.version ?? null, // 编辑必带行上 version，新建为 null
       ...dsl,
     })
     notice.value = '规则已 upsert，并 bump 了版本号：各实例秒级刷到本地快照'

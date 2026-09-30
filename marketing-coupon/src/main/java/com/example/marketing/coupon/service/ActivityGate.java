@@ -6,9 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.Arrays;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * 领券前的活动参与闸（2026-09-29 审查第五批）：校验父活动的状态与灰度。
@@ -36,14 +34,19 @@ public class ActivityGate {
     }
 
     /**
-     * @throws BizException 活动非 ONLINE（41007）或灰度不命中（41000，文案区分）
+     * @throws BizException 活动不可参与（41007）或灰度不命中（41000，文案区分）
      */
     public void checkGrantable(String activityNo, Long userId) {
         if (activityNo == null || activityNo.isBlank()) {
             return; // 模板没挂活动：领券资格由模板自身状态/时间窗控制，本闸不管
         }
         String status = redis.opsForValue().get("activity:gate:status:" + activityNo);
-        if (status != null && !"ONLINE".equals(status)) {
+        // P1（2026-09-30 第二轮复审）：可参与 = ONLINE <b>或 GRAY</b>——activity 侧
+        // ActivityStatus.participatable() 本来就含 GRAY（状态机的正规路径
+        // AUDITING--APPROVE--&gt;GRAY），只认 ONLINE 等于灰度放量阶段对所有用户
+        // （含白名单内测账号）关闭领券。GRAY 继续走下面的灰度命中判定放量；
+        // OFFLINE/FINISHED/DRAFT/AUDITING 照旧拒绝。
+        if (status != null && !"ONLINE".equals(status) && !"GRAY".equals(status)) {
             throw BizException.of(ErrorCode.ACTIVITY_NOT_ONLINE,
                     "活动 " + activityNo + " 当前状态 " + status + "，不可参与");
         }
@@ -59,10 +62,22 @@ public class ActivityGate {
         if ("-".equals(percentPart)) {
             return; // 未配灰度 = 全量（与 GrayService 的语义一致）
         }
-        Set<Long> whitelist = Arrays.stream(gray.substring(sep + 1).split(","))
-                .filter(s -> !s.isBlank())
-                .map(Long::parseLong)
-                .collect(Collectors.toSet());
+        // P1（2026-09-30 第二轮复审）：白名单解析与 activity 侧 GrayRuleCache.parseWhitelist
+        // 同口径——逐项 trim + 坏项跳过。原实现裸 parseLong："70001, 70002"（自家测试都
+        // 用的带空格格式，activity 侧容错接受）会让该活动<b>所有</b>领券请求 NFE→50000。
+        Set<Long> whitelist = new java.util.HashSet<>();
+        for (String part : gray.substring(sep + 1).split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            try {
+                whitelist.add(Long.parseLong(trimmed));
+            } catch (NumberFormatException bad) {
+                log.warn("[activity-gate] 灰度白名单非数字项已跳过（与 GrayRuleCache 同口径）: {}",
+                        trimmed);
+            }
+        }
         if (userId != null && whitelist.contains(userId)) {
             return;
         }

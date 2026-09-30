@@ -124,6 +124,10 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
      * 不再是整个入口 5xx。代价与 Redis 被清空时相同（已声明的已知边界）：已吊销的
      * access token 可用到自然过期，上界 accessTtl（15 分钟）——用有限时间的降级窗口
      * 换"Redis 故障不放大成全站不可用"。恢复即自愈。</p>
+     *
+     * <p><b>P1（2026-09-30 复审）</b>：降级 fallback 只返回判定值（按未吊销/无 bump 处理），
+     * 绝不在 fallback 里 chain.filter——两跳各自降级转发一次 = 同一请求上游收两份
+     * （C 端交易写有幂等键兜底，但仍是重复流量）。唯一转发点在管道末端。</p>
      */
     private Mono<Void> checkRevocation(ServerWebExchange exchange, GatewayFilterChain chain,
                                        ConsumerClaims claims, String path) {
@@ -131,7 +135,7 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
                 .defaultIfEmpty(false)
                 .onErrorResume(e -> {
                     degraded("revoked-check", e);
-                    return chain.filter(pass(exchange, claims)).then(Mono.just(false));
+                    return Mono.just(false);
                 })
                 .flatMap(revoked -> revoked
                         ? reject(exchange, HttpStatus.UNAUTHORIZED, 40102, "会话已失效，请重新登录")
@@ -144,7 +148,7 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
                 .defaultIfEmpty("")
                 .onErrorResume(e -> {
                     degraded("bump-check", e);
-                    return chain.filter(pass(exchange, claims)).then(Mono.just(""));
+                    return Mono.just("");
                 })
                 .flatMap(bumpedAt -> {
                     if (!bumpedAt.isEmpty() && claims.iat() < Long.parseLong(bumpedAt)) {

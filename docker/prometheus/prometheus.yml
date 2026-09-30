@@ -25,6 +25,7 @@ scrape_configs:
           - host.docker.internal:8083
           - host.docker.internal:8084
           - host.docker.internal:8086
+          - host.docker.internal:8087
         labels:
           env: local
 
@@ -44,6 +45,10 @@ scrape_configs:
           - marketing-discount:8083
           - marketing-seckill:8084
           - marketing-admin:8086
+          - marketing-account:8087
         labels:
           env: full-container
+
+# 8087 补齐（2026-09-30 第二轮复审 F-03）：marketing-account 此前在两个 job 里都缺失——
+# 账号进程的指标与 up 探活是盲区，与 docker-compose.full-app.yml OPS_T_ACCOUNT 的运维面不对齐。
 

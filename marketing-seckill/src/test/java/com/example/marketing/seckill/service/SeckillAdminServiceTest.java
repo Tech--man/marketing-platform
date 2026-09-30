@@ -1,5 +1,6 @@
 package com.example.marketing.seckill.service;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.example.marketing.common.cache.CacheReheater;
 import com.example.marketing.common.exception.BizException;
 import com.example.marketing.seckill.config.SeckillRuntimeConfig;
@@ -12,16 +13,19 @@ import com.example.marketing.seckill.infrastructure.mapper.SeckillActivityMapper
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -32,6 +36,10 @@ import static org.mockito.Mockito.when;
  *
  * <p>两条"不许顺手开闸"的约束是这组端点最要紧的部分：分桶键一旦按新总量重建，
  * 就等于把闸门重新打开——已售进度、停用中的活动、刚建好还没配置完的活动都不该被这样放行。</p>
+ *
+ * <p>P1 回归（2026-09-30 第二轮复审）：管理写路径只 set 目标列——消费端对 sold_stock
+ * 是 setSql 原子自增、不参与 version 协议，整实体 updateById 会把 stale sold_stock
+ * 回写回去（丢更新 → reheat(force) 按失真已售放大余量 = 超卖窗）。</p>
  */
 class SeckillAdminServiceTest {
 
@@ -45,6 +53,8 @@ class SeckillAdminServiceTest {
         service = new SeckillAdminService(mapper, warmUpService, runtime);
         when(warmUpService.reheat(anyString(), anyBoolean()))
                 .thenReturn(new CacheReheater.Result("seckill-stock", "SK9009", 0L, 0L, "公式"));
+        // P1 后管理写路径统一走 update(null, wrapper)（只 set 目标列）
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
     }
 
     private SeckillActivityEntity activity(String status, int total, int sold, int version) {
@@ -63,22 +73,33 @@ class SeckillAdminServiceTest {
         return a;
     }
 
+    @SuppressWarnings("unchecked")
+    private String capturedSqlSet(java.util.function.Consumer<Object> call) {
+        ArgumentCaptor<Wrapper<SeckillActivityEntity>> captor =
+                ArgumentCaptor.forClass(Wrapper.class);
+        call.accept(null);
+        verify(mapper).update(isNull(), captor.capture());
+        return ((com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SeckillActivityEntity>)
+                captor.getValue()).getSqlSet();
+    }
+
     @Test
-    @DisplayName("ONLINE 活动改库存：DB 写完必须 force 重预热分桶")
+    @DisplayName("ONLINE 活动改库存：DB 写完必须 force 重预热分桶；只 set total_stock/version")
     void onlineStockEditResetsBuckets() {
         when(mapper.selectOne(any())).thenReturn(activity("ONLINE", 1000, 200, 2));
-        when(mapper.updateById(any(SeckillActivityEntity.class))).thenReturn(1);
 
-        service.updateStock("SK9009", new StockEditRequest(1500, 2));
+        String sqlSet = capturedSqlSet(
+                v -> service.updateStock("SK9009", new StockEditRequest(1500, 2)));
 
         verify(warmUpService).reheat("SK9009", true);
+        assertTrue(sqlSet.contains("total_stock"), "应更新 total_stock: " + sqlSet);
+        assertFalse(sqlSet.contains("sold_stock"), "绝不回写 sold_stock（消费端 setSql 自增，整实体回写=丢更新）: " + sqlSet);
     }
 
     @Test
     @DisplayName("OFFLINE 活动改库存：只改 DB，绝不重预热——那等于给停用活动偷偷开闸")
     void offlineStockEditDoesNotReopenGate() {
         when(mapper.selectOne(any())).thenReturn(activity("OFFLINE", 1000, 200, 2));
-        when(mapper.updateById(any(SeckillActivityEntity.class))).thenReturn(1);
 
         service.updateStock("SK9009", new StockEditRequest(1500, 2));
 
@@ -94,7 +115,7 @@ class SeckillAdminServiceTest {
                 () -> service.updateStock("SK9009", new StockEditRequest(500, 2)));
 
         assertEquals(40000, e.getCode());
-        verify(mapper, never()).updateById(any(SeckillActivityEntity.class));
+        verify(mapper, never()).update(isNull(), any(Wrapper.class));
         verify(warmUpService, never()).reheat(anyString(), anyBoolean());
     }
 
@@ -107,14 +128,14 @@ class SeckillAdminServiceTest {
                 () -> service.updateStock("SK9009", new StockEditRequest(1500, 2)));
 
         assertEquals(41008, e.getCode());
-        verify(mapper, never()).updateById(any(SeckillActivityEntity.class));
+        verify(mapper, never()).update(isNull(), any(Wrapper.class));
     }
 
     @Test
-    @DisplayName("updateById 返回 0（真并发）同样是 41008 且不重预热")
+    @DisplayName("UPDATE 返回 0（真并发，version 已被插队推进）同样是 41008 且不重预热")
     void concurrentUpdateIsConflict() {
         when(mapper.selectOne(any())).thenReturn(activity("ONLINE", 1000, 200, 2));
-        when(mapper.updateById(any(SeckillActivityEntity.class))).thenReturn(0);
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(0);
 
         assertThrows(BizException.class, () -> service.updateStock("SK9009", new StockEditRequest(1500, 2)));
         verify(warmUpService, never()).reheat(anyString(), anyBoolean());
@@ -151,14 +172,15 @@ class SeckillAdminServiceTest {
     }
 
     @Test
-    @DisplayName("上线：DB 改完用 force=false 补建缺失分桶（已有进度不许被冲掉）")
+    @DisplayName("上线：DB 改完用 force=false 补建缺失分桶（已有进度不许被冲掉）；只 set status/version")
     void goingOnlineFillsMissingBuckets() {
         when(mapper.selectOne(any())).thenReturn(activity("OFFLINE", 1000, 0, 3));
-        when(mapper.updateById(any(SeckillActivityEntity.class))).thenReturn(1);
 
-        SeckillActivityEntity after = service.updateStatus("SK9009", new SeckillStatusRequest("ONLINE", 3));
+        String sqlSet = capturedSqlSet(
+                v -> service.updateStatus("SK9009", new SeckillStatusRequest("ONLINE", 3)));
 
-        assertEquals("ONLINE", after.getStatus());
+        assertTrue(sqlSet.contains("status"), sqlSet);
+        assertFalse(sqlSet.contains("sold_stock"), "状态变更同样不许回写 sold_stock: " + sqlSet);
         verify(warmUpService).reheat("SK9009", false);
     }
 
@@ -166,7 +188,6 @@ class SeckillAdminServiceTest {
     @DisplayName("下线：只改状态，不碰桶（在途的抢购该让它跑完）")
     void goingOfflineLeavesBuckets() {
         when(mapper.selectOne(any())).thenReturn(activity("ONLINE", 1000, 300, 4));
-        when(mapper.updateById(any(SeckillActivityEntity.class))).thenReturn(1);
 
         service.updateStatus("SK9009", new SeckillStatusRequest("OFFLINE", 4));
 

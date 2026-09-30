@@ -54,6 +54,13 @@ public class RuleSnapshot {
             boolean hasItemTag = false;
             Set<String> required = dsl.getRequiredTags() == null ? Set.of() : dsl.getRequiredTags();
             for (String tag : required) {
+                // P1（2026-09-30 第二轮复审）：null/空白标签直接跳过——保存侧已拒绝，
+                // 这里是第二道防（存量行、异构写入）：一个 null 元素的 tag.startsWith
+                // 会让 rebuild 抛 NPE，且 local 未更新导致每个 calculate 请求重进
+                // rebuild 再炸，整片 50000 无法自愈。
+                if (tag == null || tag.isBlank()) {
+                    continue;
+                }
                 if (tag.startsWith(USER_TAG_PREFIX)) {
                     continue; // 用户维度标签不进商品倒排
                 }

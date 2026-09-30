@@ -116,6 +116,16 @@ describe('RulesView', () => {
     expect(JSON.parse(post[1].body).ruleNo).toBe('R-FULL-1')
   })
 
+  it('P1：启停带行上 version（不带的话后端 VersionGuard 恒 41008，规则改不动）', async () => {
+    reply(ok(page([rule])), ok({ ...rule, status: 'DISABLED' }))
+    const w = mount(RulesView)
+    await flushPromises()
+    await w.get('[data-act="toggle-status"]').trigger('click')
+    await flushPromises()
+    const body = JSON.parse(calls().filter((c) => c[1].method === 'POST').at(-1)[1].body)
+    expect(body.version).toBe(2)
+  })
+
   it('编辑已有规则时把 ruleJson 一起带回去（upsert 是整条覆盖，不带就等于把 DSL 清空）', async () => {
     reply(ok(page([rule])), ok(rule))
     const w = mount(RulesView)
@@ -128,6 +138,17 @@ describe('RulesView', () => {
     expect(body.priority).toBe(20)
     expect(body.threshold).toBe(100)
     expect(body.discountValue).toBe(20)
+  })
+
+  it('P1：编辑保存同样带行上 version（fixture 的 version=2）', async () => {
+    reply(ok(page([rule])), ok(rule))
+    const w = mount(RulesView)
+    await flushPromises()
+    await w.get('[data-act="edit"]').trigger('click')
+    await w.get('[data-act="save"]').trigger('click')
+    await flushPromises()
+    const body = JSON.parse(calls().filter((c) => c[1].method === 'POST').at(-1)[1].body)
+    expect(body.version).toBe(2)
   })
 })
 

@@ -47,6 +47,7 @@ class AdminAuthFilterTest {
 
     private GatewayProperties properties;
     private ReactiveRedisTemplate<String, String> redis;
+    private ReactiveValueOperations<String, String> valueOps;
     private AdminAuthFilter filter;
     private GatewayFilterChain chain;
     private ArgumentCaptor<ServerWebExchange> captured;
@@ -57,7 +58,7 @@ class AdminAuthFilterTest {
         properties = new GatewayProperties();
         properties.getAdmin().setJwtSecret(SECRET);
         redis = mock(ReactiveRedisTemplate.class);
-        ReactiveValueOperations<String, String> valueOps = mock(ReactiveValueOperations.class);
+        valueOps = mock(ReactiveValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(anyString())).thenReturn(Mono.empty());
         when(redis.hasKey(anyString())).thenReturn(Mono.just(false));
@@ -100,6 +101,18 @@ class AdminAuthFilterTest {
 
         verify(chain, times(1)).filter(any());
         assertNull(exchange.getAttributes().get(AdminAuthFilter.VERIFIED));
+    }
+
+    @Test
+    @DisplayName("P1：Redis 两跳全挂的降级只转发一次（fallback 里转发 = 同一请求上游收双份）")
+    void degradedRedisForwardsExactlyOnce() {
+        when(redis.hasKey(anyString())).thenReturn(Mono.error(new RuntimeException("redis down")));
+        when(valueOps.get(anyString())).thenReturn(Mono.error(new RuntimeException("redis down")));
+        MockServerWebExchange exchange = adminGet("Bearer " + token(1L, "admin", "admin", "jti-degraded"));
+
+        filter.filter(exchange, chain).block();
+
+        verify(chain, times(1)).filter(any());
     }
 
     @Test

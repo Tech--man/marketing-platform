@@ -63,7 +63,7 @@ public class SeckillWarmUpService implements CacheReheater, CacheConsistency {
         long beforeSum = before.stream().filter(v -> v >= 0).mapToLong(Long::longValue).sum();
         List<Integer> plan = planFor(activity);
         int touched = force
-                ? stockService.resetBuckets(activityNo, plan)
+                ? stockService.resetBuckets(activity, plan)
                 : stockService.warmUp(activity, plan);
         return new CacheReheater.Result(type(), activityNo, beforeSum,
                 plan.stream().mapToLong(Integer::intValue).sum(),

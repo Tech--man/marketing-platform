@@ -121,4 +121,32 @@ class IdempotentExecutorTest {
                 () -> reclaiming.execute("REQ-006", String.class, () -> "never"));
         assertEquals(ErrorCode.DUPLICATE_REQUEST.getCode(), e.getCode());
     }
+
+    @Test
+    @DisplayName("P2：action 成功但 markSuccess 写库失败 → 不误标 FAILED，结果照常返回")
+    void markSuccessFailureKeepsProcessingAndReturnsResult() {
+        // 用对 SUCCESS 写路径抛错的 JdbcTemplate 包装模拟写失败：
+        // markSuccess 的 SQL 特征是 SET ... result_json（状态值走 ? 参数，不在 SQL 文本里）
+        org.springframework.jdbc.core.JdbcTemplate failing = new JdbcTemplate(
+                jdbcTemplate.getDataSource()) {
+            @Override
+            public int update(String sql, Object... args) {
+                if (sql.contains("result_json")) {
+                    throw new org.springframework.dao.DataAccessResourceFailureException("db down");
+                }
+                return super.update(sql, args);
+            }
+        };
+        IdempotentExecutor broken = new IdempotentExecutor(failing, 120);
+
+        // action 成功 + markSuccess 炸：结果必须返回给调用方（预扣/消息都已完成），
+        // 状态留在 PROCESSING（租约接管路径处理）——绝不能 markFailed 把它判成可重试
+        String result = broken.execute("REQ-007", String.class, () -> "DONE");
+
+        assertEquals("DONE", result, "action 已成功，结果必须交还调用方");
+        assertEquals(IdempotentStatus.PROCESSING.name(),
+                jdbcTemplate.queryForObject(
+                        "SELECT status FROM idempotent_record WHERE biz_key = ?", String.class, "REQ-007"),
+                "markSuccess 失败时标 FAILED = 已成功的动作被放开重试闸（领券即二次预扣）");
+    }
 }

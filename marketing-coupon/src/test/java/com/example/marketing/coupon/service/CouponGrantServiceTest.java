@@ -81,14 +81,30 @@ class CouponGrantServiceTest {
     }
 
     @Test
-    @DisplayName("发布失败同样归还（登记成功≠投递成功，补偿链路还没闭环）")
-    void publishFailureRollsBackPreDeduction() {
+    @DisplayName("P1：登记成功后 publish 失败不归还预扣（PENDING 行是补偿链路，10s 内必出券，归还=超发）")
+    void publishFailureAfterRecordingKeepsPreDeduction() {
         when(localMessageService.publish(anyString(), anyString()))
                 .thenThrow(new RuntimeException("stream down"));
+        // recordIfAbsent 默认 mock 返回 0（int 语义）→ boolean false？显式钉住 true，
+        // 表达"登记成功"这一前提
+        when(localMessageService.recordIfAbsent(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(true);
 
         assertThrows(RuntimeException.class, () -> service.grant(request()));
 
+        verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt());
+    }
+
+    @Test
+    @DisplayName("P1：消息行已存在（!recorded）→ 归还本次重跑多扣的预扣，直接受理成功")
+    void replayedRegistrationRollsBackDuplicatePreDeduction() {
+        when(localMessageService.recordIfAbsent(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(false);
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service.grant(request()));
+
         verify(stockService).rollback(1L, 70001L, 1);
+        verify(localMessageService, never()).publish(anyString(), anyString());
     }
 
     @Test
@@ -108,6 +124,9 @@ class CouponGrantServiceTest {
     @Test
     @DisplayName("正常路径不触发归还（rollback 只属于失败路径）")
     void happyPathDoesNotRollBack() {
+        // 新实现依赖登记返回值区分首登/重放：happy path = 首次登记成功
+        when(localMessageService.recordIfAbsent(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(true);
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service.grant(request()));
 
         verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt());

@@ -22,20 +22,26 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
-    public Result<Void> handleBiz(BizException e, jakarta.servlet.http.HttpServletResponse response) {
+    public org.springframework.http.ResponseEntity<Result<Void>> handleBiz(BizException e) {
         log.warn("[biz] code={}, msg={}", e.getCode(), e.getMessage());
         // 鉴权/限流段映射真实 HTTP 状态（2026-09-29 审查收口）：body.code 契约不变
         // （前端只认它），但直连业务端口时基于 HTTP 状态码的监控/熔断/告警终于能看见
         // 401/403/429——原先一律 200，网关层（返回真状态码）与业务层各说各话。
+        // P1（2026-09-30 第二轮复审）：原实现用 response.setStatus(...) 写状态——
+        // Boot 3.2（Spring 6.1）的 MVC 管道里它生效，Boot 3.4（Spring 6.2）升级后
+        // advice 返回 body 的渲染路径会把它盖回 200（ActivityControllerTest 在
+        // 3.4.7 基线上实测复现）。改用 ResponseEntity 携带状态，两代管道都稳。
         int code = e.getCode();
+        org.springframework.http.HttpStatus status = org.springframework.http.HttpStatus.OK;
         if (code >= 40100 && code < 40200) {
-            response.setStatus(HttpStatus.UNAUTHORIZED.value());
+            status = org.springframework.http.HttpStatus.UNAUTHORIZED;
         } else if (code >= 40300 && code < 40400) {
-            response.setStatus(HttpStatus.FORBIDDEN.value());
+            status = org.springframework.http.HttpStatus.FORBIDDEN;
         } else if (code >= 42900 && code < 43000) {
-            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            status = org.springframework.http.HttpStatus.TOO_MANY_REQUESTS;
         }
-        return Result.fail(e.getCode(), e.getMessage());
+        return org.springframework.http.ResponseEntity.status(status)
+                .body(Result.fail(e.getCode(), e.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

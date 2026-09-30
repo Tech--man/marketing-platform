@@ -34,9 +34,11 @@ class CouponGrantConsumerTest {
 
     private final UserCouponMapper userCouponMapper = mock(UserCouponMapper.class);
     private final CouponTemplateMapper templateMapper = mock(CouponTemplateMapper.class);
+    private final com.example.marketing.coupon.service.CouponStockService stockService =
+            mock(com.example.marketing.coupon.service.CouponStockService.class);
     private final LocalMessageService localMessageService = mock(LocalMessageService.class);
     private final CouponGrantConsumer consumer = new CouponGrantConsumer(
-            userCouponMapper, templateMapper, localMessageService, new SimpleMeterRegistry());
+            userCouponMapper, templateMapper, stockService, localMessageService, new SimpleMeterRegistry());
 
     private CouponGrantEvent event() {
         CouponGrantEvent event = new CouponGrantEvent();
@@ -98,5 +100,32 @@ class CouponGrantConsumerTest {
 
         verify(userCouponMapper, times(3)).insert(any(UserCouponEntity.class));
         verify(localMessageService, times(0)).confirm(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("P1：非撞键的完整性违规（截断等）→ 回补预扣 + confirm 终结，不外抛不重投")
+    void integrityViolationRollsBackAndConfirms() {
+        templateExists();
+        // 超长 requestId 落 VARCHAR(128) 的截断：DuplicateKey 的父类、但重投不可愈
+        when(userCouponMapper.insert(any(UserCouponEntity.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("Data too long"));
+
+        consumer.handle(JsonUtils.toJson(event()));
+
+        verify(stockService).rollback(1L, 70001L, 1);
+        verify(localMessageService, times(1)).confirm(anyString(), anyString());
+        verify(userCouponMapper, times(1)).insert(any(UserCouponEntity.class));
+    }
+
+    @Test
+    @DisplayName("P1：模板被删 → 同款终态处置（回补预扣 + confirm），不再无限重投")
+    void missingTemplateRollsBackAndConfirms() {
+        when(templateMapper.selectById(1L)).thenReturn(null);
+
+        consumer.handle(JsonUtils.toJson(event()));
+
+        verify(stockService).rollback(1L, 70001L, 1);
+        verify(localMessageService, times(1)).confirm(anyString(), anyString());
+        verify(userCouponMapper, times(0)).insert(any(UserCouponEntity.class));
     }
 }

@@ -122,6 +122,18 @@ class ConsumerAuthFilterTest {
     // ---- 覆盖面：整片 /api/**，公开读数靠例外放行 ----
 
     @Test
+    @DisplayName("P1：Redis 两跳全挂的降级只转发一次（fallback 里转发 = 同一请求上游收双份）")
+    void degradedRedisForwardsExactlyOnce() {
+        when(redis.hasKey(anyString())).thenReturn(Mono.error(new RuntimeException("redis down")));
+        when(valueOps.get(anyString())).thenReturn(Mono.error(new RuntimeException("redis down")));
+        MockServerWebExchange exchange = me("Bearer " + access(70001L, "u1", "jti-degraded"));
+
+        filter.filter(exchange, chain).block();
+
+        verify(chain, times(1)).filter(any());
+    }
+
+    @Test
     @DisplayName("交易入口默认就要登录：没带凭证的领券被拒 40100")
     void businessPathsRequireLoginByDefault() {
         MockServerWebExchange exchange = exchange(HttpMethod.POST, "/api/coupon/grant", null);

@@ -111,12 +111,37 @@ public class ActivityService {
         requireVersion(entity, expectedVersion);
         Integer from = entity.getGrayPercent();
         entity.setGrayPercent(grayPercent);
-        entity.setGrayWhitelist(grayWhitelist);
+        entity.setGrayWhitelist(normalizeWhitelist(grayWhitelist));
         flushWithVersion(entity);
         gatePublisher.publishNow(activityNo);
         log.info("[activity] 灰度变更 {} percent {} -> {} whitelist={}",
-                activityNo, from, grayPercent, grayWhitelist);
+                activityNo, from, grayPercent, entity.getGrayWhitelist());
         return entity;
+    }
+
+    /**
+     * 白名单规范化（P1，2026-09-30 第二轮复审）：逐项 trim、丢空项，重组成紧凑 CSV。
+     * owning 侧 GrayRuleCache 对坏项是容错跳过，但镜像消费侧（coupon ActivityGate）
+     * 曾经逐字 parseLong——"70001, 70002"（带空格）足以让一个活动的领券全 500。
+     * 与其要求所有消费侧都容错，不如在唯一写入口把数据收干净：落库值恒为
+     * {@code 70001,70002} 形状，两侧解析歧义从根上消除。null 原样透传（清空语义）。
+     */
+    private static String normalizeWhitelist(String csv) {
+        if (csv == null) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder();
+        for (String part : csv.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append(',');
+            }
+            out.append(trimmed);
+        }
+        return out.toString();
     }
 
     /** 后台列表：状态可选过滤，按 id 倒序（新活动在前） */

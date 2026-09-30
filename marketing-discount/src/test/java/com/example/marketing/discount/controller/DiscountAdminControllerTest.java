@@ -46,6 +46,13 @@ class DiscountAdminControllerTest {
 
     private final MockHttpServletRequest request = new MockHttpServletRequest();
 
+    /** P1：编辑路径带行上 version（body 内），与 UI 的新契约同形 */
+    private RuleSaveRequest bodyWithVersion(int version) {
+        RuleSaveRequest r = body();
+        r.setVersion(version);
+        return r;
+    }
+
     private RuleSaveRequest body() {
         RuleSaveRequest r = new RuleSaveRequest();
         r.setRuleNo("PR9001");
@@ -71,7 +78,7 @@ class DiscountAdminControllerTest {
                 BizException.of(ErrorCode.FORBIDDEN, "需要角色 admin，当前 operator"));
 
         BizException e = assertThrows(BizException.class,
-                () -> controller.save(body(), 2, request));
+                () -> controller.save(bodyWithVersion(2), request));
 
         assertEquals(40300, e.getCode());
         verify(ruleAdminService, never()).save(any(), any());
@@ -86,7 +93,7 @@ class DiscountAdminControllerTest {
         when(ruleAdminService.findView("PR9001")).thenReturn(view("旧名字", 10, 2));
         when(ruleAdminService.save(any(RuleSaveRequest.class), eq(2))).thenReturn(view("满200减30", 20, 3));
 
-        controller.save(body(), 2, request);
+        controller.save(bodyWithVersion(2), request);
 
         ArgumentCaptor<AuditPayload> captor = ArgumentCaptor.forClass(AuditPayload.class);
         verify(outbox).record(captor.capture());
@@ -106,7 +113,7 @@ class DiscountAdminControllerTest {
         when(ruleAdminService.findView("PR9001")).thenReturn(null);
         when(ruleAdminService.save(any(RuleSaveRequest.class), eq(null))).thenReturn(view("满200减30", 10, 0));
 
-        controller.save(body(), null, request);
+        controller.save(body(), request);
 
         ArgumentCaptor<AuditPayload> captor = ArgumentCaptor.forClass(AuditPayload.class);
         verify(outbox).record(captor.capture());

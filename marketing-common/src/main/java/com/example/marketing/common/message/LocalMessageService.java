@@ -28,6 +28,12 @@ public class LocalMessageService {
 
     private static final String TABLE = "local_message";
     private static final int MAX_RETRY = 10;
+    /**
+     * 消费侧死信阈值（P2，2026-09-30 第二轮复审）：SENT 行每次兜底重发计数 +1，
+     * 达到该值仍无 confirm 即转 FAILED。约 30×120s ≈ 1 小时——比发送失败的
+     * MAX_RETRY 宽三倍，慢消费（积压但会 confirm）不会被误杀。
+     */
+    private static final int SENT_MAX_RETRY = 30;
     /** 退避基数（秒）：next_retry = now + base * 2^retry，封顶 5 分钟 */
     private static final long BACKOFF_BASE_SECONDS = 5;
 
@@ -68,8 +74,13 @@ public class LocalMessageService {
         String payload = (String) row.get("payload");
         try {
             if (eventPublisher.publish(topic, tag, bizKey, payload)) {
+                // P2（2026-09-30 第二轮复审）：发送成功也推进 retry_count——它是"投递
+                // 尝试次数"。原实现只有发送失败才计数，"发出去了但消费端永远消费不
+                // 成功"的毒消息（载荷坏/消费端持续抛错）会以 120s 一轮无限重发，
+                // 永不进 FAILED、FAILED gauge 恒 0。正常消息很快 confirm，计数无感。
                 jdbcTemplate.update("UPDATE " + TABLE
-                                + " SET status = ?, next_retry_time = ? WHERE topic = ? AND biz_key = ? AND status IN (?, ?)",
+                                + " SET status = ?, next_retry_time = ?, retry_count = retry_count + 1 "
+                                + "WHERE topic = ? AND biz_key = ? AND status IN (?, ?)",
                         STATUS_SENT, plusSeconds(120), topic, bizKey, STATUS_PENDING, STATUS_SENT);
                 return true;
             }
@@ -97,10 +108,21 @@ public class LocalMessageService {
      * 扫描到期的未完成消息，供定时器调用。返回处理条数。
      */
     public int retryPending(int limit) {
+        // P2（2026-09-30 第二轮复审）：消费侧死信封顶。SENT 行每次兜底重发计数 +1
+        // （见 publish），到 SENT_MAX_RETRY 仍无 confirm = 消费端持续失败（毒载荷/
+        // 消费端缺陷）——转 FAILED 进入死信通道，终止 120s 一轮的无限重发。
+        // 上限刻意比发送失败的 MAX_RETRY 宽：正常慢消费（积压但会 confirm）不该被误杀。
+        int dead = jdbcTemplate.update("UPDATE " + TABLE + " SET status = ? WHERE status = ? AND retry_count >= ?",
+                STATUS_FAILED, STATUS_SENT, SENT_MAX_RETRY);
+        if (dead > 0) {
+            log.error("[local-message] {} 条 SENT 消息超过 {} 轮仍未确认，转消费侧死信 FAILED", dead, SENT_MAX_RETRY);
+        }
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT topic, biz_key FROM " + TABLE
-                        + " WHERE status IN (?, ?) AND next_retry_time <= ? AND retry_count < ? ORDER BY id LIMIT ?",
-                STATUS_PENDING, STATUS_SENT, Timestamp.valueOf(LocalDateTime.now()), MAX_RETRY, limit);
+                        + " WHERE ((status = ? AND retry_count < ?) OR (status = ? AND retry_count < ?))"
+                        + " AND next_retry_time <= ? ORDER BY id LIMIT ?",
+                STATUS_PENDING, MAX_RETRY, STATUS_SENT, SENT_MAX_RETRY,
+                Timestamp.valueOf(LocalDateTime.now()), limit);
         int count = 0;
         for (Map<String, Object> row : rows) {
             publish((String) row.get("topic"), (String) row.get("biz_key"));
@@ -180,9 +202,13 @@ public class LocalMessageService {
         int retry = currentRetry + 1;
         long backoff = Math.min(BACKOFF_BASE_SECONDS * (1L << Math.min(retry, 6)), 300);
         String status = retry >= MAX_RETRY ? STATUS_FAILED : STATUS_PENDING;
+        // P2（2026-09-30 第二轮复审）：WHERE 带状态守卫——retryer 的 publish 在 load 之后
+        // 抛 DB 异常进入 catch 的同一毫秒，消费端可能恰好 confirm；无守卫的 UPDATE 会把
+        // CONFIRMED 回退成 PENDING/FAILED（假死信污染告警 + 已闭环消息被重投）。
         jdbcTemplate.update("UPDATE " + TABLE
-                        + " SET status = ?, retry_count = ?, next_retry_time = ? WHERE topic = ? AND biz_key = ?",
-                status, retry, plusSeconds(backoff), topic, bizKey);
+                        + " SET status = ?, retry_count = ?, next_retry_time = ? "
+                        + "WHERE topic = ? AND biz_key = ? AND status IN (?, ?)",
+                status, retry, plusSeconds(backoff), topic, bizKey, STATUS_PENDING, STATUS_SENT);
         if (STATUS_FAILED.equals(status)) {
             // 进入死信人工处理通道：生产环境应告警 + 转死信队列
             log.error("[local-message] 消息超过最大重试次数转 FAILED, topic={}, bizKey={}", topic, bizKey);

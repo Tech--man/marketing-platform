@@ -138,12 +138,27 @@ public class BudgetService implements CacheReheater, CacheConsistency {
             // 缺键：本笔已作为 DEDUCT 落进流水，所以直接把"对账后的余额"写出去，
             // 不能再 DECRBY 一次（会把这笔扣款算两遍，实测 Redis 恒比权威值少一笔）；
             // 也不能先回删流水再重试（会留下"扣了没记"的缺口，对账时当成可用余额放出去）。
-            long reconciled = computeRemainCents(activityNo);
-            if (reconciled < 0) {
+            // P1（2026-09-30 第二轮复审）：对账计算与 SET 同样要守"占位与扣减要么都成、
+            // 要么都不成"——本段抛异常（活动不存在的 40400、Redis SET 故障）同样会留下
+            // "流水在、Redis 未扣"的孤儿 DEDUCT：重试命中 REPLAYED 假成功，Redis 恒高
+            // 于权威值，多出的部分会被后续请求当可用余额花掉（超支方向，与 H4 同根因）。
+            long reconciled;
+            try {
+                reconciled = computeRemainCents(activityNo);
+                if (reconciled < 0) {
+                    rollbackFlow(activityNo, bizKey);
+                    throw BizException.of(ErrorCode.BUDGET_NOT_ENOUGH);
+                }
+                redisTemplate.opsForValue().set(budgetKey(activityNo), String.valueOf(reconciled));
+            } catch (BizException be) {
                 rollbackFlow(activityNo, bizKey);
-                throw BizException.of(ErrorCode.BUDGET_NOT_ENOUGH);
+                throw be;
+            } catch (RuntimeException e) {
+                rollbackFlow(activityNo, bizKey);
+                log.warn("[budget] 缺键对账写回失败，已回删占位流水 activityNo={}, bizKey={}: {}",
+                        activityNo, bizKey, e.toString());
+                throw BizException.of(ErrorCode.SYSTEM_ERROR);
             }
-            redisTemplate.opsForValue().set(budgetKey(activityNo), String.valueOf(reconciled));
             result = 1L;
         }
         if (result == null || result == 0L) {

@@ -80,4 +80,29 @@ class AdminConfigStoreTest {
         assertEquals(0, store.delete("k", "GLOBAL"));
         assertTrue(store.rows().isEmpty());
     }
+
+    @Test
+    @DisplayName("P1：行不存在 + expectedVersion=0 是真首写——必须落行，不能静默返回成功")
+    void casFirstWritePersistsRow() {
+        boolean ok = store.upsertCas("k", "GLOBAL", "120", 5L, "admin", "脚本首写", 0L);
+
+        assertEquals(true, ok, "首写协议路径应成功");
+        assertEquals("120", store.findValue("k", "GLOBAL"), "原实现返回 true 但什么都没写（广播/审计/回 200 全套照走的 no-op）");
+        assertEquals(Long.valueOf(5L), store.findRowVersion("k", "GLOBAL"));
+    }
+
+    @Test
+    @DisplayName("行不存在 + expectedVersion 非 0 → false（行被人删了的过期信息）")
+    void casAbsentRowWithNonZeroVersionRejected() {
+        assertEquals(false, store.upsertCas("k", "GLOBAL", "120", 5L, "admin", "", 3L));
+        assertNull(store.findValue("k", "GLOBAL"));
+    }
+
+    @Test
+    @DisplayName("行存在但 version 不匹配 → false（41008 交给调用方）")
+    void casStaleVersionRejected() {
+        store.upsert("k", "GLOBAL", "100", 1L, "admin", "");
+        assertEquals(false, store.upsertCas("k", "GLOBAL", "120", 2L, "admin", "", 0L));
+        assertEquals("100", store.findValue("k", "GLOBAL"));
+    }
 }
