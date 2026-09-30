@@ -241,6 +241,20 @@ class BudgetServiceTest {
     }
 
     @Test
+    @DisplayName("第六批 W2：RE_ONLINE 预热走对账公式——ActivityService.transition 的调用方向")
+    void reonlineWarmUsesReconciliation() {
+        // ActivityService.transition 在 target==ONLINE 时调
+        // budgetService.warmCentsIfAbsent(activityNo, computeRemainCents(activityNo))。
+        // 有 DEDUCT 流水时 computeRemainCents < 全额——warmCentsIfAbsent 收到的是
+        // 对账值而非 budget_amount（地雷 E 残留：全额会把已消耗的预算凭空回涨）。
+        flow("reserve:bk-e", -3_000L, "DEDUCT");
+        long reconciled = service.computeRemainCents("ACT2026001");
+
+        assertEquals(7_000L, reconciled,
+                "RE_ONLINE 预热必须用这个值（7_000），不是全额 10_000——用全额就是预算回涨");
+    }
+
+    @Test
     @DisplayName("注册进重预热表的类型标识是 budget，注册表按它分发")
     void registersAsBudgetType() {
         assertEquals("budget", service.type());

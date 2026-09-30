@@ -1,5 +1,6 @@
 package com.example.marketing.activity.controller;
 
+import com.example.marketing.activity.dto.ActivityPublicView;
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.service.ActivityService;
 import com.example.marketing.activity.service.BudgetDeductGuard;
@@ -36,10 +37,14 @@ public class ActivityController {
     private final BudgetDeductGuard budgetDeductGuard;
     private final ConsumerRequestIdentity identity;
 
-    /** 查询活动 */
+    /**
+     * 查询活动（公开端点，permit-paths 免 token）——返回裁剪后的
+     * {@link ActivityPublicView}：灰度白名单（userId CSV，个人信息）与灰度配置
+     * 不再随实体出门（2026-09-29 审查收口）。
+     */
     @GetMapping("/{activityNo}")
-    public Result<ActivityEntity> get(@PathVariable String activityNo) {
-        return Result.ok(activityService.getByNo(activityNo));
+    public Result<ActivityPublicView> get(@PathVariable String activityNo) {
+        return Result.ok(ActivityPublicView.from(activityService.getByNo(activityNo)));
     }
 
     // ③：创建与状态流转已搬到 /api/admin/activities（长在 owning 进程上）。

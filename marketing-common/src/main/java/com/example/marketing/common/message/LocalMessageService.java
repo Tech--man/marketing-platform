@@ -140,6 +140,42 @@ public class LocalMessageService {
         return driven;
     }
 
+    /**
+     * 终态归档（2026-09-29 审查收口）：CONFIRMED 的消息与 SUCCESS 的幂等记录
+     * 完成使命后仍永久留表（此前两表无界增长；FAILED 留 90 天给死信排查取证）。
+     * 分批删除（每批 {@code 1000}）避免长事务锁表；返回本轮删除总数。
+     */
+    public int purgeTerminated(int confirmedRetentionDays) {
+        int total = 0;
+        LocalDateTime confirmedCutoff = LocalDateTime.now().minusDays(confirmedRetentionDays);
+        LocalDateTime failedCutoff = LocalDateTime.now().minusDays(Math.max(confirmedRetentionDays, 90));
+        // H2 的 MySQL 模式不认 DELETE ... LIMIT（MySQL 方言），换等价的子查询写法——
+        // 两边都走主键序子查询取前 N 条再 IN，语义不变
+        int deleted;
+        deleted = jdbcTemplate.update(
+                "DELETE FROM local_message WHERE status = ? AND create_time < ? "
+                        + "AND id IN (SELECT id FROM local_message WHERE status = ? AND create_time < ? "
+                        + "AND id IN (SELECT id FROM (SELECT id FROM local_message "
+                        + "WHERE status = ? AND create_time < ? ORDER BY id LIMIT 1000) t))",
+                STATUS_CONFIRMED, Timestamp.valueOf(confirmedCutoff),
+                STATUS_CONFIRMED, Timestamp.valueOf(confirmedCutoff),
+                STATUS_CONFIRMED, Timestamp.valueOf(confirmedCutoff));
+        total += deleted;
+        deleted = jdbcTemplate.update(
+                "DELETE FROM idempotent_record WHERE status = 'SUCCESS' AND create_time < ? "
+                        + "AND id IN (SELECT id FROM (SELECT id FROM idempotent_record "
+                        + "WHERE status = 'SUCCESS' AND create_time < ? ORDER BY id LIMIT 1000) t)",
+                Timestamp.valueOf(confirmedCutoff), Timestamp.valueOf(confirmedCutoff));
+        total += deleted;
+        deleted = jdbcTemplate.update(
+                "DELETE FROM idempotent_record WHERE status = 'FAILED' AND create_time < ? "
+                        + "AND id IN (SELECT id FROM (SELECT id FROM idempotent_record "
+                        + "WHERE status = 'FAILED' AND create_time < ? ORDER BY id LIMIT 1000) t)",
+                Timestamp.valueOf(failedCutoff), Timestamp.valueOf(failedCutoff));
+        total += deleted;
+        return total;
+    }
+
     private void scheduleRetry(String topic, String bizKey, int currentRetry) {
         int retry = currentRetry + 1;
         long backoff = Math.min(BACKOFF_BASE_SECONDS * (1L << Math.min(retry, 6)), 300);

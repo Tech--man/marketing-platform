@@ -85,5 +85,6 @@ services:
       - "127.0.0.1:9091:9090"   # 宿主机 9090 常被占用，改用 9091
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     restart: unless-stopped
 

@@ -132,6 +132,26 @@ public class MarketingCommonAutoConfiguration {
     }
 
     /**
+     * traceId 的 Servlet 侧挂点（W12，2026-09-29 审查收口）：网关入口生成
+     * X-Trace-Id 并透传，这里放进 MDC 供日志 pattern 印 {@code %X{traceId}}。
+     * 注册成 FilterRegistrationBean 而不是裸 @Bean：要抢在最前（order 最高），
+     * 否则业务日志先打出去时 MDC 还没填。
+     */
+    @ConditionalOnClass(name = "jakarta.servlet.Filter")
+    static class TraceIdConfiguration {
+        @Bean
+        public org.springframework.boot.web.servlet.FilterRegistrationBean<
+                com.example.marketing.common.web.TraceIdFilter> traceIdFilter() {
+            org.springframework.boot.web.servlet.FilterRegistrationBean<
+                    com.example.marketing.common.web.TraceIdFilter> registration =
+                    new org.springframework.boot.web.servlet.FilterRegistrationBean<>(
+                            new com.example.marketing.common.web.TraceIdFilter());
+            registration.setOrder(org.springframework.core.Ordered.HIGHEST_PRECEDENCE + 10);
+            return registration;
+        }
+    }
+
+    /**
      * 事件发布：装配方式按 marketing.mq.type 选型，两个分支条件互斥。
      *
      * <p>注意：LocalMessageService 的装配必须在各分支内部完成，不能用

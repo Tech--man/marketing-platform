@@ -2,8 +2,8 @@ package com.example.marketing.admin.observe;
 
 import com.example.marketing.admin.config.OpsObservabilityConfig;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.prometheus.PrometheusConfig;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;

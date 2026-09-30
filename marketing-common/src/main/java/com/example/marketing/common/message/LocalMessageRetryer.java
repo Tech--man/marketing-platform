@@ -35,6 +35,9 @@ public class LocalMessageRetryer {
                 .register(meters);
     }
 
+    /** 归档节流：retry 每 10s 一轮，归档不需要这个频率——每 360 轮（约 1h）跑一次 */
+    private java.util.concurrent.atomic.AtomicLong cycles = new java.util.concurrent.atomic.AtomicLong();
+
     @Scheduled(fixedDelayString = "${marketing.message.retry-interval-ms:10000}")
     public void retry() {
         leaseLock.runExclusive("local-message-retry", INTERVAL, () -> {
@@ -46,6 +49,17 @@ public class LocalMessageRetryer {
                 if (failed > 0) {
                     log.error("[local-message] FAILED 死信 {} 条待处理（管理端 messages/redrive 可重驱动）",
                             failed);
+                }
+                if (cycles.incrementAndGet() % 360 == 0) {
+                    // 终态归档（2026-09-29）：CONFIRMED/SUCCESS 超保留期删、FAILED 留 90 天。
+                    // 与重发同锁同线程：归档不该与投递抢 DB，也不值得再配一把锁
+                    int purged = localMessageService.purgeTerminated(
+                            Integer.parseInt(System.getProperty(
+                                    "marketing.message.terminal-retention-days", "30")));
+                    if (purged > 0) {
+                        meters.counter("marketing.message.purged").increment(purged);
+                        log.info("[local-message] 终态归档删除 {} 行（CONFIRMED/SUCCESS 超 30 天）", purged);
+                    }
                 }
             } catch (Exception e) {
                 log.error("[local-message] 补偿任务异常", e);

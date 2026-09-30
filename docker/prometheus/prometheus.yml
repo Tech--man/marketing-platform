@@ -7,6 +7,11 @@ global:
   scrape_interval: 10s
   evaluation_interval: 15s
 
+# W13（2026-09-29 审查收口）：告警规则——五批修复的指标变成会响的规则；
+# 接收通道（Alertmanager/webhook/邮件）是运维侧待定项，规则先就位
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: marketing-local
     metrics_path: /actuator/prometheus

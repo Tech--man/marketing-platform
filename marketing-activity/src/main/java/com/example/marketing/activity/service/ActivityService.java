@@ -35,8 +35,14 @@ public class ActivityService {
     private final ActivityGatePublisher gatePublisher;
 
     public ActivityEntity create(CreateActivityRequest request) {
-        if (activityMapper.exists(Wrappers.<ActivityEntity>lambdaQuery()
-                .eq(ActivityEntity::getActivityNo, request.activityNo()))) {
+        try {
+            if (activityMapper.exists(Wrappers.<ActivityEntity>lambdaQuery()
+                    .eq(ActivityEntity::getActivityNo, request.activityNo()))) {
+                throw new BizException(ErrorCode.BIZ_ERROR, "活动编号已存在: " + request.activityNo());
+            }
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // check-then-insert 的并发窗口：同名同时创建时后插者撞唯一键，
+            // 报 41000 而不是 50000"系统繁忙"（误导排障方向）
             throw new BizException(ErrorCode.BIZ_ERROR, "活动编号已存在: " + request.activityNo());
         }
         ActivityEntity entity = ActivityEntityConverter.fromRequest(request);
@@ -56,9 +62,13 @@ public class ActivityService {
 
         entity.setStatus(target.name());
         flushWithVersion(entity);
-        // 上线动作的副作用：预算预热（SETNX 幂等）
+        // 上线动作的副作用：预算预热。首次上线（无流水）全额==对账值安全；
+        // 再上线（RE_ONLINE，已有消耗流水）必须按对账公式而不是全额——
+        // 地雷 E 的残留（2026-09-29 审查收口）：下线期间丢键再上线，全额会把
+        // 已消耗的预算凭空回涨。warmIfAbsent 不覆盖已存在的键，所以这里直接
+        // 传对账值：键在（值正确）无感，键丢则按权威值重建。
         if (target == ActivityStatus.ONLINE) {
-            budgetService.warmIfAbsent(activityNo, entity.getBudgetAmount());
+            budgetService.warmCentsIfAbsent(activityNo, budgetService.computeRemainCents(activityNo));
         }
         // 下线/暂停的生效不该等下一轮回源（那是最长 5s 的"已下线还在发券"窗口），
         // 流转后即时发布参与闸门；发布失败由发布器的周期全量重写兜底

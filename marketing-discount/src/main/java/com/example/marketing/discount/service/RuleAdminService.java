@@ -58,6 +58,7 @@ public class RuleAdminService {
                                         + "等人群服务接入后再启用");
                     });
         }
+        validateValueRanges(request);
         PromoRuleEntity existing = byRuleNo(request.getRuleNo());
         String ruleJson = JsonUtils.toJson(toDsl(request));
         if (existing == null) {
@@ -83,6 +84,60 @@ public class RuleAdminService {
         bumpAfterCommit();
         log.info("[discount] 规则更新 {}（原 name={}）", existing.getRuleNo(), before);
         return RuleView.from(existing);
+    }
+
+    /**
+     * 值域防呆（2026-09-29 审查收口）：管理面有 token+审计+乐观锁，但数值本身
+     * 没有任何闸——rate 填 0 等于全场免费、discountValue 填成天文数字、ladder
+     * 乱序时"最高档"算错，全部直接全量错价。输入侧拒绝比引擎里事后夹取便宜一百倍。
+     */
+    private void validateValueRanges(RuleSaveRequest request) {
+        if (request.getDiscountRate() != null
+                && (request.getDiscountRate().signum() <= 0
+                    || request.getDiscountRate().doubleValue() > 10)) {
+            throw BizException.of(ErrorCode.BAD_REQUEST,
+                    "折扣率 discountRate 必须在 (0, 10]（8.5 = 八五折），当前 " + request.getDiscountRate());
+        }
+        if (request.getDiscountValue() != null && request.getDiscountValue().signum() < 0) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "立减额 discountValue 不能为负: " + request.getDiscountValue());
+        }
+        if (request.getThreshold() != null && request.getThreshold().signum() < 0) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "门槛 threshold 不能为负: " + request.getThreshold());
+        }
+        if (request.getLadderSteps() != null && !request.getLadderSteps().isEmpty()) {
+            java.util.List<com.example.marketing.discount.domain.PromoRuleDsl.LadderStep> steps =
+                    new java.util.ArrayList<>(request.getLadderSteps());
+            steps.sort(java.util.Comparator.comparing(
+                    s -> s.getThreshold() == null ? java.math.BigDecimal.ZERO : s.getThreshold()));
+            for (int i = 0; i < steps.size(); i++) {
+                com.example.marketing.discount.domain.PromoRuleDsl.LadderStep step = steps.get(i);
+                if (step.getThreshold() == null || step.getDiscountValue() == null
+                        || step.getThreshold().signum() < 0 || step.getDiscountValue().signum() < 0) {
+                    throw BizException.of(ErrorCode.BAD_REQUEST, "阶梯档的门槛/立减额都不能为空或负");
+                }
+                if (i > 0 && step.getThreshold().compareTo(steps.get(i - 1).getThreshold()) <= 0) {
+                    throw BizException.of(ErrorCode.BAD_REQUEST, "阶梯档门槛必须互不相同且升序排列");
+                }
+                if (step.getDiscountValue().compareTo(step.getThreshold()) > 0) {
+                    throw BizException.of(ErrorCode.BAD_REQUEST,
+                            "阶梯档立减额 " + step.getDiscountValue() + " 超过门槛 " + step.getThreshold()
+                                    + "（满 300 减 400 是倒贴）");
+                }
+            }
+        }
+        // DISCOUNT 类型必须有 rate；FULL_REDUCTION/LADDER 必须有对应金额（引擎降级原价之外的另一类静默错）
+        if (request.getType() == com.example.marketing.discount.domain.RuleType.DISCOUNT
+                && request.getDiscountRate() == null) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "DISCOUNT 类型必须给 discountRate");
+        }
+        if (request.getType() == com.example.marketing.discount.domain.RuleType.FULL_REDUCTION
+                && request.getDiscountValue() == null) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "FULL_REDUCTION 类型必须给 discountValue");
+        }
+        if (request.getType() == com.example.marketing.discount.domain.RuleType.LADDER
+                && (request.getLadderSteps() == null || request.getLadderSteps().isEmpty())) {
+            throw BizException.of(ErrorCode.BAD_REQUEST, "LADDER 类型必须给 ladderSteps");
+        }
     }
 
     /**

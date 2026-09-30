@@ -112,8 +112,9 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
                     Map<String, Object> body = new LinkedHashMap<>();
                     body.put("code", 42900);
                     body.put("message", "请求过于频繁，请稍后再试");
-                    // 排队码：秒杀场景前端凭此进入排队页轮询
-                    body.put("data", Map.of("queueCode", "Q" + now));
+                    // W8（2026-09-29 审查收口）：去掉假排队码——它不对应任何真实排队
+                    // 实体、无查询语义，前端按它轮询永远拿不到进度。H5 实测未消费该字段。
+                    body.put("data", null);
                     return GatewayResponses.writeJson(exchange.getResponse(), HttpStatus.TOO_MANY_REQUESTS, body);
                 });
     }

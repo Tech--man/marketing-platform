@@ -41,7 +41,8 @@ public class BudgetService implements CacheReheater, CacheConsistency {
         warmCentsIfAbsent(activityNo, toCents(budgetYuan));
     }
 
-    private void warmCentsIfAbsent(String activityNo, long cents) {
+    /** 分口径预热（RE_ONLINE 按对账公式重建用，见 ActivityService.transition 注释） */
+    public void warmCentsIfAbsent(String activityNo, long cents) {
         redisTemplate.opsForValue().setIfAbsent(budgetKey(activityNo), String.valueOf(cents));
     }
 

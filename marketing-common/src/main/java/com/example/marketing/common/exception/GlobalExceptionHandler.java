@@ -22,8 +22,19 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
-    public Result<Void> handleBiz(BizException e) {
+    public Result<Void> handleBiz(BizException e, jakarta.servlet.http.HttpServletResponse response) {
         log.warn("[biz] code={}, msg={}", e.getCode(), e.getMessage());
+        // 鉴权/限流段映射真实 HTTP 状态（2026-09-29 审查收口）：body.code 契约不变
+        // （前端只认它），但直连业务端口时基于 HTTP 状态码的监控/熔断/告警终于能看见
+        // 401/403/429——原先一律 200，网关层（返回真状态码）与业务层各说各话。
+        int code = e.getCode();
+        if (code >= 40100 && code < 40200) {
+            response.setStatus(HttpStatus.UNAUTHORIZED.value());
+        } else if (code >= 40300 && code < 40400) {
+            response.setStatus(HttpStatus.FORBIDDEN.value());
+        } else if (code >= 42900 && code < 43000) {
+            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+        }
         return Result.fail(e.getCode(), e.getMessage());
     }
 

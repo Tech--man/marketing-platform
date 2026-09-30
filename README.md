@@ -167,6 +167,21 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 | `GRAY_REFRESH_SECONDS` | `5` | 灰度规则回源 DB 的节拍（灰度真值在 `activity.gray_percent`，不依赖 Redis） |
 | `RL_ADMIN` | 后台路由的限流阈值（默认 50/s） | 路由 id 不在限流 map 里＝完全不限流；后台登录口的 BCrypt 单次 50-100ms，几十 QPS 就能把与 C 端同进程的后台打满 |
 
+> **第六批落地（2026-09-29，外部决策项按建议执行）**：
+> - nacos 鉴权/broker ACL：**单机维持现状**（端口已绑回环是合理信任边界），触发条件
+>   写进 prod.yml 头注释——FULL 迁多机时一并启用，凭证照抄 `.admin-jwt-secret` 模式；
+> - PII：演示期明文维持，**第一个真实手机号接入前**必须切"SHA-256 索引 + AES-GCM 密文列"；
+> - 灰度适用秒杀：**不复用营销活动灰度**（两域运营节奏不同步），确需则给 seckill_activity
+>   加独立列；
+> - admin_audit_log：**默认不自动删除**（写入是人工量级，增长慢），需要时归档冷表而非 DELETE。
+> 同时落地的工程件：Boot **3.4.7**（Tomcat 10.1.42、Spring 6.2.8、micrometer 1.14
+> ——registry 包名换 prometheusmetrics 已适配）、网关 **pre-auth 粗桶**（-150，
+> 全局 /api/** 每 IP，出厂 2000/s 待 load-probe 校准）、**traceId**（网关生成透传 +
+> MDC + 日志 pattern 印 `%X{traceId}`）、**迁移台账** `scripts/migrate.sh`（幂等重放
+> 全部存量迁移）、PrometheusRule 告警初稿（`docker/prometheus/alerts.yml`）、
+> 秒杀借桶**环形起点**、活动详情**公开 VO**、HTTP 401/403/429 映射、终态归档
+> （CONFIRMED/SUCCESS 超 30 天删）、Redis **3s 命令超时**、规则值域防呆。
+
 > **网关 Redis 降级（2026-09-29 第三批，根因 C 收口）**：限流计数不可用时 fail-open
 > 放行并计 `marketing.gateway.rate.limit.degraded`（洪流保护自己的可用性不能比后端低）；
 > C 端/后台吊销位与 bump 查询不可用时退化为"仅验签放行 + 告警"，代价与 Redis 被清空

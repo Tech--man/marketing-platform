@@ -27,6 +27,8 @@ public class GatewayProperties {
 
     /** 限流规则：key = 路由 ID，未配置的路由不限流 */
     private Map<String, RateRule> rateLimit = new HashMap<>();
+    /** 鉴权前的粗粒度限流（W11，2026-09-29 审查收口），见 PreAuthRateLimitFilter */
+    private PreAuthRateLimit preAuthRateLimit = new PreAuthRateLimit();
 
     /**
      * 后台 token 的校验参数。密钥留空不等于"放开后台"，而是"后台整片拒绝"——
@@ -82,5 +84,21 @@ public class GatewayProperties {
                 "/api/coupon/stock/*",
                 "/api/seckill/activities",
                 "/api/seckill/stock/*"));
+    }
+
+    /**
+     * 鉴权之前的粗粒度限流（W11，2026-09-29 审查收口）：
+     * 不带凭证刷 /api/** 的洪水在被 401 拒掉时不消耗任何精细桶——只花 HMAC
+     * 验签成本。这道粗桶兜住这类流量。阈值是<b>出厂值</b>（防洪水而非防用户），
+     * 上线前用 load-probe 实测全栈容量后经 RL_PREAUTH 调整。
+     */
+    @Data
+    public static class PreAuthRateLimit {
+        /** 总开关：压测/排障时可临时关掉 */
+        private boolean enabled = true;
+        /** 全局 /api/** 每 IP 每窗口的请求数上限 */
+        private int limit = 2000;
+        /** 窗口宽度（秒），与精细层一致 */
+        private int windowSeconds = 1;
     }
 }

@@ -16,6 +16,10 @@
 --       改那一处必须同时改这里（与 init-lite 的并入段同一条纪律，仓内已有三处副本）。
 -- ============================================================
 
+-- requires-root: 1
+-- （建库 + GRANT 需要 root；单库档不受影响——consumer_* 已在 marketing 库。
+--   隔离档需要时手动：docker exec -i mkt-mysql mysql -uroot -p<密码> < 本文件，
+--   再在 _migration 台账补一行 INSERT。）
 SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS marketing_account

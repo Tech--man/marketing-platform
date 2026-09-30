@@ -52,6 +52,7 @@ class LocalMessageServiceTest {
                 "jdbc:h2:mem:local_message_test;DB_CLOSE_DELAY=-1;MODE=MySQL", "sa", "");
         jdbc = new JdbcTemplate(ds);
         jdbc.execute("DROP TABLE IF EXISTS local_message");
+        jdbc.execute("DROP TABLE IF EXISTS idempotent_record");
         jdbc.execute("""
                 CREATE TABLE local_message (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -65,6 +66,17 @@ class LocalMessageServiceTest {
                     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT uk_topic_biz_key UNIQUE (topic, biz_key)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE idempotent_record (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    biz_key VARCHAR(128) NOT NULL,
+                    status VARCHAR(16) NOT NULL,
+                    result_json TEXT,
+                    error_msg VARCHAR(512),
+                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uk_biz_key UNIQUE (biz_key)
                 )""");
         publisher = new RecordingPublisher();
         service = new LocalMessageService(jdbc, publisher);
@@ -170,6 +182,24 @@ class LocalMessageServiceTest {
                 Integer.class, COUPON_TOPIC, "REQ-DEAD"), "重试计数必须清零，否则马上又撞上限");
         // topic 隔离：另一个 topic 的活消息不受影响
         assertEquals("PENDING", status(SECKILL_TOPIC, "REQ-ALIVE"));
+    }
+
+    @Test
+    @DisplayName("第六批 W3：终态归档——CONFIRMED 超 30 天删，未超不动")
+    void purgeTerminatedRemovesOldConfirmed() {
+        jdbc.update("INSERT INTO local_message (topic, tag, biz_key, payload, status, retry_count, "
+                + "next_retry_time, create_time) VALUES (?,?,?,?,?,?,?, DATEADD('DAY', -31, CURRENT_TIMESTAMP))",
+                COUPON_TOPIC, "GRANT", "REQ-OLD", "p", "CONFIRMED", 0,
+                java.sql.Timestamp.valueOf(java.time.LocalDateTime.now()));
+        service.recordIfAbsent(COUPON_TOPIC, "GRANT", "REQ-NEW", "p");
+
+        int purged = service.purgeTerminated(30);
+
+        assertEquals(1, purged);
+        assertEquals("PENDING", status(COUPON_TOPIC, "REQ-NEW"), "未到期的 PENDING 不动");
+        Integer old = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM local_message WHERE biz_key='REQ-OLD'", Integer.class);
+        assertEquals(0, old, "超期 CONFIRMED 必须被删——不删就是无界增长");
     }
 
     @Test

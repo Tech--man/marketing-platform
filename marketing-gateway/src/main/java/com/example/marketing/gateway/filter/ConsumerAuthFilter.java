@@ -189,13 +189,29 @@ public class ConsumerAuthFilter implements GlobalFilter, Ordered {
                     headers.remove(TOKEN_HEADER);
                     if (claims != null) {
                         headers.set(UID_HEADER, String.valueOf(claims.uid()));
-                        headers.set(NAME_HEADER, claims.sub());
+                        // W10（2026-09-29 审查收口）：claims.sub 未来可能来自注册输入，
+                        // 带进 header 前剥掉控制字符——CR/LF 会让 Netty 编码抛 500
+                        headers.set(NAME_HEADER, sanitize(claims.sub()));
                         headers.set(JTI_HEADER, claims.jti());
                         headers.set(TOKEN_HEADER, token);
                     }
                 })
                 .build();
         return exchange.mutate().request(request).build();
+    }
+
+    /** 剥掉控制字符（防 header 注入与 Netty 编码炸）。X-Admin-User 侧同用 */
+    static String sanitize(String value) {
+        if (value == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(value.length());
+        for (char ch : value.toCharArray()) {
+            if (ch >= 0x20 && ch != 0x7F) {
+                out.append(ch);
+            }
+        }
+        return out.toString();
     }
 
     private Mono<Void> reject(ServerWebExchange exchange, HttpStatus status, int code, String message) {

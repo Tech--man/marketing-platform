@@ -23,14 +23,47 @@
 
 SET @db := DATABASE();
 
+-- 2026-09-29 修正（审查记录过的缺陷）：原版裸写 DROP INDEX，MySQL 没有
+-- DROP INDEX IF EXISTS——索引不存在（新卷 init 直接建新索引）时 ERROR 1091
+-- 直接中止，"重复执行安全"的注释承诺不成立。改用 information_schema +
+-- 预处理守卫（同 2026-09-23-admin-config.sql 的写法），真幂等。
+
 -- 1) budget_flow：uk_biz_key(biz_key) → uk_activity_biz(activity_no, biz_key)
---    旧索引可能叫 uk_biz_key；重复执行安全（不存在就跳过）。
-ALTER TABLE budget_flow DROP INDEX uk_biz_key;
-ALTER TABLE budget_flow ADD UNIQUE KEY uk_activity_biz (activity_no, biz_key);
+--    有旧索引才 DROP；有表且没有新索引才 ADD（两步各自独立守卫）。
+SET @s := (SELECT IF(
+    (SELECT COUNT(*) FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'budget_flow'
+          AND index_name = 'uk_biz_key') > 0,
+    'ALTER TABLE budget_flow DROP INDEX uk_biz_key', 'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @s := (SELECT IF(
+    (SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = 'budget_flow') > 0
+    AND (SELECT COUNT(*) FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'budget_flow'
+          AND index_name = 'uk_activity_biz') = 0,
+    'ALTER TABLE budget_flow ADD UNIQUE KEY uk_activity_biz (activity_no, biz_key)',
+    'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- 2) local_message：uk_biz_key(biz_key) → uk_topic_biz_key(topic, biz_key)
-ALTER TABLE local_message DROP INDEX uk_biz_key;
-ALTER TABLE local_message ADD UNIQUE KEY uk_topic_biz_key (topic, biz_key);
+SET @s := (SELECT IF(
+    (SELECT COUNT(*) FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'local_message'
+          AND index_name = 'uk_biz_key') > 0,
+    'ALTER TABLE local_message DROP INDEX uk_biz_key', 'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @s := (SELECT IF(
+    (SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = 'local_message') > 0
+    AND (SELECT COUNT(*) FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'local_message'
+          AND index_name = 'uk_topic_biz_key') = 0,
+    'ALTER TABLE local_message ADD UNIQUE KEY uk_topic_biz_key (topic, biz_key)',
+    'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- 3) 券侧历史行的键形变化（裸 requestId → grant:requestId）只影响"尚未确认"的行；
 --    已 CONFIRMED 的历史行保持原样，仅作审计留存。若要连历史行一起规整（可选）：

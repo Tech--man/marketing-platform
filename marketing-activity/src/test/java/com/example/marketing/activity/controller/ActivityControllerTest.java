@@ -60,12 +60,12 @@ class ActivityControllerTest {
     }
 
     @Test
-    @DisplayName("H10：没登录就扣预算 → 40100，连滥用闸都不用到")
+    @DisplayName("H10：没登录就扣预算 → 40100（W9 后同时映射 HTTP 401），连滥用闸都不用到")
     void anonymousDeductRejected() throws Exception {
         mvc.perform(post("/api/activity/ACT1/budget/deduct")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"amountCents\":100,\"bizKey\":\"r-1\"}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(40100));
 
         verify(budgetService, never()).deduct(anyString(), anyLong(), anyString());

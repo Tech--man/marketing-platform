@@ -96,8 +96,8 @@ class RateLimitFilterTest {
 
         assertEquals(HttpStatus.TOO_MANY_REQUESTS, exchange.getResponse().getStatusCode());
         String body = exchange.getResponse().getBodyAsString().block();
-        assertTrue(body != null && body.contains("42900") && body.contains("queueCode"),
-                "响应体形状不许漂: " + body);
+        assertTrue(body != null && body.contains("42900") && !body.contains("queueCode"),
+                "响应体形状不许漂（queueCode 已随 W8 移除——它不对应任何真实排队实体）: " + body);
         verify(chain, never()).filter(any());
         assertEquals(1.0, meters.counter("marketing.gateway.rate.limit.rejected",
                 "route", "seckill-route").count());
@@ -140,6 +140,16 @@ class RateLimitFilterTest {
         verify(chain).filter(any());
         assertEquals(1.0, meters.counter("marketing.gateway.rate.limit.degraded").count(),
                 "降级必须有指标：洪流保护自己的可用性不能比后端还低");
+
+        // W11：同一故障下粗桶也 fail-open + 各自计数（stage 标签区分两层）
+        var preAuth = new PreAuthRateLimitFilter(properties, redis, meters);
+        var target = org.springframework.mock.web.server.MockServerWebExchange.from(
+                org.springframework.mock.http.server.reactive.MockServerHttpRequest
+                        .post("http://gw/api/auth/login")
+                        .remoteAddress(new java.net.InetSocketAddress("192.0.2.9", 50000)));
+        preAuth.filter(target, chain).block();
+        assertEquals(1.0, meters.counter("marketing.gateway.rate.limit.degraded", "stage", "preauth").count(),
+                "粗桶与精细层各自计降级：排障要能分清哪层在 fail-open");
     }
 
     @Test
@@ -152,6 +162,30 @@ class RateLimitFilterTest {
 
         assertEquals("gw:rl:seckill-route:192.0.2.9", capturedKeys.get(0),
                 "限流键必须是对端地址，XFF 首段 10.1.2.3 出现在键里就是回归");
+    }
+
+    @Test
+    @DisplayName("W11：命中粗桶 → 429 + preauth 计数（鉴权洪水不再只花 HMAC 成本）；静态路径不消耗配额")
+    void preAuthBucketRejectsFloodAndSkipsStatic() {
+        var preAuth = new PreAuthRateLimitFilter(properties, redis, meters);
+        luaSays(0L);
+        var target = org.springframework.mock.web.server.MockServerWebExchange.from(
+                org.springframework.mock.http.server.reactive.MockServerHttpRequest
+                        .post("http://gw/api/seckill/grab")
+                        .remoteAddress(new java.net.InetSocketAddress("192.0.2.9", 50000)));
+        preAuth.filter(target, chain).block();
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, target.getResponse().getStatusCode());
+        assertEquals(1.0, meters.counter("marketing.gateway.rate.limit.rejected", "route", "preauth").count());
+
+        // 非 /api/ 路径（静态 /ui /h5）不受粗桶管辖：不进 Redis、不消耗配额
+        org.mockito.Mockito.clearInvocations(redis, chain);
+        var staticPage = org.springframework.mock.web.server.MockServerWebExchange.from(
+                org.springframework.mock.http.server.reactive.MockServerHttpRequest
+                        .get("http://gw/ui/index.html"));
+        preAuth.filter(staticPage, chain).block();
+        verify(chain).filter(any());
+        org.mockito.Mockito.verify(redis, org.mockito.Mockito.never())
+                .execute(any(RedisScript.class), anyList(), anyList());
     }
 
     private double meteredCount() {

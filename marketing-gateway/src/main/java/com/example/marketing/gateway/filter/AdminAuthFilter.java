@@ -162,7 +162,7 @@ public class AdminAuthFilter implements GlobalFilter, Ordered {
                     headers.remove("X-Admin-Uid");
                     headers.remove("X-Admin-Token");
                     if (claims != null) {
-                        headers.set("X-Admin-User", claims.sub());
+                        headers.set("X-Admin-User", ConsumerAuthFilter.sanitize(claims.sub()));
                         headers.set("X-Admin-Role", claims.role());
                         headers.set("X-Admin-Jti", claims.jti());
                         headers.set("X-Admin-Uid", String.valueOf(claims.uid()));

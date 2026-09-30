@@ -139,6 +139,43 @@ class RuleAdminServiceTest {
     }
 
     @Test
+    @DisplayName("第六批 W1：discountRate=0 或 >10 拒绝（0 = 全场免费）")
+    void zeroDiscountRateRejected() {
+        RuleSaveRequest r = request("PR9006");
+        r.setType(RuleType.DISCOUNT);
+        r.setDiscountRate(java.math.BigDecimal.ZERO);
+
+        BizException e = assertThrows(BizException.class, () -> service.save(r, null));
+        assertEquals(40000, e.getCode());
+    }
+
+    @Test
+    @DisplayName("第六批 W1：discountRate 超 10 拒绝（>10 = 负折扣 = 倒贴）")
+    void overTenDiscountRateRejected() {
+        RuleSaveRequest r = request("PR9007");
+        r.setType(RuleType.DISCOUNT);
+        r.setDiscountRate(new java.math.BigDecimal("10.5"));
+
+        BizException e = assertThrows(BizException.class, () -> service.save(r, null));
+        assertEquals(40000, e.getCode());
+    }
+
+    @Test
+    @DisplayName("第六批 W1：阶梯档立减超门槛拒绝（满 300 减 400 是倒贴）")
+    void ladderOverThresholdRejected() {
+        RuleSaveRequest r = request("PR9008");
+        r.setType(RuleType.LADDER);
+        com.example.marketing.discount.domain.PromoRuleDsl.LadderStep step =
+                new com.example.marketing.discount.domain.PromoRuleDsl.LadderStep();
+        step.setThreshold(new java.math.BigDecimal("300"));
+        step.setDiscountValue(new java.math.BigDecimal("400"));
+        r.setLadderSteps(java.util.List.of(step));
+
+        BizException e = assertThrows(BizException.class, () -> service.save(r, null));
+        assertEquals(40000, e.getCode());
+    }
+
+    @Test
     @DisplayName("列表视图带 version：编辑时要拿它当乐观锁期望值")
     void viewCarriesVersion() {
         PromoRuleEntity e = existing("PR9001", 7);

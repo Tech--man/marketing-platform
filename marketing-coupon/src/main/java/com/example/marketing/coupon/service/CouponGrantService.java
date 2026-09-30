@@ -48,7 +48,9 @@ public class CouponGrantService {
      * 发起领券（同步返回受理凭证，券码经结果查询接口获取）。
      */
     public GrantTicket grant(GrantRequest request) {
-        String bizKey = "grant:" + request.requestId();
+        // BizKey 统一拼法（trim + 超长折叠）：手拼会绕过它，requestId 带空白/超长时
+        // 消费端 confirm 的键 miss → 无意义重投直至 FAILED（审查低危项收口）
+        String bizKey = BizKey.of("grant", request.requestId());
         return idempotentExecutor.execute(bizKey, GrantTicket.class, () -> doGrant(request));
     }
 

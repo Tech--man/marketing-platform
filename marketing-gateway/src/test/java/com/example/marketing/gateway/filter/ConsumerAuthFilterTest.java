@@ -439,4 +439,13 @@ class ConsumerAuthFilterTest {
         assertTrue(filter.getOrder() > -110);
         assertFalse(ConsumerAuthFilter.VERIFIED.isEmpty());
     }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("第六批 W10：X-User-Name 剥控制字符（CR/LF 头注入会让 Netty 编码 500）")
+    void nameHeaderControlCharsStripped() {
+        assertEquals("safe", ConsumerAuthFilter.sanitize("safe"));
+        assertEquals("okFAKE", ConsumerAuthFilter.sanitize("ok\r\nFAKE"));
+        assertEquals("", ConsumerAuthFilter.sanitize(null));
+        assertEquals("", ConsumerAuthFilter.sanitize("\r\n\r\n"));
+    }
 }

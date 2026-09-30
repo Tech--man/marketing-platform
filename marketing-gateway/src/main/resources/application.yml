@@ -6,6 +6,10 @@ spring:
     name: marketing-gateway
   data:
     redis:
+      # 命令超时 3s（2026-09-29 审查收口）：lettuce 默认 60s——Redis 抖动时每个请求
+      # 最长挂一分钟而不是快速失败；库存/限流/幂等全压在 Redis 上，快速失败 + 降级
+      # （网关 fail-open、预算回删）比长悬挂便宜得多
+      timeout: ${REDIS_TIMEOUT_MS:3000}
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
   cloud:
@@ -205,6 +209,9 @@ management:
       application: ${spring.application.name}
 
 logging:
+  # W12：印网关注入的 traceId（无头直连时为空，日志照常）——跨服务排障的钥匙
+  pattern:
+    level: "%5p [${traceId:-}]"
   level:
     com.example.marketing: INFO
 

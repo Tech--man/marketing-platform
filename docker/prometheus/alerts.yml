@@ -1,0 +1,68 @@
+# ============================================================
+# 告警规则（W13，2026-09-29 审查收口）
+#   五批修复补齐了"该告警的指标"，这里把它们变成会响的规则。
+#   前提：告警接收通道（Alertmanager webhook/邮件）是运维侧待定项——
+#   规则先就位，接收器接上即生效。
+#   抓取间隔 10s（prometheus.yml global），for 统一 2m 防抖。
+# ============================================================
+groups:
+  - name: marketing-availability
+    rules:
+      - alert: GatewayRateLimitDegraded
+        expr: increase(marketing_gateway_rate_limit_degraded_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关限流降级为 fail-open（Redis 计数不可用）"
+          description: "限流键计数失败超过 5 分钟，入口回到无限流基线。检查 Redis 可用性。"
+
+      - alert: GatewayAuthDegraded
+        expr: increase(marketing_gateway_auth_degraded_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关鉴权降级为仅验签（Redis 吊销位不可用）"
+          description: "已吊销 token 可用到自然过期（上界 accessTtl）。检查 Redis。"
+
+  - name: marketing-consistency
+    rules:
+      - alert: LocalMessageDeadLetter
+        expr: marketing_message_failed > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "本地消息表有 FAILED 死信"
+          description: "补偿链路重试 10 次后放弃，需人工排查或经管理端 messages/redrive 重驱动。"
+
+      - alert: AuditDrainDeferred
+        expr: increase(marketing_audit_drain_deferred_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "审计落库失败在重试"
+          description: "条目留在 PEL 由回收重试；持续失败说明 admin 的 MySQL 出问题，审计在积压。"
+
+      - alert: PreDeductRollbackFailed
+        expr: increase(coupon_grant_rollback_failed_total[10m]) > 0
+          or increase(seckill_grab_compensate_failed_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "预扣归还失败（库存/预算残余差值）"
+          description: "补偿动作自身失败，Redis 与权威值出现差值——④ 的 mismatch 面板核对后人工修复。"
+
+  - name: marketing-hygiene
+    rules:
+      - alert: MessagePurgeBacklog
+        expr: increase(marketing_message_purged_total[1h]) > 50000
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "终态归档单小时删除超 5 万行"
+          description: "终态行异常堆积或流量激增，核对是否需要调保留期或清理频率。"

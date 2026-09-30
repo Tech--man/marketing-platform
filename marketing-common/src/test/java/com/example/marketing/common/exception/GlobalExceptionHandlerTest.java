@@ -22,9 +22,37 @@ class GlobalExceptionHandlerTest {
     @Test
     @DisplayName("业务异常原样带上自己的码与文案")
     void bizExceptionKeepsItsCode() {
-        Result<Void> r = handler.handleBiz(BizException.of(ErrorCode.BAD_REQUEST, "值非法"));
+        Result<Void> r = handler.handleBiz(BizException.of(ErrorCode.BAD_REQUEST, "值非法"),
+                new org.springframework.mock.web.MockHttpServletResponse());
         assertEquals(ErrorCode.BAD_REQUEST.getCode(), r.getCode());
         assertEquals("值非法", r.getMessage());
+    }
+
+    @Test
+    @DisplayName("W9：鉴权/限流段映射真实 HTTP 状态——直连业务端口时监控终于能看见 401/403/429")
+    void authAndRateLimitCodesMapToHttpStatus() {
+        int[][] cases = {
+                {40100, 401}, {40101, 401}, {40102, 401},
+                {40300, 403},
+                {42900, 429},
+                {40000, 200}, {40400, 200}, {41000, 200}, {50000, 200},
+        };
+        for (int[] c : cases) {
+            org.springframework.mock.web.MockHttpServletResponse response =
+                    new org.springframework.mock.web.MockHttpServletResponse();
+            handler.handleBiz(BizException.of(codeOf(c[0]), "x"), response);
+            assertEquals(c[1], response.getStatus(),
+                    "code " + c[0] + " 应映射 HTTP " + c[1] + "（body.code 契约不变）");
+        }
+    }
+
+    private static ErrorCode codeOf(int code) {
+        for (ErrorCode ec : ErrorCode.values()) {
+            if (ec.getCode() == code) {
+                return ec;
+            }
+        }
+        throw new IllegalArgumentException("no ErrorCode " + code);
     }
 
     @Test

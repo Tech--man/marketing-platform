@@ -1,5 +1,6 @@
 package com.example.marketing.activity.service;
 
+import com.example.marketing.activity.domain.ActivityEvent;
 import com.example.marketing.activity.dto.ActivityView;
 import com.example.marketing.activity.infrastructure.entity.ActivityEntity;
 import com.example.marketing.activity.infrastructure.mapper.ActivityMapper;
@@ -63,6 +64,25 @@ class ActivityAdminWriteTest {
 
         assertEquals(new BigDecimal("80.00"), after.getBudgetAmount());
         verify(budgetService).reheat("ACT9001", true);
+    }
+
+    @Test
+    @DisplayName("第六批 W2：RE_ONLINE 预热走 warmCentsIfAbsent(computeRemainCents)——不用全额 warmIfAbsent")
+    void reonlineWarmUsesCentsIfAbsentWithReconciliation() {
+        ActivityEntity entity = existing("100.00", 2);
+        entity.setStatus("OFFLINE");  // 从 OFFLINE 经 PUBLISH → ONLINE 触发预热
+        stubSelect(entity);
+        when(mapper.updateById(any(ActivityEntity.class))).thenReturn(1);
+        when(budgetService.computeRemainCents("ACT9001")).thenReturn(7_000L);
+
+        service.transition("ACT9001", ActivityEvent.RE_ONLINE);
+
+        // 必须是 warmCentsIfAbsent(对账值)——warmIfAbsent(budgetAmount) 是地雷 E 的
+        // 旧写法：下线期间丢键再上线，全额会把已消耗的预算凭空回涨
+        verify(budgetService).warmCentsIfAbsent("ACT9001", 7_000L);
+        verify(budgetService, org.mockito.Mockito.never())
+                .warmIfAbsent(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any());
     }
 
     @Test
