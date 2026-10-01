@@ -67,6 +67,16 @@ public class SeckillOrderConsumer implements RocketMQListener<String>, StreamMes
     }
 
     /**
+     * N-7：LITE 通道的 tag 声明——与 Full 形态 selectorExpression 同源常量。
+     * 本 topic 将来出现第二个 tag 时，Stream 侧拒投并计 stream.consumer.tag_rejected，
+     * 而不是把别的事件按 SeckillOrderEvent 解析（错账方向不可控）。
+     */
+    @Override
+    public boolean acceptsTag(String tag) {
+        return MqTopics.TAG_ORDER.equals(tag);
+    }
+
+    /**
      * 建单、已售数递增、消息确认合成一个事务：原本三条语句各自 autocommit，每条消息要等
      * 三次 InnoDB redo fsync，这是 LITE 消费端吞吐的数量级瓶颈；顺带也让"有单必有库存递增"
      * 从"最终一致"变成真原子。

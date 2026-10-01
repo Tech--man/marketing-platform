@@ -43,14 +43,16 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
     private final StringRedisTemplate redisTemplate;
     private final List<StreamMessageHandler> handlers;
     private final int concurrency;
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
     private final List<Thread> workers = new ArrayList<>();
     private volatile boolean running;
 
     public StreamConsumerRegistrar(StringRedisTemplate redisTemplate, List<StreamMessageHandler> handlers,
-                                   int concurrency) {
+                                   int concurrency, io.micrometer.core.instrument.MeterRegistry meterRegistry) {
         this.redisTemplate = redisTemplate;
         this.handlers = handlers;
         this.concurrency = Math.max(1, concurrency);
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
@@ -152,16 +154,29 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
         }
     }
 
-    private void deliver(StreamMessageHandler handler, String key, MapRecord<String, Object, Object> record) {
-        // W3.10（2026-09-30 第二轮复审）：tag 校验——Redis Stream 通道不消费 tag（FULL 形态
-        // RocketMQ 按 selectorExpression 路由），将来有人在已有 topic 上加第二个 tag 时，
-        // LITE 会把消息错投给原 handler 且无任何线索。留一条 WARN 把两形态的行为分叉显式化。
+    // 可见性为 package-private：拒投分支（N-7）需要单测直接驱动 deliver，
+    // 而启动 worker 线程的 afterPropertiesSet 不适合进单测。
+    void deliver(StreamMessageHandler handler, String key, MapRecord<String, Object, Object> record) {
+        // W3.10（2026-09-30）引入 tag 校验时只 WARN 仍无差别投递；2026-10-01 审计（架构层
+        // "双形态分叉"项）升级为拒投：Redis Stream 通道不消费 tag（FULL 形态 RocketMQ 按
+        // selectorExpression 路由），将来有人在已有 topic 上加第二个 tag 时，LITE 若照旧把
+        // 消息塞给原 handler，等于按错误的类型处理载荷（错账方向不可控）——宁可拒投并留
+        // ERROR 线索，让分叉在第一次发生时就被看见。拒投的消息仍走下方 XACK/XDEL：
+        // 留在 PEL 只会被回收循环无限重投成毒消息。N-7 补齐配套：handler 侧 acceptsTag
+        // 已有真实实现（各消费者返回自己的 selectorExpression 常量），拒投计数
+        // stream.consumer.tag_rejected 进 Prometheus 告警——这段不再是死代码。
         Object tag = record.getValue().get(RedisStreamEventPublisher.FIELD_TAG);
         if (tag != null && !String.valueOf(tag).isBlank()
                 && !handler.acceptsTag(String.valueOf(tag))) {
-            log.warn("[stream-consumer] 消息 tag={} 不属于本 handler（topic={}）：Stream 通道不做 tag 路由，"
-                            + "FULL 形态可能按 tag 分给了别的消费者——两形态行为分叉，仍按无差别投递处理",
+            io.micrometer.core.instrument.Counter.builder("stream.consumer.tag_rejected")
+                    .description("LITE Stream 通道拒投的不属于本 handler 的 tag 消息数（两形态 tag 布局分叉信号）")
+                    .register(meterRegistry).increment();
+            log.error("[stream-consumer] 拒投：消息 tag={} 不属于本 handler（topic={}）。"
+                            + "Stream 通道不做 tag 路由，FULL 形态会按 tag 分给别的消费者——"
+                            + "两形态行为已分叉，请核对 topic/tag 布局；本条按错投丢弃（XACK）",
                     tag, handler.topic());
+            ackAndDelete(handler, key, record);
+            return;
         }
         Object payload = record.getValue().get(RedisStreamEventPublisher.FIELD_PAYLOAD);
         boolean ok = false;
@@ -179,6 +194,11 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
             // 放弃本条：未 confirm 的本地消息会被补偿定时器重发新消息
             log.error("[stream-consumer] 消息连续失败放弃，等待本地消息表补偿重发 topic={}", handler.topic());
         }
+        ackAndDelete(handler, key, record);
+    }
+
+    private void ackAndDelete(StreamMessageHandler handler, String key,
+                              MapRecord<String, Object, Object> record) {
         try {
             redisTemplate.opsForStream().acknowledge(key, handler.group(), record.getId());
             // XACK 只把条目从消费组 PEL 摘除，条目本身永久留在流里——不删就是常态服役下的内存泄漏。

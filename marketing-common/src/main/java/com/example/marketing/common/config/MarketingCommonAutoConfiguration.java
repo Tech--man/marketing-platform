@@ -235,8 +235,9 @@ public class MarketingCommonAutoConfiguration {
         @ConditionalOnBean(StreamMessageHandler.class)
         public StreamConsumerRegistrar streamConsumerRegistrar(StringRedisTemplate stringRedisTemplate,
                 List<StreamMessageHandler> handlers,
-                @Value("${marketing.mq.stream-concurrency:8}") int concurrency) {
-            return new StreamConsumerRegistrar(stringRedisTemplate, handlers, concurrency);
+                @Value("${marketing.mq.stream-concurrency:8}") int concurrency,
+                MeterRegistry meterRegistry) {
+            return new StreamConsumerRegistrar(stringRedisTemplate, handlers, concurrency, meterRegistry);
         }
 
         @Bean

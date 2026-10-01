@@ -19,11 +19,13 @@ public interface StreamMessageHandler {
     void handle(String payload);
 
     /**
-     * 本 handler 关心的 tag（W3.10，2026-09-30 第二轮复审）：默认不校验。
+     * 本 handler 关心的 tag（W3.10，2026-09-30 第二轮复审；N-7 落地实现）。
      * Redis Stream 通道不做 tag 路由（一个 topic 的消息全投给注册的 handler），
      * FULL 形态 RocketMQ 按 selectorExpression 分发——将来在同一 topic 上加第二个
-     * tag/消费者时，两形态行为会分叉。覆写本方法让消费容器能把不属于自己的 tag
-     * 显式 WARN 出来，而不是静默错投。
+     * tag/消费者时，两形态行为会分叉。<b>每个 handler 都应覆写本方法返回自己的
+     * selectorExpression 常量</b>（与 Full 形态同源），让消费容器能把不属于自己的
+     * tag 拒投并计数（stream.consumer.tag_rejected），而不是静默错投。默认 true
+     * 仅为兼容尚未声明的 handler——新 handler 不要依赖默认值。
      */
     default boolean acceptsTag(String tag) {
         return true;

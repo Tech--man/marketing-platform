@@ -66,6 +66,16 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
     }
 
     /**
+     * N-7：LITE 通道的 tag 声明——与 Full 形态 selectorExpression 同源常量。
+     * 本 topic 将来出现第二个 tag 时，Stream 侧拒投并计 stream.consumer.tag_rejected，
+     * 而不是把别的消费者的事件按 GrantEvent 解析（错账方向不可控）。
+     */
+    @Override
+    public boolean acceptsTag(String tag) {
+        return MqTopics.TAG_GRANT.equals(tag);
+    }
+
+    /**
      * 落库与确认合成一个事务：原本 insert 与 confirm 各自 autocommit，每条消息要等两次
      * InnoDB redo fsync —— 实测这决定了 LITE 消费端 ~22 msg/s 的天花板（A-B-A 对照验证）。
      *

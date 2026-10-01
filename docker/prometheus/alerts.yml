@@ -48,13 +48,41 @@ groups:
 
       - alert: PreDeductRollbackFailed
         expr: increase(coupon_grant_rollback_failed_total[10m]) > 0
-          or increase(seckill_grab_compensate_failed_total[10m]) > 0
+        or increase(seckill_grab_compensate_failed_total[10m]) > 0
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "预扣归还失败（库存/预算残余差值）"
           description: "补偿动作自身失败，Redis 与权威值出现差值——④ 的 mismatch 面板核对后人工修复。"
+
+      # N-7（2026-10-01 复审）：LITE Stream 通道拒投了不属于本 handler 的 tag——
+      # 出现即说明两形态的 topic/tag 布局分叉（有人在已有 topic 上加了新 tag），
+      # FULL 会按 tag 分给别的消费者而 LITE 直接丢弃。任何一次拒投都值得停下核对。
+      - alert: StreamTagRejected
+        expr: increase(stream_consumer_tag_rejected_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LITE Stream 通道拒投了异 tag 消息（两形态 tag 布局分叉）"
+          description: "MKT_* topic 上出现了消费端未声明的 tag：FULL 按 selectorExpression
+            路由给别的消费者，LITE 拒投丢弃（本地消息表 30 轮后转 FAILED 死信）。
+            立即核对该 topic 的发布方与两侧消费者的 tag 布局是否一致。"
+
+      # N-6②（2026-10-01 复审）：回补去重 token 缺失——坏载荷分支的 requestId 可能为空，
+      # 此类回补放弃去重直接执行（重投可能双还，方向偏松但有迹可循），持续出现说明
+      # 调用方的 token 语义有缺口。
+      - alert: RollbackWithoutToken
+        expr: increase(coupon_grant_rollback_no_token_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "券回补在无去重 token 下执行"
+          description: "invalidPayload 等路径的 requestId 缺失，回补退化为不去重模式。
+            核对事件载荷里 requestId 的必填性（GrantRequest @Size/@Pattern 只拦请求侧）。"
+
 
   - name: marketing-hygiene
     rules:
