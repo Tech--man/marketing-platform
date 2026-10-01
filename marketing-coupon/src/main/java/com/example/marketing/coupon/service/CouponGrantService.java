@@ -122,7 +122,7 @@ public class CouponGrantService {
                     // 失败（未落任何消息行）必须归还预扣——否则幂等键标 FAILED、客户端
                     // 重试整体重跑 action 再扣一次（1 张券吃 2 份库存 + 2 次限领）。
                     // 归还后重试从头来，预扣最多生效一次。
-                    rollbackPreDeduct(template.getId(), request.userId(), 1);
+                    rollbackPreDeduct(template.getId(), request.userId(), 1, request.requestId());
                     throw e;
                 }
                 if (!recorded) {
@@ -130,7 +130,7 @@ public class CouponGrantService {
                     // PENDING/SENT/CONFIRMED 行还在）。券的落库由那条消息负责，本次重跑
                     // 刚做的预扣是多余的一份——归还，防止"一张券吃两份库存"；直接按
                     // 受理成功返回（重投/补偿定时器会把券送到位）。
-                    rollbackPreDeduct(template.getId(), request.userId(), 1);
+                    rollbackPreDeduct(template.getId(), request.userId(), 1, request.requestId());
                     Counter.builder("coupon.grant.replay_backfill").register(meterRegistry).increment();
                     return GrantTicket.accepted(request.requestId());
                 }
@@ -151,11 +151,11 @@ public class CouponGrantService {
         // switch 各分支均已 return/throw，此处不可达，无需兜底语句
     }
 
-    /** 归还预扣（rollback_stock.lua：INCRBY 库存 + DECRBY 个人限领计数）。
+    /** 归还预扣（rollback_stock.lua：INCRBY 库存 + DECRBY 个人限领计数；token 去重防窄双退）。
      *  归还自身失败只能计数暴露——别让补偿动作把原始异常吃掉 */
-    private void rollbackPreDeduct(Long templateId, Long userId, int quantity) {
+    private void rollbackPreDeduct(Long templateId, Long userId, int quantity, String dedupToken) {
         try {
-            stockService.rollback(templateId, userId, quantity);
+            stockService.rollback(templateId, userId, quantity, dedupToken);
             Counter.builder("coupon.grant.rollback").register(meterRegistry).increment();
             log.warn("[grant] 预扣后失败，已归还预扣 template={}, user={}", templateId, userId);
         } catch (RuntimeException rollbackEx) {

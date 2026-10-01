@@ -76,7 +76,8 @@ class CouponGrantServiceTest {
 
         assertThrows(RuntimeException.class, () -> service.grant(request()));
 
-        verify(stockService).rollback(1L, 70001L, 1);
+        verify(stockService).rollback(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(70001L), org.mockito.ArgumentMatchers.eq(1), anyString());
         verify(localMessageService, never()).publish(anyString(), anyString());
     }
 
@@ -92,7 +93,7 @@ class CouponGrantServiceTest {
 
         assertThrows(RuntimeException.class, () -> service.grant(request()));
 
-        verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt());
+        verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt(), anyString());
     }
 
     @Test
@@ -103,7 +104,8 @@ class CouponGrantServiceTest {
 
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service.grant(request()));
 
-        verify(stockService).rollback(1L, 70001L, 1);
+        verify(stockService).rollback(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(70001L), org.mockito.ArgumentMatchers.eq(1), anyString());
         verify(localMessageService, never()).publish(anyString(), anyString());
     }
 
@@ -113,7 +115,7 @@ class CouponGrantServiceTest {
         when(localMessageService.recordIfAbsent(anyString(), anyString(), anyString(), anyString()))
                 .thenThrow(new RuntimeException("db down"));
         org.mockito.Mockito.doThrow(new RuntimeException("redis down"))
-                .when(stockService).rollback(anyLong(), anyLong(), anyInt());
+                .when(stockService).rollback(anyLong(), anyLong(), anyInt(), anyString());
 
         RuntimeException e = assertThrows(RuntimeException.class, () -> service.grant(request()));
 
@@ -129,7 +131,7 @@ class CouponGrantServiceTest {
                 .thenReturn(true);
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service.grant(request()));
 
-        verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt());
+        verify(stockService, never()).rollback(anyLong(), anyLong(), anyInt(), anyString());
     }
 
     @Test

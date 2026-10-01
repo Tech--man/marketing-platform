@@ -86,15 +86,42 @@ public class CouponStockService {
      * 原实现对缺失键无条件 INCRBY，会凭空创建幽灵库存键（Redis 重启/overwrite 窗口/
      * reheat(force) 后的迟到回补）。落空只计数告警，残余差值由 coupon mismatch
      * 恒等式暴露（方向偏少，不会超发）。</p>
+     *
+     * <p><b>幂等去重</b>（2026-10-01 审计 P3）：dedupToken = 这次预扣的身份
+     * （领券即 requestId）。同一次预扣的回补可能被多条补偿路径重复触发（重试 +
+     * 手工 redrive 会走到同一段归还逻辑），Lua 内 SET NX 保证同 token 只真还一次，
+     * 二次到达返回 -2（只计数，不动账）——否则同一张券的库存被还两份。
+     * 去重 TTL 取 30 天下限（与限领计数同窗）：覆盖补偿定时器 + FAILED 90 天
+     * 归档前的人工 redrive 窗口。</p>
      */
-    public void rollback(Long templateId, Long userId, int quantity) {
+    public void rollback(Long templateId, Long userId, int quantity, String dedupToken) {
+        // N-6②（复审）：空白 token 不能拼出共享常量键 coupon:rollback:null——坏载荷分支
+        // （invalidPayload）恰恰发生在"载荷已经坏了"时，requestId 可能缺失/空白，之后
+        // 所有同类回补都会撞同一个键被 -2 静默吞掉（30 天 TTL 内回补通道整体失效）。
+        // 空白时改用随机 token：放弃去重（重投的同一坏事件可能真还两次，方向偏松但
+        // 有计数可见），比"静默全吞"（方向偏紧且不可见）可观测。
+        boolean noToken = dedupToken == null || dedupToken.isBlank();
+        if (noToken) {
+            io.micrometer.core.instrument.Counter.builder("coupon.grant.rollback_no_token")
+                    .register(meterRegistry).increment();
+            log.warn("[stock] 回补去重 token 缺失（调用方应传 requestId），本次不去重直接回补 templateId={}",
+                    templateId);
+        }
+        String token = noToken ? "notoken-" + java.util.UUID.randomUUID() : dedupToken;
         Long result = redisTemplate.execute(ROLLBACK,
-                List.of(stockKey(templateId), userKey(templateId, userId)), String.valueOf(quantity));
+                List.of(stockKey(templateId), userKey(templateId, userId),
+                        "coupon:rollback:" + token),
+                String.valueOf(quantity), String.valueOf(USER_KEY_TTL_FLOOR.toSeconds()));
         if (result != null && result == -1L) {
             io.micrometer.core.instrument.Counter.builder("coupon.grant.rollback_nokey")
                     .register(meterRegistry).increment();
             log.warn("[stock] 回补时库存键不存在，跳过（幽灵键防护；残余差值由 mismatch 暴露）templateId={}",
                     templateId);
+        } else if (result != null && result == -2L) {
+            io.micrometer.core.instrument.Counter.builder("coupon.grant.rollback_dedup")
+                    .register(meterRegistry).increment();
+            log.warn("[stock] 回补 token 已用过的幂等重放，跳过（防窄双退）templateId={}, token={}",
+                    templateId, dedupToken);
         }
     }
 

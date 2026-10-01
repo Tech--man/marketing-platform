@@ -156,7 +156,9 @@ public class CouponGrantConsumer implements RocketMQListener<String>, StreamMess
     private InvalidGrantPayloadException invalidPayload(CouponGrantEvent event, String reason, Exception cause) {
         int quantity = event.getQuantity() == null ? 1 : event.getQuantity();
         try {
-            stockService.rollback(event.getTemplateId(), event.getUserId(), quantity);
+            // 去重 token = requestId：受理侧 !recorded 归还与消费端坏载荷回补可能指向
+            // 同一次预扣（重试窗口内两边都跑），Lua 内 SET NX 保证只真还一次
+            stockService.rollback(event.getTemplateId(), event.getUserId(), quantity, event.getRequestId());
             Counter.builder("coupon.grant.rollback").register(meterRegistry).increment();
         } catch (RuntimeException rollbackEx) {
             Counter.builder("coupon.grant.rollback_failed").register(meterRegistry).increment();

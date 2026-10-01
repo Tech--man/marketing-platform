@@ -112,7 +112,8 @@ class CouponGrantConsumerTest {
 
         consumer.handle(JsonUtils.toJson(event()));
 
-        verify(stockService).rollback(1L, 70001L, 1);
+        verify(stockService).rollback(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(70001L), org.mockito.ArgumentMatchers.eq(1), anyString());
         verify(localMessageService, times(1)).confirm(anyString(), anyString());
         verify(userCouponMapper, times(1)).insert(any(UserCouponEntity.class));
     }
@@ -124,7 +125,8 @@ class CouponGrantConsumerTest {
 
         consumer.handle(JsonUtils.toJson(event()));
 
-        verify(stockService).rollback(1L, 70001L, 1);
+        verify(stockService).rollback(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(70001L), org.mockito.ArgumentMatchers.eq(1), anyString());
         verify(localMessageService, times(1)).confirm(anyString(), anyString());
         verify(userCouponMapper, times(0)).insert(any(UserCouponEntity.class));
     }
