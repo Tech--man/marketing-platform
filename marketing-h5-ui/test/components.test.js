@@ -24,6 +24,20 @@ describe("MPrice", () => {
     expect(w.find(".price__dec").exists()).toBe(false);
     expect(w.find(".price__int").text()).toBe("--");
   });
+  it("N-19：不传 value（prop 默认值）也显示 —— 把 default 改回 0 此处变红", () => {
+    const w = mount(MPrice);
+    expect(w.find(".price__cur").exists()).toBe(false);
+    expect(w.find(".price__int").text()).toBe("--");
+  });
+});
+
+describe("CouponCard · prop 默认值（N-19：缺省≠真 0 元券）", () => {
+  it("不传 faceValue/threshold → 面值 -- 且无门槛，而不是 ¥0 / 满 0", () => {
+    const w = mount(CouponCard, { props: { name: "新人券" } });
+    expect(w.find(".cp__value .price__int").text()).toBe("--");
+    expect(w.find(".cp__value .price__cur").exists()).toBe(false);
+    expect(w.find(".cp__cond").text()).toBe("无门槛");
+  });
 });
 
 describe("MButton", () => {
