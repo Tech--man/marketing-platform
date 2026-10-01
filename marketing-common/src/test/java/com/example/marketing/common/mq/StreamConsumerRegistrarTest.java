@@ -66,8 +66,9 @@ class StreamConsumerRegistrarTest {
 
         verify(ops).acknowledge(KEY, "G", RecordId.of("1-1"));
         verify(ops).delete(KEY, RecordId.of("1-1"));
-        assertEquals(1.0, meters.counter("stream.consumer.tag_rejected").count(),
-                "拒投必须计数（alerts.yml 的 StreamTagRejected 靠它）");
+        // v3 复审：计数带 topic 维度（告警响了要能定位是哪个消费者）
+        assertEquals(1.0, meters.find("stream.consumer.tag_rejected")
+                .tag("topic", "T").counter().count(), "拒投必须计数且带 topic（alerts.yml 的 StreamTagRejected 靠它）");
     }
 
     @Test
@@ -91,6 +92,7 @@ class StreamConsumerRegistrarTest {
 
         verify(ops).acknowledge(KEY, "G", RecordId.of("1-1"));
         verify(ops).acknowledge(KEY, "G", RecordId.of("2-1"));
-        assertEquals(0.0, meters.counter("stream.consumer.tag_rejected").count());
+        assertEquals(null, meters.find("stream.consumer.tag_rejected").tag("topic", "T").counter(),
+                "放行路径不许产生拒投计数");
     }
 }

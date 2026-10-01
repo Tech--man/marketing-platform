@@ -168,7 +168,9 @@ public class StreamConsumerRegistrar implements InitializingBean, DisposableBean
         Object tag = record.getValue().get(RedisStreamEventPublisher.FIELD_TAG);
         if (tag != null && !String.valueOf(tag).isBlank()
                 && !handler.acceptsTag(String.valueOf(tag))) {
+            // v3 复审 P3：带 topic 维度——告警响了要知道是哪个消费者的布局分叉
             io.micrometer.core.instrument.Counter.builder("stream.consumer.tag_rejected")
+                    .tag("topic", handler.topic())
                     .description("LITE Stream 通道拒投的不属于本 handler 的 tag 消息数（两形态 tag 布局分叉信号）")
                     .register(meterRegistry).increment();
             log.error("[stream-consumer] 拒投：消息 tag={} 不属于本 handler（topic={}）。"
