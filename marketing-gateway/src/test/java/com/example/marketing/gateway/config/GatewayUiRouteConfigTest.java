@@ -83,6 +83,24 @@ class GatewayUiRouteConfigTest {
     }
 
     @Test
+    void 前后端分离后静态路由必须指向WEB容器_指回admin等于绕过nginx() {
+        // 分离（2026-10-01）后的契约：ui/h5 走 WEB_HOST/WEB_PORT（nginx 容器），
+        // 不再复用 ADMIN 占位符、不再 lb://marketing-admin——admin jar 里已无静态文件，
+        // 指回去 = 五套入口整片 404（且只在界面打开时才暴露）。
+        for (Map<String, Object> doc : DOCUMENTS) {
+            for (String id : List.of("ui-route", "h5-route")) {
+                String uri = routesOf(doc).stream()
+                        .filter(r -> id.equals(r.get("id")))
+                        .map(r -> String.valueOf(r.get("uri"))).findFirst().orElse("");
+                assertTrue(uri.contains("WEB_HOST") && uri.contains("WEB_PORT"),
+                        id + " 的 uri 应含 WEB_HOST/WEB_PORT 占位符，实际: " + uri);
+                assertFalse(uri.contains("ADMIN") || uri.contains("marketing-admin"),
+                        id + " 指回了 admin——静态承载已移交 marketing-web：" + uri);
+            }
+        }
+    }
+
+    @Test
     void 静态资源不能被消费者托管清单罩住否则打开界面先得登录() {
         // 旧的写法是断言 /ui/** 在 AuthFilter 的 whitelist 里。AuthFilter 删除后，
         // 同一条保证换了机制：托管清单只罩 /api/**，界面路径天然不在里面。

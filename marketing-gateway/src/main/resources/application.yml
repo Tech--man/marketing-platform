@@ -83,17 +83,18 @@ spring:
           uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
           predicates:
             - Path=/api/admin/**
-        # ⑥ 的后台界面。与 admin-route 共用同一对占位符是刻意的：LITE 下 compose 把它们
-        # 指到 standalone:8085、FULL 进程档指到 127.0.0.1:8086、容器档指到 marketing-admin:8086，
-        # 单独写死一个地址就等于五套入口里总有一套打不开界面。
+        # ⑥ 的后台界面（前后端分离 2026-10-01）：静态承载移交 marketing-web 容器，
+        # 不再从 admin jar 的 classpath 发出。占位符与 admin-route 分家——web 是
+        # 独立容器（nginx），host 形态默认 127.0.0.1:8088（compose.web.yml 发布的
+        # 回环端口），容器形态由 compose 下发 WEB_HOST=mkt-web。
         - id: ui-route
-          uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
+          uri: http://${WEB_HOST:127.0.0.1}:${WEB_PORT:8088}
           predicates:
             - Path=/ui/**
-        # C 端 H5：与 ui-route 共用同一对占位符（静态资源同样长在 admin/standalone 里）。
+        # C 端 H5：与 ui-route 同一对 WEB 占位符（同一 nginx 容器的两个 location）。
         # 漏这条的后果和当年漏 ui-route 一样：LITE 能开、升 FULL 整片 404。
         - id: h5-route
-          uri: http://${ADMIN_HOST:127.0.0.1}:${ADMIN_PORT:8086}
+          uri: http://${WEB_HOST:127.0.0.1}:${WEB_PORT:8088}
           predicates:
             - Path=/h5/**
         # 消费者账号服务：注册/登录/刷新/会话。必须排在 admin-route 之前吗？不必 ——
@@ -260,12 +261,14 @@ spring:
           predicates: [ Path=/api/admin/** ]
         # 与上面 local 段那条 ui-route 成对：漏这条，LITE 打开后台一切正常，
         # 升到 FULL 就是整片 404（③ 已经为 admin-route 交过一次这个学费）。
+        # 前后端分离（2026-10-01）：刻意不用 lb://——nginx 不注册 nacos，静态服务
+        # 用 compose 网络里的静态 DNS 名（默认 mkt-web:80，full-app.yml 可覆写）。
         - id: ui-route
-          uri: lb://marketing-admin
+          uri: http://${WEB_HOST:mkt-web}:${WEB_PORT:80}
           predicates: [ Path=/ui/** ]
         # 与上面 local 段那条 h5-route 成对：漏这条，LITE 打开 H5 一切正常，升到 FULL 整片 404。
         - id: h5-route
-          uri: lb://marketing-admin
+          uri: http://${WEB_HOST:mkt-web}:${WEB_PORT:80}
           predicates: [ Path=/h5/** ]
         # 与上面 local 段那条 account-route 成对：漏这条，LITE 登录一切正常，
         # 升到 FULL 就是 /api/auth/** 整片 404（③ 与 ⑥ 各为这类漏项交过一次学费）。
