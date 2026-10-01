@@ -16,13 +16,41 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
  * 全局异常处理器：业务异常转统一响应，系统异常兜底并告警日志。
  *
  * <p>由 MarketingCommonAutoConfiguration 在 Servlet 环境下自动注册。</p>
+ *
+ * <p><b>管理写失败留痕</b>（2026-10-01 审计 P2-10）：/api/admin/** 上的非 GET
+ * 请求被<b>本进程抛出的</b> BizException 拒绝（40300 越权、41008 乐观锁冲突、
+ * 41007 状态机…）时投一条审计——此前控制器只在<b>成功后</b>调 audit()，失败与
+ * 被拒的管理写在 admin_audit_log 里完全不可见，而"谁试图改、被什么挡下"恰恰是
+ * 审计最该回答的问题。投递走 AuditOutbox 同一条 at-least-once 链路；身份从
+ * X-Admin-Token 尽力解析（解析不了记匿名——被拒请求本来就可能没有效凭证）。
+ * 审计自身的任何失败只计数，绝不影响错误响应。</p>
+ *
+ * <p><b>覆盖边界</b>（复审 N-11，别在这里找错日志）：网关侧发出的
+ * 40100/40101/40102/40300（凭证缺失/过期/吊销、只读角色）在网关就被拒绝，
+ * <b>到不了本 advice、不进审计</b>——那类拒绝的可见面是网关日志与
+ * marketing.gateway.auth.* 指标。本类的留痕只回答"过了网关之后被业务规则挡下"
+ * 的那一类。</p>
  */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private final com.example.marketing.common.audit.AuditOutbox auditOutbox;
+    private final com.example.marketing.common.security.AdminRequestIdentity adminIdentity;
+
+    public GlobalExceptionHandler() {
+        this(null, null);
+    }
+
+    public GlobalExceptionHandler(com.example.marketing.common.audit.AuditOutbox auditOutbox,
+                                  com.example.marketing.common.security.AdminRequestIdentity adminIdentity) {
+        this.auditOutbox = auditOutbox;
+        this.adminIdentity = adminIdentity;
+    }
+
     @ExceptionHandler(BizException.class)
-    public org.springframework.http.ResponseEntity<Result<Void>> handleBiz(BizException e) {
+    public org.springframework.http.ResponseEntity<Result<Void>> handleBiz(
+            BizException e, jakarta.servlet.http.HttpServletRequest request) {
         log.warn("[biz] code={}, msg={}", e.getCode(), e.getMessage());
         // 鉴权/限流段映射真实 HTTP 状态（2026-09-29 审查收口）：body.code 契约不变
         // （前端只认它），但直连业务端口时基于 HTTP 状态码的监控/熔断/告警终于能看见
@@ -40,8 +68,52 @@ public class GlobalExceptionHandler {
         } else if (code >= 42900 && code < 43000) {
             status = org.springframework.http.HttpStatus.TOO_MANY_REQUESTS;
         }
+        auditAdminRejection(e, request);
         return org.springframework.http.ResponseEntity.status(status)
                 .body(Result.fail(e.getCode(), e.getMessage()));
+    }
+
+    /**
+     * 管理写被拒的留痕（P2-10）。只看 /api/admin/** 上的非 GET 请求——GET 的 4xxxx
+     * 多为查询口径问题，写进审计表会稀释"谁动了什么"的信号。整体 best-effort：
+     * 抛任何异常都不许影响错误响应本身（审计不是拒绝链路的一环）。
+     */
+    private void auditAdminRejection(BizException e, jakarta.servlet.http.HttpServletRequest request) {
+        if (auditOutbox == null || request == null) {
+            return;
+        }
+        try {
+            String path = request.getRequestURI();
+            if (path == null || !path.startsWith("/api/admin")
+                    || "GET".equalsIgnoreCase(request.getMethod())) {
+                return;
+            }
+            com.example.marketing.common.security.AdminPrincipal actor = null;
+            if (adminIdentity != null) {
+                try {
+                    actor = adminIdentity.require(request);
+                } catch (RuntimeException unauthenticated) {
+                    // 被拒请求本就可能没有效凭证：记匿名，而不是让身份解析失败挡住留痕
+                }
+            }
+            auditOutbox.record(new com.example.marketing.common.audit.AuditPayload(
+                    actor == null ? null : actor.uid(),
+                    actor == null ? "(未认证)" : actor.username(),
+                    actor == null ? "-" : actor.role(),
+                    "admin.request.rejected",
+                    "admin",
+                    path,
+                    request.getMethod(),
+                    path,
+                    "写请求被拒（全局异常处理器留痕，非业务成功路径）",
+                    e.getCode(),
+                    e.getMessage(),
+                    com.example.marketing.common.web.ClientIp.of(request),
+                    0L,
+                    System.currentTimeMillis() / 1000));
+        } catch (RuntimeException auditFailure) {
+            log.warn("[audit] 管理写拒绝留痕失败（不影响错误响应）: {}", auditFailure.toString());
+        }
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

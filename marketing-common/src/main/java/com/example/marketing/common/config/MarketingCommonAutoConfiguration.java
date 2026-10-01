@@ -150,10 +150,17 @@ public class MarketingCommonAutoConfiguration {
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnClass(name = "org.springframework.web.bind.annotation.RestControllerAdvice")
     static class WebExceptionConfiguration {
+        /**
+         * 管理写失败留痕（P2-10）需要 AuditOutbox 与 AdminRequestIdentity——两者都在
+         * AdminSecurityAutoConfiguration 里装配，这里用 ObjectProvider 软引用：
+         * 缺了（如 admin 模块没装 Redis 的假想形态）异常处理器照常工作，只是不留痕。
+         */
         @Bean
         @ConditionalOnMissingBean
-        public GlobalExceptionHandler globalExceptionHandler() {
-            return new GlobalExceptionHandler();
+        public GlobalExceptionHandler globalExceptionHandler(
+                ObjectProvider<com.example.marketing.common.audit.AuditOutbox> auditOutbox,
+                ObjectProvider<com.example.marketing.common.security.AdminRequestIdentity> adminIdentity) {
+            return new GlobalExceptionHandler(auditOutbox.getIfAvailable(), adminIdentity.getIfAvailable());
         }
     }
 
