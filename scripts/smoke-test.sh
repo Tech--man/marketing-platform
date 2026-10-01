@@ -399,7 +399,7 @@ expect "C 端 token 打后台被拒" '"code":40100' "$(curl -s -m 10 -H "$AUTH" 
 # 只认它，但监控/熔断/LB 健康判定看的是状态码。归属（v3 复审 N-21 修正）：这条钉的是
 # **网关侧**拒绝（无凭证在网关 AdminAuthFilter 就被 401，到不了 MVC advice）；进程内
 # advice 的状态映射由 ActivityControllerTest 的 MockMvc 断言钉住——渲染管道盖回 200
-# 那类回归（52863dc→e23d0a5）的第一现场在那边，排障别找错地方。
+# 那类回归（Boot 3.4 升级窗口实测踩过）的第一现场在那边，排障别找错地方。
 expect "无凭证打后台回真实 HTTP 401（不是 200+40100）" '^401$' \
   "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$GW/api/admin/users")"
 
