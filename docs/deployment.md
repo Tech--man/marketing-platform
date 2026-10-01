@@ -50,6 +50,21 @@ MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml`
 > 例：`docker exec -i mkt-mysql mysql -umarketing -pmarketing123 marketing < docker/mysql/migrate/2026-09-22-bizkey-scope.sql`
 > 迁移脚本头部写了执行前置（比如改消息表索引前要先确认无在途消息）。
 
+**迁移不可变性（2026-10-01 起为机器闸，v4 审计 P1-2）**：
+
+- **已发布迁移不许改写，只能新增文件**——台账按文件名跳过，改写对已入台账的卷是永久
+  静默 no-op（本仓历史上真实发生过三次）。两道闸：仓库侧 `scripts/check-migrate-immutable.sh`
+  （对拍 `docker/mysql/migrate/SHA256SUMS` 基线，进 CI）；卷侧 `migrate.sh` 台账 `checksum` 列
+  （已应用行与仓库内容不一致即拒，`ACK_MIGRATION_DRIFT=1` 为显式逃生门）。新增迁移时
+  **在同一提交内**重新生成清单：`cd docker/mysql/migrate && for f in $(LC_ALL=C ls *.sql); do shasum -a 256 "$f"; done > SHA256SUMS`。
+- **列形状不自愈，需人工核对**：`seckill_order.active` 的可空性是语义的一部分（取消置
+  NULL 依赖它，见 `docs/testing.md` 第七批）。只跑过 09-29 迁移而未跑 09-30 的"半迁移卷"
+  上该列仍为 NOT NULL，任何列存在性检查都发现不了。存量卷形状盘点（只读）：
+  `SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='seckill_order' AND column_name='active'`（期望 `YES`）、
+  `SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='seckill_order' AND index_name='uk_activity_user'`（期望 `3`）。
+  2026-10-01 对常驻卷实测：`YES` / `3` / 台账 8 条全应用——健康；异常卷按
+  `2026-09-30-seckill-active-null.sql` 处置。
+
 | 端口 | 用途 | 归属 |
 |---|---|---|
 | 3307 | MySQL（仅绑回环，单库 `marketing`） | 数据层 `mkt-mysql` |
