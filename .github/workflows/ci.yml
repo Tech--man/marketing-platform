@@ -50,10 +50,12 @@ jobs:
         working-directory: ${{ matrix.dir }}
 
   gates:
-    name: 静态门禁（shell 引号）
+    name: 静态门禁（shell 引号 · 迁移不可变性）
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: check-scripts
         run: ./scripts/check-scripts.sh
+      - name: check-migrate-immutable
+        run: ./scripts/check-migrate-immutable.sh
