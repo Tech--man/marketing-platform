@@ -1,0 +1,50 @@
+name: ci
+
+# 最小质量门禁（2026-10-01 审计 P1-6）：134 提交零 CI、所有门禁靠"作者记得做"
+# 的状态到此为止。单测全部 H2 跑真 SQL、双前端 vitest jsdom——不需要中间件。
+# Lua 契约与 DDL 门禁（lua-contract.sh / check-migrate-chain.sh）需要 docker，
+# GitHub hosted runner 上容器冷启太慢，暂列手动项；自建 runner 后可挂进本流水线。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: 后端全量单测（H2）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      # JDK 17 是硬性纪律（AGENTS.md）：更高版本上 Lombok 注解处理必挂
+      - name: mvn test（全 reactor）
+        run: mvn -B test
+
+  frontend:
+    name: 前端单测（${{ matrix.dir }}）
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [marketing-admin-ui, marketing-h5-ui]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - name: vitest
+        run: npm ci && npm test
+        working-directory: ${{ matrix.dir }}
+
+  gates:
+    name: 静态门禁（shell 引号）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check-scripts
+        run: ./scripts/check-scripts.sh

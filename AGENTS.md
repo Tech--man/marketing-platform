@@ -56,6 +56,8 @@ cd marketing-h5-ui && npm test        # C 端 H5 前端
 - **Redis 必须 `noeviction`**：`allkeys-lru` 会静默丢库存/券预扣/幂等键 → 超卖与重复领券（LITE 四条不可退让之一，README 三节）。
 - dev 默认 MySQL 宿主端口是 **3307**（不是 3306）；宿主常驻 redis/mysqld 会遮蔽容器发布端口，`common.sh` 的 `assert_port_not_shadowed` 启动期拦截。
 - **测试纪律**：单测用 H2 跑真 SQL；关键断言要求变异检查（把实现改回旧值，断言必须红）——README 六节有整套口径，新增关键用例照此办。
+- **提交原子性纪律（2026-10-01 审计 P1-5 教训）**：依赖大版本跳版（Boot/SC/中间件客户端）**必须独立提交**，禁止与业务/DDL/脚本混装——`52863dc` 把 Boot 3.2→3.4 与 19 项无关变更塞进一个提交，为撤销一处升级回归就得连坐删掉 migrate.sh/pre-auth 限流/告警等正资产（回滚预案见 `docs/superpowers/plans/2026-10-01-boot347-rollback-playbook.md`）；`3b3fe14` 的 95 文件混 5 个关注点是反面教材之二。评审看到"pom 版本号 + 无关业务文件"同 commit 一律打回。
+- **迁移三处同步 + 机器闸**：新增/改列的迁移要同步两份 init DDL、`docker/mysql/migrate/*.sql`、各服务 yml 的 `marketing.schema-guard.required-columns`；`deploy-preview/deploy-full/start-dev` 已串 `ALL_DBS=1 migrate.sh`，进程侧有 `SchemaMigrationGuard` 缺列 fail-fast。发布前门禁：`scripts/lua-contract.sh`（8 个 Lua 契约，一次性 Redis）、`scripts/check-migrate-chain.sh`（init+迁移链对拍，一次性 MySQL 8）、`scripts/check-scripts.sh`（shell 引号）、`scripts/assert-evidence.sh`（证据落盘）。
 - 网关启动固定打一条 `Unable to load ...MacOSDnsServerAddressStreamProvider` ERROR：macOS netty 可选库缺失，无害，**不要**为它加平台特定依赖。其余已知噪音见 README 六节（编号不连续，当前为 ①②③④⑥⑦⑧⑨⑩ 共 9 条）。
 - 代码内注释承载大量"为什么这么做"的决策依据（取舍、地雷、机制实测），改动前先读周边注释，别把防护性代码当冗余删掉。
 - **C 端桌面 IA 不用左侧栏**：左侧栏是后台/工具的形态（`marketing-admin-ui` 的 `AppLayout` 就是它）。C 端桌面 = 顶部横向文字导航 + 全宽内容 + 多列栅格 + 主从分栏。判据很硬：如果新导航和后台共用 `.shell`/`.side`/`--sidebar-w`/`is-active` 那套骨架，就是把控制台壳子扣到了商店上。`boot.test.js` 里有两条断言钉这件事（导航必须是 `HEADER` 而非 `aside`；`wallet` 必须有全局入口）。

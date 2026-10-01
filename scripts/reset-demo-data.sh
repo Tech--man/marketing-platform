@@ -24,7 +24,7 @@ JSON="Content-Type: application/json"
 # + 冒烟整片红，而退出码看起来一切正常。
 GW_MGMT="${GW_MGMT:-http://127.0.0.1:8091}"   # actuator 已与业务端口分离
 if ! curl -fs --max-time 3 "$GW_MGMT/actuator/health" >/dev/null 2>&1; then
-  echo "!! 网关不可达（$GW）：先起任一形态（deploy-preview / deploy-full / start-dev）再复位" >&2
+  echo "!! 网关不可达（${GW}）：先起任一形态（deploy-preview / deploy-full / start-dev）再复位" >&2
   exit 1
 fi
 
@@ -41,7 +41,7 @@ AAUTH="Authorization: Bearer $TOKEN"
 LIST=$(curl -s -m 10 -H "$AAUTH" "$GW/api/admin/seckill/activities?page=1&size=50")
 ROW=$(echo "$LIST" | tr '{' '\n' | grep "\"activityNo\":\"$ACT\"" | head -1 || true)
 if [ -z "$ROW" ]; then
-  echo "!! 后台列表里没有 $ACT，末次响应: $(echo "$LIST" | head -c 200)" >&2
+  echo "!! 后台列表里没有 ${ACT}，末次响应: $(echo "$LIST" | head -c 200)" >&2
   exit 1
 fi
 field() { echo "$ROW" | sed -n "s/.*\"$1\":\([0-9]*\).*/\1/p"; }
@@ -49,11 +49,11 @@ OLD_TOTAL=$(field totalStock)
 SOLD=$(field soldStock)
 VERSION=$(field version)
 STATUS=$(echo "$ROW" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
-echo "==> $ACT：total=$OLD_TOTAL sold=$SOLD status=$STATUS version=$VERSION → 抬到 $NEW_TOTAL"
+echo "==> ${ACT}：total=$OLD_TOTAL sold=$SOLD status=$STATUS version=$VERSION → 抬到 $NEW_TOTAL"
 
 if [ "$STATUS" != "ONLINE" ]; then
   # 不"顺手"帮忙上线：只有 ONLINE 的活动会重建分桶（开闸是独立动作，③ 的 T6 钉过这条）
-  echo "    注意：活动是 $STATUS，改完库存不会重建分桶（要放票需另做上线动作）"
+  echo "    注意：活动是 ${STATUS}，改完库存不会重建分桶（要放票需另做上线动作）"
 fi
 
 RESP=$(curl -s -m 15 -X PUT -H "$AAUTH" -H "$JSON" \
@@ -83,8 +83,8 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 if [ "${SUM:-0}" -ne "$WANT" ]; then
-  echo "!! 分桶余量合计=$SUM，与期望 $WANT 不符（新总库存 $NEW_TOTAL − 已售 $SOLD）" >&2
+  echo "!! 分桶余量合计=${SUM}，与期望 $WANT 不符（新总库存 $NEW_TOTAL − 已售 ${SOLD}）" >&2
   echo "   恒等式对不上时不要接着跑冒烟：那会把'库存未预热'的 41007 当成新 bug 查" >&2
   exit 1
 fi
-echo "==> 复位后：分桶余量合计=$SUM，已售=$SOLD，合计 $((SUM + SOLD)) == 新总库存 $NEW_TOTAL"
+echo "==> 复位后：分桶余量合计=${SUM}，已售=${SOLD}，合计 $((SUM + SOLD)) == 新总库存 $NEW_TOTAL"

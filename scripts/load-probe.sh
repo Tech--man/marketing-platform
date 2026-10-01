@@ -30,7 +30,7 @@ TOKEN=$(curl -s -m 25 -X POST "$GW/api/auth/login" -H 'Content-Type: application
   | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
 # 取不到 token 就停：否则整轮压测会打出 100% 的 401，曲线看着像"系统被打穿了"，
 # 真因只是没登录
-[ -n "$TOKEN" ] || { echo "!! C 端登录失败（$GW/api/auth/login，identifier=$CID）—— 压测无法继续" >&2; exit 1; }
+[ -n "$TOKEN" ] || { echo "!! C 端登录失败（$GW/api/auth/login，identifier=${CID}）—— 压测无法继续" >&2; exit 1; }
 export GW AUTH="Authorization: Bearer $TOKEN"
 export TPL="${TPL:-CT2026001}"
 N="${1:-600}"
@@ -89,10 +89,10 @@ if [ "$PL" -lt "$LIMIT_NEED" ]; then
   echo "   或把每轮请求数收到 $PL 以内（那测的是限领拦截，不是异步排空能力）。" >&2
   exit 1
 fi
-echo "   压测模板 $TPL per_user_limit=$PL >= 每轮 $LIMIT_NEED，继续"
+echo "   压测模板 $TPL per_user_limit=$PL >= 每轮 ${LIMIT_NEED}，继续"
 
 # W5.4（2026-09-30 第二轮复审）：固定名临时文件 + 无互斥——两实例并发跑会互写
-# /tmp/probe-codes.$r（统计失真）且单账号限领让双方假红。mktemp 唯一化 + flock。
+# /tmp/probe-codes.${r}（统计失真）且单账号限领让双方假红。mktemp 唯一化 + flock。
 PROBE_LOCK=$(mktemp /tmp/mkt-load-probe.XXXXXX.lock)
 exec 9>"$PROBE_LOCK"
 if ! flock -n 9; then

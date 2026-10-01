@@ -45,11 +45,16 @@ SET @s := (SELECT IF(@has_order > 0,
     'DO 0'));
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
--- 3) 自检：期望 nullable=1（YES）、cancelled_null=历史取消行数、residual_zero=0（有 seckill_order 的库）
-SELECT DATABASE() AS db,
-       (SELECT is_nullable FROM information_schema.columns
-         WHERE table_schema = DATABASE() AND table_name = 'seckill_order'
-           AND column_name = 'active') AS nullable,
-       (SELECT COUNT(*) FROM seckill_order WHERE active IS NULL) AS cancelled_null,
-       (SELECT COUNT(*) FROM seckill_order WHERE active = 0) AS residual_zero
-    WHERE @has_order > 0;
+-- 3) 自检：期望 nullable=YES、cancelled_null=历史取消行数、residual_zero=0（有 seckill_order 的库）。
+--    整条 SELECT 走 PREPARE 守卫：外层 WHERE 过滤不掉子查询里 seckill_order 的解析期
+--    表引用——空 marketing 库上静态 SELECT 直接 ERROR 1146（同 2026-09-29-seckill-active.sql
+--    的自检，2026-10-01 DDL 门禁实测）。
+SET @s := (SELECT IF(@has_order > 0,
+    CONCAT('SELECT DATABASE() AS db, ',
+        '(SELECT is_nullable FROM information_schema.columns ',
+        ' WHERE table_schema = DATABASE() AND table_name = ''seckill_order'' ',
+        '   AND column_name = ''active'') AS nullable, ',
+        '(SELECT COUNT(*) FROM seckill_order WHERE active IS NULL) AS cancelled_null, ',
+        '(SELECT COUNT(*) FROM seckill_order WHERE active = 0) AS residual_zero'),
+    'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;

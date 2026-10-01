@@ -62,13 +62,19 @@ SET @s := (SELECT IF(@has_order > 0,
     'DO 0'));
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
--- 3) 自检：期望 active_column=1、index_cols=3（有 seckill_order 的库）
-SELECT DATABASE() AS db,
-       (SELECT COUNT(*) FROM information_schema.columns
-         WHERE table_schema = DATABASE() AND table_name = 'seckill_order'
-           AND column_name = 'active') AS active_column,
-       (SELECT COUNT(*) FROM information_schema.statistics
-         WHERE table_schema = DATABASE() AND table_name = 'seckill_order'
-           AND index_name = 'uk_activity_user') AS index_cols,
-       (SELECT COUNT(*) FROM seckill_order WHERE active = 0) AS cancelled_rows
-    WHERE @has_order > 0;
+-- 3) 自检：期望 active_column=1、index_cols=3、cancelled_rows=历史取消行数（有 seckill_order 的库）。
+--    整条 SELECT 必须走 PREPARE 守卫（与上面三段同款）：外层 WHERE @has_order > 0 过滤不掉
+--    子查询里 seckill_order 的解析期表引用——空 marketing 库（data compose 的
+--    MYSQL_DATABASE 默认建的那个）上静态 SELECT 直接 ERROR 1146 中断 ALL_DBS 迁移链
+--    （2026-10-01 DDL 门禁实测）。
+SET @s := (SELECT IF(@has_order > 0,
+    CONCAT('SELECT DATABASE() AS db, ',
+        '(SELECT COUNT(*) FROM information_schema.columns ',
+        ' WHERE table_schema = DATABASE() AND table_name = ''seckill_order'' ',
+        '   AND column_name = ''active'') AS active_column, ',
+        '(SELECT COUNT(*) FROM information_schema.statistics ',
+        ' WHERE table_schema = DATABASE() AND table_name = ''seckill_order'' ',
+        '   AND index_name = ''uk_activity_user'' AND column_name = ''active'') AS index_cols, ',
+        '(SELECT COUNT(*) FROM seckill_order WHERE active = 0) AS cancelled_rows'),
+    'DO 0'));
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;

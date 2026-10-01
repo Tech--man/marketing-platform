@@ -133,6 +133,23 @@ SKIP_BUILD=1 ./scripts/deploy-full.sh --scale marketing-discount=2   # 复用现
 docker compose -f docker/docker-compose.full-app.yml down            # 拆应用侧，中间件/数据层不动
 ```
 
+#### 发布顺序：先迁移，后起应用（四个入口已内建）
+
+四个部署入口（`deploy-preview` / `deploy-full` / `start-dev` / `start-all`）都在数据层
+`--wait` 之后、应用进程之前串了 `ALL_DBS=1 ./scripts/migrate.sh`——迁移失败即中止部署，
+不会把新 jar 起在未迁移卷上。手动发布/替换 jar 时必须保持同一顺序：
+
+1. 数据层就绪（`docker-compose.data.yml up -d --wait`）；
+2. `ALL_DBS=1 ./scripts/migrate.sh`（幂等：台账按文件名跳过已应用项；四库隔离档自动
+   覆盖 `marketing` 与全部 `marketing_*` 库）；
+3. 起应用（容器或进程形态任一）。
+
+跳过第 2 步的兜底是进程侧 `SchemaMigrationGuard`：声明了迁移列依赖的服务
+（coupon 的 `idempotent_record.claim_token`、seckill 的 `seckill_order.active`、
+admin 的 `admin_audit_log.source_id`、standalone 兼两者）在缺列卷上启动即失败，报错
+直接给出上述命令——但那是"起不来"，不是"迁移完成"，别把兜底当流程。（2026-10-01
+审计 P1-1；复审 N-2 之前 `start-all.sh` 是四个入口里唯一没串迁移的一个。）
+
 ### 数据层与端口矩阵
 
 MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml` 单独常驻，三套形态共用
@@ -660,6 +677,20 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 
 ## 五、API 速查（经网关 8090；C 端需登录换来的 `Authorization: Bearer <accessToken>`，后台需 admin token）
 
+> **HTTP 状态码契约（2026-10-01 审计 P1-7 补记）**：业务侧对 `40100/40101/40102 → 401`、
+> `40300 → 403`、`42900 → 429` 映射**真实 HTTP 状态**（`GlobalExceptionHandler` 以
+> ResponseEntity 携带；网关鉴权/限流层同口径）；其余业务错（40000/40400/41000…）照旧
+> `HTTP 200 + body.code`。**body.code 是唯一的前端契约，前端先解析 body 再看状态**
+> （h5 `client.js` 的 `payload ? payload.code : status*100`），因此该映射对存量前端零影响；
+> 它服务的是 `curl -f` 式脚本、按状态码重试/熔断的外部调用方与 LB 健康判定。对外变更
+> 说明：**任何把 HTTP 200 当成功判定的旧集成，在 401/403/429 三段会开始看到非 200**。
+> 归属说明（复审 N-10 修正）：冒烟链路 4 的 `^401$` 断言钉的是**网关侧**拒绝状态
+> （`/api/admin/users` 无凭证在网关 `AdminAuthFilter` 就被 401，根本到不了 MVC
+> advice）；**进程内 advice 的状态映射**由 `ActivityControllerTest` 的
+> `status().isUnauthorized()` 钉住（MockMvc 直打控制器）——Boot 3.4 渲染管道把
+> `setStatus` 盖回 200 的那类回归（52863dc→e23d0a5 的教训）走的是后者这条路，
+> 排障别找错现场。
+
 | Method | Path | 说明 |
 |---|---|---|
 | GET | /api/activity/{no}/participatable · /gray-hit?userId= | 可参与校验 · 灰度命中判断 |
@@ -716,6 +747,16 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
   原实现无条件 ACK+XDEL，DB 故障窗口内的审计被"确认+删除"得无 DB 行、无 PEL 记录）。
   为什么不用 ⑤ 候选的 `LPUSH+LTRIM+TTL`：
   TTL 淘汰等于**静默丢审计**。建组从 `0` 开始（默认的最新位置会让"先投递后建组"那批永远不被读）。
+- **失败与被拒的写也留痕，但只覆盖"进程内"**（2026-10-01 审计 P2-10；边界为复审 N-11）：
+  `/api/admin/**` 的非 GET 被**业务进程内** BizException 拒绝（40300 越权、41008
+  乐观锁、41007 状态机…）时，`GlobalExceptionHandler` 投一条 `admin.request.rejected`
+  审计（身份尽力解析，解析不了记匿名）。**网关侧**发出的 40100/40101/40102/40300
+  （无凭证/过期/吊销/只读角色尝试写）到不了任何 advice，**不进审计**——这是当前
+  明确的取舍：那类拒绝（"被挡下的写尝试"的主体人群）的可见面是**网关日志与指标**
+  （`marketing.gateway.auth.*`、限流与 pre-auth 计数），不是 `admin_audit_log`。
+  若将来要把网关拒绝也落审计，需在网关侧接同一条 AuditPayload 通道（网关无
+  DataSource，只能直投 Stream），属独立设计项。另：被拒留痕按请求逐条 XADD，
+  无同键节流——重试风暴会 1:1 撑大审计表，量级异常时先看这里。
 - **乐观锁无处不在**：所有改配置的行都带 `version`，撞了回 `41008 已被他人修改`（附带你看到的
   与当前的两个数），而不是后写覆盖先写 —— 后台是多人的，运营 A 看到的页面可能已经过时十分钟。
 - **C 端旧写路径直接删**，不留 301/转发别名：留着就等于"收口"只是加了一层前缀，
@@ -724,9 +765,9 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 419 个单测 / 82 个类：见下
-cd marketing-admin-ui && npm test    # 46 条前端用例 / 9 个文件（vitest + jsdom，见 ⑥）
-cd marketing-h5-ui && npm test       # 90 条 C 端用例 / 7 个文件（响应形状与 40101/40102 分流）
+mvn test                 # 561 个单测 / 106 个类：见下
+cd marketing-admin-ui && npm test    # 49 条前端用例 / 9 个文件（vitest + jsdom，见 ⑥）
+cd marketing-h5-ui && npm test       # 96 条 C 端用例 / 7 个文件（响应形状与 40101/40102 分流）
 ./scripts/build-ui.sh    # ⑥ 唯一的前端重建入口（产物入仓，机器上没 node 也能跑 jar）
 ./scripts/check-ui-dist.sh  # jar 与仓库的 static/ui 逐项 sha256 比对（前提：已 package）
 ./scripts/build-h5.sh    # C 端 H5 的唯一重建入口（产物入 static/h5）
