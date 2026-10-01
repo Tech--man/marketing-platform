@@ -2,8 +2,8 @@ name: ci
 
 # 最小质量门禁（2026-10-01 审计 P1-6）：134 提交零 CI、所有门禁靠"作者记得做"
 # 的状态到此为止。单测全部 H2 跑真 SQL、双前端 vitest jsdom——不需要中间件。
-# Lua 契约与 DDL 门禁（lua-contract.sh / check-migrate-chain.sh）需要 docker，
-# GitHub hosted runner 上容器冷启太慢，暂列手动项；自建 runner 后可挂进本流水线。
+# 前后端分离（2026-10-01）：前端产物不再入仓，npm run build 直接在 CI 验证
+# 构建可破坏性（原来靠 dist 重建对拍，对拍对象已不存在）。
 on:
   push:
     branches: [main]
@@ -32,7 +32,7 @@ jobs:
         run: mvn -B test
 
   frontend:
-    name: 前端单测（${{ matrix.dir }}）
+    name: 前端单测与构建（${{ matrix.dir }}）
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -45,8 +45,10 @@ jobs:
           node-version: '20'
           cache: npm
           cache-dependency-path: ${{ matrix.dir }}/package-lock.json
-      - name: vitest
-        run: npm ci && npm test
+      # npm run build 是分离后的构建可破坏性闸：vite 配置坏了/依赖冲突了/镜像里
+      # 构建会炸的改动，在这里红——与 marketing-web 的 Dockerfile 构建段同一命令。
+      - name: vitest + build
+        run: npm ci && npm test && npm run build
         working-directory: ${{ matrix.dir }}
 
   gates:
@@ -59,3 +61,16 @@ jobs:
         run: ./scripts/check-scripts.sh
       - name: check-migrate-immutable
         run: ./scripts/check-migrate-immutable.sh
+
+  gates-docker:
+    # v4 计划 R-07 简化版：两道真库门禁进流水线（ubuntu-latest 自带 docker）。
+    # run 日志即公开可复证证据（此前两道闸的产物只存在维护者本地）。
+    name: 真库门禁（Lua 契约 · DDL 对拍）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: lua-contract（一次性 redis:7）
+        run: ./scripts/lua-contract.sh
+      - name: check-migrate-chain（一次性 mysql:8.0）
+        run: ./scripts/check-migrate-chain.sh
