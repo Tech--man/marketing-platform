@@ -34,10 +34,13 @@ x-app-defaults: &app-defaults
   # W5.3（2026-09-30 第二轮复审）：容器级内存上限与探活——JVM 有界但容器无界，
   # 多副本 scale 时 OOM 会杀掉整个容器而不是单进程；无 healthcheck 则 --wait 的
   # 就绪语义缺失（镜像内有 curl 的 JRE 基础镜像没有，用 java 自身做 TCP 探活代理）。
-  # 2026-10-01 审计 P1-4：768m 恰等于 -Xmx512m + MaxMetaspaceSize=256m，线程栈 /
-  # 代码缓存 / 直接缓冲 / GC 结构零余量，满载会被 kernel OOM-killer 杀容器——
-  # 抬到 1g 留 ~30% 余量（JVM 自身承诺之上）。
-  mem_limit: 1g
+  # mem_limit 记账口径（2026-10-01 复审 N-14，与 preview.yml 同一公式）：承诺不止
+  # Xmx+Metaspace——压缩类空间不受 MaxMetaspaceSize 约束，线程栈/代码缓存/direct/
+  # GC 结构合计 ~96–128m 常驻。本锚点服务（admin/account/gateway，均
+  # -Xmx256m+192m）足迹 ≈544m → 768m（余量 ≈41%）。四个业务服务堆更大
+  # （-Xmx512m+256m，足迹 ≈896m），在各服务处覆写为 1280m（余量 ≈43%）。
+  # 此前锚点统一 1g：对轻服务过宽、对业务服务按新公式只余 ~14%——两头都不对。
+  mem_limit: 768m
   healthcheck:
     # 容器内 TCP 探活业务端口（$$ 转义 = 容器内环境变量 APP_PORT，各服务单独设）。
     # 镜像是精简 JRE（无 curl/wget），bash 的 /dev/tcp 是可用的最小手段
@@ -79,6 +82,8 @@ services:
     <<: *app-defaults
     build: { context: ../marketing-activity }
     image: marketing-activity:full
+    # -Xmx512m+256m → 足迹 ≈896m（公式见锚点注释），锚点 768m 不够，单设 1280m
+    mem_limit: 1280m
     environment:
       <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
       APP_PORT: "8081"
@@ -87,6 +92,7 @@ services:
     <<: *app-defaults
     build: { context: ../marketing-coupon }
     image: marketing-coupon:full
+    mem_limit: 1280m   # 同 activity：-Xmx512m+256m 档
     environment:
       <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
       APP_PORT: "8082"
@@ -95,6 +101,7 @@ services:
     <<: *app-defaults
     build: { context: ../marketing-discount }
     image: marketing-discount:full
+    mem_limit: 1280m   # 同 activity：-Xmx512m+256m 档
     environment:
       <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
       APP_PORT: "8083"
@@ -103,6 +110,7 @@ services:
     <<: *app-defaults
     build: { context: ../marketing-seckill }
     image: marketing-seckill:full
+    mem_limit: 1280m   # 同 activity：-Xmx512m+256m 档
     environment:
       <<: *app-env   # YAML merge 是键级覆盖：不带这行会整体丢掉锚点里的中间件地址
       APP_PORT: "8084"
