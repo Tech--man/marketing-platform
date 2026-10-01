@@ -44,8 +44,10 @@ import static org.mockito.Mockito.when;
  */
 class ConsumerAuthServiceTest {
 
-    private static final String SECRET = "unit-test-consumer-secret-123456";
-    private static final String PASSWORD = "demo123456";
+    // 测试专用密钥/口令按 JVM 随机生成（Mimosa 硬编码凭据门禁 + 本就更干净：
+    // 单测不需要可复现的固定秘密；static final 保证单个测试 JVM 内签发-验签自洽）
+    private static final String SECRET = "unit-test-" + java.util.UUID.randomUUID();
+    private static final String PASSWORD = "pw-" + java.util.UUID.randomUUID();
     /** 与 ConsumerAuthService 里那个私有常量对齐：黑名单键 = 前缀 + 旧 refresh 的 SHA-256 */
     private static final String USED_PREFIX = "consumer:refresh:used:";
 
