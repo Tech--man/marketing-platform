@@ -135,4 +135,43 @@ class MarketingCommonAutoConfigurationTest {
                 .run(ctx -> assertFalse(ctx.getBeanNamesForType(IdempotentExecutor.class).length > 0,
                         "没有 DataSource 时不应装配幂等执行器"));
     }
+
+    @Test
+    @DisplayName("N-10③：schema/时区守卫 bean 必须被自动装配——删掉任一 @Bean 这里就红")
+    void guardBeansAreWired() {
+        EmbeddedDatabase db = memoryDatabase();
+        LettuceConnectionFactory factory = neverConnectingFactory();
+        try {
+            // 不声明 required-columns（=空）：守卫零查询放行，但 bean 本身必须在上下文里
+            runner(db, factory).run(ctx -> {
+                assertTrue(ctx.getBeanNamesForType(com.example.marketing.common.schema.SchemaMigrationGuard.class).length == 1,
+                        "schemaMigrationGuard @Bean 被删/条件失效时此处变红");
+                assertTrue(ctx.getBeanNamesForType(com.example.marketing.common.schema.TimezoneGuard.class).length == 1,
+                        "timezoneGuard @Bean 被删/条件失效时此处变红");
+            });
+        } finally {
+            db.shutdown();
+            factory.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("N-10③：声明了库中不存在的列 → 上下文起不来且报错指向 migrate.sh（yml→bean 绑定有效）")
+    void declaredMissingColumnFailsStartupWithGuidance() {
+        EmbeddedDatabase db = memoryDatabase();
+        LettuceConnectionFactory factory = neverConnectingFactory();
+        try {
+            runner(db, factory)
+                    .withPropertyValues("marketing.schema-guard.required-columns=idempotent_record.claim_token")
+                    .run(ctx -> {
+                        assertTrue(ctx.getStartupFailure() != null, "空 H2 里声明不存在的列必须拒起");
+                        String msg = String.valueOf(ctx.getStartupFailure().getMessage());
+                        assertTrue(msg.contains("schema-guard") && msg.contains("migrate.sh"),
+                                "报错必须点名守卫与处置命令，实际: " + msg);
+                    });
+        } finally {
+            db.shutdown();
+            factory.destroy();
+        }
+    }
 }

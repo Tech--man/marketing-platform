@@ -62,6 +62,32 @@ public class MarketingCommonAutoConfiguration {
     }
 
     /**
+     * 启动期 schema 迁移断言（2026-10-01 审计 P1-1）：新代码硬依赖迁移列
+     * （claim_token / source_id），未迁移卷上线的第一批写请求会全线 Unknown column——
+     * 这里把它提前成启动失败。各服务在 yml 里声明自己需要的列，声明为空零开销放行。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public com.example.marketing.common.schema.SchemaMigrationGuard schemaMigrationGuard(
+            JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${marketing.schema-guard.required-columns:}") List<String> requiredColumns) {
+        return new com.example.marketing.common.schema.SchemaMigrationGuard(jdbcTemplate, requiredColumns);
+    }
+
+    /**
+     * JVM 时区一致性告警（P2-2 进程侧兜底）：与 serverTimezone 期望不一致时启动即 WARN，
+     * 防"绕过入口脚本裸起 JVM"的形态把到期/超时判定整体偏移成静默错误。只告警不拦启动。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public com.example.marketing.common.schema.TimezoneGuard timezoneGuard(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${marketing.timezone-expected:Asia/Shanghai}") String expectedZoneId) {
+        return new com.example.marketing.common.schema.TimezoneGuard(expectedZoneId);
+    }
+
+    /**
      * 缓存重预热注册表：收集各业务模块自己的 {@link CacheReheater}，按 type 分发。
      *
      * <p>公式留在领域里（预算在 activity、券在 coupon、桶在 seckill），这里只做装配与分发，

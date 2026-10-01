@@ -41,6 +41,10 @@ mybatis-plus:
     banner: false
 
 marketing:
+  # 启动期 schema 断言（2026-10-01 审计 P1-1）：审计 drain 写 admin_audit_log.source_id，
+  # 未迁移的既有卷缺列时启动即失败，而不是第一批审计落库全线 Unknown column
+  schema-guard:
+    required-columns: admin_audit_log.source_id
   # 在线配置：admin 既是唯一写方也是读方（配置页要显示"我这一档当前生效的是什么、跑在第几版"）。
   # 形态标识与节拍由 common 的嵌套占位统一读 DEPLOY_FORM / CONFIG_POLL_SECONDS，不在此复制
   admin:

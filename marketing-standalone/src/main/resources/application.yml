@@ -50,6 +50,10 @@ mybatis-plus:
 
 # 消息通道：Redis Stream 替代 RocketMQ（common 自动装配按此选型）
 marketing:
+  # 启动期 schema 断言（2026-10-01 审计 P1-1）：单库档两张表都归本进程——幂等表（四个业务
+  # 模块写）与审计表（admin 模块 drain）各断言一列，缺迁移的既有卷启动即失败
+  schema-guard:
+    required-columns: idempotent_record.claim_token,admin_audit_log.source_id
   # 只保留真正存在形态差异 / 无代码默认的配置：mq.type（LITE 用 Redis Stream）与 admin（后台密钥）。
   # 灰度规则已移进 activity.gray_percent 列——它是数据，不是配置；
   # 在线配置的形态标识由 common 的嵌套占位统一读 DEPLOY_FORM，不在这里复制

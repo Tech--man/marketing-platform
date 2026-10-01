@@ -58,6 +58,12 @@ management:
 # 装的），拖到第一个登录请求才炸 —— 所以四个业务模块与 standalone 都要显式声明，
 # 和 marketing.admin.jwt-secret 同一条口径。
 marketing:
+  # 启动期 schema 断言（2026-10-01 审计 P1-1；复审 N-10② 修正口径）：本服务当前
+  # 没有硬依赖的迁移列，声明留空 = 守卫零查询放行。此前随大流声明
+  # idempotent_record.claim_token 属过度声明——activity 的代码路径不写幂等表，
+  # 那会把本服务的启动绑到不属于自己的迁移上。将来新增硬依赖迁移列时必须回来声明。
+  schema-guard:
+    required-columns: ""
   consumer:
     token-secret: ${CONSUMER_JWT_SECRET:}
   # C 端预算扣减的滥用闸（H10，2026-09-29 审查收口；实现见 BudgetDeductGuard）。

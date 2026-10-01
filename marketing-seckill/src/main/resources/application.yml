@@ -59,6 +59,12 @@ management:
 # 装的），拖到第一个登录请求才炸 —— 所以四个业务模块与 standalone 都要显式声明，
 # 和 marketing.admin.jwt-secret 同一条口径。
 marketing:
+  # 启动期 schema 断言（2026-10-01 审计 P1-1；复审 N-10② 修正声明）：本服务硬依赖
+  # seckill_order.active——取消置 NULL、回放过滤 eq(active,1)、(activity_no,user_id,active)
+  # 三列唯一索引全部建立在它之上（2026-09-29/30 两个迁移引入），未迁移的既有卷缺列时
+  # 启动即失败。此前声明 idempotent_record.claim_token 是过度声明：seckill 不写幂等表。
+  schema-guard:
+    required-columns: seckill_order.active
   consumer:
     token-secret: ${CONSUMER_JWT_SECRET:}
 

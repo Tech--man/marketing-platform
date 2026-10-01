@@ -59,6 +59,10 @@ management:
 # 装的），拖到第一个登录请求才炸 —— 所以四个业务模块与 standalone 都要显式声明，
 # 和 marketing.admin.jwt-secret 同一条口径。
 marketing:
+  # 启动期 schema 断言（2026-10-01 审计 P1-1）：本服务写 idempotent_record.claim_token，
+  # 未迁移的既有卷缺列时启动即失败，而不是上线后第一批幂等写全线 Unknown column
+  schema-guard:
+    required-columns: idempotent_record.claim_token
   consumer:
     token-secret: ${CONSUMER_JWT_SECRET:}
 
