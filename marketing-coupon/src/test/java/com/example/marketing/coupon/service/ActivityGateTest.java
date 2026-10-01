@@ -164,4 +164,35 @@ class ActivityGateTest {
         status("OFFLINE");
         assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70001L));
     }
+
+    @Test
+    @DisplayName("W2.4：灰度三段形状 percent|w1,w2|version——白名单只取中段，尾号不被 |version 吃掉")
+    void threeSegmentGrayWhitelistMiddleSegmentOnly() {
+        status("ONLINE");
+        gray("0|70001,70002|7");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70002L),
+                "70002 是白名单尾号：不剥 version 段它会变成 '70002|7' 而 NFE 被跳过，尾号静默失效");
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70003L));
+    }
+
+    @Test
+    @DisplayName("W2.4：三段形状的 percent 判定照常（空白名单 + 40%）")
+    void threeSegmentGrayPercentStillApplies() {
+        status("GRAY");
+        gray("40||5");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 100L));
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70041L));
+    }
+
+    @Test
+    @DisplayName("W2.4：两段旧形状（迁移期灰度值，无 version 段）白名单照常解析")
+    void legacyTwoSegmentGrayWhitelistStillWorks() {
+        status("ONLINE");
+        gray("0|70001");
+
+        assertDoesNotThrow(() -> gate.checkGrantable("ACT1", 70001L));
+        assertThrows(BizException.class, () -> gate.checkGrantable("ACT1", 70002L));
+    }
 }

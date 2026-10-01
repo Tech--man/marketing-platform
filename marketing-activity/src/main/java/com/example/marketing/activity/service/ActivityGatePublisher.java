@@ -25,8 +25,9 @@ import java.util.concurrent.TimeUnit;
  * 架构禁止。与审计总线同一手法：owning 进程把判定所需的<b>最小事实</b>镜像进共享
  * Redis，消费侧只读不解释。</p>
  *
- * <p>发布内容每轮全量重写（SET 幂等）：状态键 {@code activity:gate:status:{no}} 与
- * 灰度键 {@code activity:gate:gray:{no}=percent|w1,w2}。无 TTL：这是状态镜像不是
+ * <p>发布内容每轮全量重写（幂等）：状态键 {@code activity:gate:status:{no}=status|version}
+ * 与灰度键 {@code activity:gate:gray:{no}=percent|w1,w2|version}（W2.4 起两把键都经
+ * gate_cas.lua 版本 CAS，防 5s 周期旧快照回滚）。无 TTL：这是状态镜像不是
  * 缓存，删键等于"回到不设防"。回源周期与 GrayRuleCache 同档（默认 5s），
  * DB 改列后一个周期内收敛；无活动时也写空——消费侧见键缺失按 fail-open
  * （见 coupon 侧 {@code ActivityGate} 的注释，那是迁移期的明确取舍）。</p>
@@ -50,6 +51,15 @@ public class ActivityGatePublisher {
      * 已发布的新状态覆盖回去，OFFLINE 预案不被 5 秒旧值回滚。
      */
     private static final org.springframework.data.redis.core.script.RedisScript<Long> STATUS_CAS =
+            com.example.marketing.common.redis.LuaScripts.ofLong("lua/gate_cas.lua");
+    /**
+     * 灰度键也走同一把 CAS（W2.4，2026-10-01 审计 P2-1）：值形状
+     * {@code percent|w1,w2|version}。原先灰度键裸 SET——状态键有了版本防护而灰度键
+     * 仍可被 5s 周期的旧快照覆盖（缩灰度/清白名单的紧急操作会被下一轮全量重写
+     * 用旧值盖回去），同一活动两把键防护不对齐。Lua 取"最后一个 | 之后"为版本段，
+     * 白名单 CSV 不含 |，两段/三段形状都解析正确；消费侧白名单只取中间段。
+     */
+    private static final org.springframework.data.redis.core.script.RedisScript<Long> GRAY_CAS =
             com.example.marketing.common.redis.LuaScripts.ofLong("lua/gate_cas.lua");
 
     private final ActivityMapper activityMapper;
@@ -119,8 +129,10 @@ public class ActivityGatePublisher {
             String gray = (activity.getGrayPercent() == null ? GRAY_NO_RULE
                     : String.valueOf(activity.getGrayPercent()))
                     + "|"
-                    + (activity.getGrayWhitelist() == null ? "" : activity.getGrayWhitelist());
-            redis.opsForValue().set(GRAY_KEY_PREFIX + activityNo, gray);
+                    + (activity.getGrayWhitelist() == null ? "" : activity.getGrayWhitelist())
+                    + "|" + version;
+            redis.execute(GRAY_CAS, java.util.List.of(GRAY_KEY_PREFIX + activityNo),
+                    gray, String.valueOf(version));
         } catch (RuntimeException e) {
             log.warn("[activity-gate] 即时发布失败（DB 已提交，等下轮全量重写收敛）activityNo={}: {}",
                     activityNo, e.toString());

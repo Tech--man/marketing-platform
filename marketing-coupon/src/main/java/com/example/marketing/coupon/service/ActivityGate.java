@@ -69,6 +69,12 @@ public class ActivityGate {
             return; // 形状不认识：放行并留日志，别让格式演化把领券全堵死
         }
         String percentPart = gray.substring(0, sep);
+        // W2.4（2026-10-01 审计 P2-1）：灰度键值形状升为 percent|w1,w2|version（发布侧
+        // 与状态键同走版本 CAS）。白名单只取**中间段**——不剥尾段的话最后一项会带上
+        // "|version" 而 NFE 被跳过，白名单尾号静默失效；两段旧形状（迁移期）无尾段，
+        // lastSep==sep 时整段即白名单，行为不变。
+        int lastSep = gray.lastIndexOf('|');
+        String whitelistCsv = lastSep > sep ? gray.substring(sep + 1, lastSep) : gray.substring(sep + 1);
         if ("-".equals(percentPart)) {
             return; // 未配灰度 = 全量（与 GrayService 的语义一致）
         }
@@ -76,7 +82,7 @@ public class ActivityGate {
         // 同口径——逐项 trim + 坏项跳过。原实现裸 parseLong："70001, 70002"（自家测试都
         // 用的带空格格式，activity 侧容错接受）会让该活动<b>所有</b>领券请求 NFE→50000。
         Set<Long> whitelist = new java.util.HashSet<>();
-        for (String part : gray.substring(sep + 1).split(",")) {
+        for (String part : whitelistCsv.split(",")) {
             String trimmed = part.trim();
             if (trimmed.isEmpty()) {
                 continue;

@@ -31,6 +31,8 @@ import java.util.List;
 public class BudgetService implements CacheReheater, CacheConsistency {
 
     private static final RedisScript<Long> DEDUCT = LuaScripts.ofLong("lua/deduct_budget.lua");
+    /** 退款差额封顶的原子判定（P2-4，2026-10-01 审计）：GET→算→INCRBY 收进一次 EVAL */
+    private static final RedisScript<Long> REFUND = LuaScripts.ofLong("lua/refund_budget.lua");
 
     private final StringRedisTemplate redisTemplate;
     private final JdbcTemplate jdbcTemplate;
@@ -210,36 +212,33 @@ public class BudgetService implements CacheReheater, CacheConsistency {
                     "退款 " + amountCents + " 分超过原扣减 " + deducted + " 分");
         }
         String refundKey = "refund:" + bizKey;
-        int inserted = jdbcTemplate.update(
-                "INSERT IGNORE INTO budget_flow (activity_no, biz_key, amount_cents, type) "
-                        + "VALUES (?, ?, ?, 'REFUND')",
-                activityNo, refundKey, amountCents);
-        if (inserted == 0) {
+        // 2026-10-01：INSERT IGNORE → 普通 INSERT + 捕获 DuplicateKeyException。语义等价
+        // 且更精确（IGNORE 会把截断等无关错误也静默成 0 行），同时去掉 MySQL 方言——
+        // 退款路径因此可以在 H2 上端到端测试（单测纪律：真 SQL 优先于 mock）。
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO budget_flow (activity_no, biz_key, amount_cents, type) "
+                            + "VALUES (?, ?, ?, 'REFUND')",
+                    activityNo, refundKey, amountCents);
+        } catch (org.springframework.dao.DuplicateKeyException alreadyRefunded) {
             log.info("[budget] 重复退款请求幂等回放 activityNo={}, bizKey={}", activityNo, bizKey);
             return RefundOutcome.REPLAYED;
         }
         try {
-            if (Boolean.TRUE.equals(redisTemplate.hasKey(budgetKey(activityNo)))) {
-                // W2.2（2026-09-30 第二轮复审）：退款按公式差额封顶，堵"孤儿 DEDUCT 造钱"。
-                // deduct 进程级故障可能留下「流水在、Redis 未扣」的孤儿——全额 INCRBY 会把
-                // 从未扣掉的钱加回去，Redis 余额超过总预算继续被消费。此刻 REFUND 流水已落，
-                // computeRemainCents 已含本笔（= 退后期望余额）；实退 = min(金额, 期望-当前)，
-                // Redis 虚高（孤儿/漂移）时差额为 0 或负 → 退 0，只留流水由对账/重预热收敛。
-                String raw = redisTemplate.opsForValue().get(budgetKey(activityNo));
-                long current = raw == null || raw.isBlank() ? 0L : Long.parseLong(raw.trim());
-                long expectedAfter = computeRemainCents(activityNo);
-                long effective = Math.min(amountCents, Math.max(0L, expectedAfter - current));
-                if (effective < amountCents) {
-                    log.warn("[budget] 退款按公式差额封顶：请求 {} 分，实退 {} 分（Redis 当前 {} 已高于/逼近"
-                            + " 退后期望 {}，存在孤儿流水或漂移，由对账收敛）activityNo={}, bizKey={}",
-                            amountCents, effective, current, expectedAfter, activityNo, bizKey);
-                }
-                if (effective > 0) {
-                    redisTemplate.opsForValue().increment(budgetKey(activityNo), effective);
-                }
-            } else {
+            // W2.2 封顶公式 + P2-4 原子化：原先 GET→算 min/max→INCRBY 三步在 Java 里，
+            // 并发两笔退款共享 stale 基线各退一次（偏"多退"）。判定收进一次 EVAL 后，
+            // 第二笔看到的是第一笔 INCRBY 之后的新值。返回 -1 = 键缺失（只落流水自愈）。
+            long expectedAfter = computeRemainCents(activityNo);
+            Long effective = redisTemplate.execute(REFUND,
+                    List.of(budgetKey(activityNo)),
+                    String.valueOf(amountCents), String.valueOf(expectedAfter));
+            if (effective == null || effective < 0L) {
                 log.info("[budget] 预算键缺失，退款只落流水（重建公式含 REFUND，余额自愈）activityNo={}",
                         activityNo);
+            } else if (effective < amountCents) {
+                log.warn("[budget] 退款按公式差额封顶：请求 {} 分，实退 {} 分（Redis 高于/逼近退后期望 {}，"
+                        + "存在孤儿流水或漂移，由对账收敛）activityNo={}, bizKey={}",
+                        amountCents, effective, expectedAfter, activityNo, bizKey);
             }
         } catch (RuntimeException e) {
             log.warn("[budget] 退款 INCRBY 失败（余额偏低方向偏保守，公式重建自愈）activityNo={}: {}",
