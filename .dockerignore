@@ -1,0 +1,15 @@
+# marketing-web 的构建上下文是仓库根（Dockerfile 需 COPY 两个 ui 目录），
+# 用这份 .dockerignore 把上下文压到最小——否则 target/ 与 node_modules/ 会把
+# 构建上下文撑到数百 MB 且可能把陈旧产物带进镜像。
+**
+!marketing-web/**
+!marketing-admin-ui/package.json
+!marketing-admin-ui/package-lock.json
+!marketing-admin-ui/index.html
+!marketing-admin-ui/vite.config.js
+!marketing-admin-ui/src/**
+!marketing-h5-ui/package.json
+!marketing-h5-ui/package-lock.json
+!marketing-h5-ui/index.html
+!marketing-h5-ui/vite.config.js
+!marketing-h5-ui/src/**

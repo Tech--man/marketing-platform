@@ -1,0 +1,41 @@
+# ============================================================
+# 前端静态承载容器（marketing-web，前后端分离 2026-10-01）：
+#   · 本文件供 host 进程形态（start-dev / start-all）使用——发布 127.0.0.1:8088，
+#     网关 local 静态路由的 WEB_HOST/WEB_PORT 默认值正好指向它；
+#   · LITE（preview.yml）与 FULL 容器档（full-app.yml）各自 inline 定义了同款服务
+#     （不发布宿主端口、走容器名 mkt-web 直连）——三处定义刻意保持同构；
+#   · 网关仍是唯一对外入口：web 只挂 mkt-data 内网，不对公网发布任何端口。
+# 构建：docker build 上下文为仓库根（.dockerignore 已最小化），无需宿主机 node。
+# ============================================================
+name: mkt-web
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: marketing-web/Dockerfile
+    image: marketing-web:local
+    container_name: mkt-web
+    networks: [mkt-data]
+    ports:
+      # 仅 host 进程形态需要（dev 的网关跑在本机 JVM，连 127.0.0.1:8088）；
+      # LITE/FULL 容器形态不用本文件（各自的 compose 里无 ports）。
+      - "127.0.0.1:8088:80"
+    healthcheck:
+      # nginx:alpine 自带 busybox wget
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ui/index.html || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  mkt-data:
+    external: true

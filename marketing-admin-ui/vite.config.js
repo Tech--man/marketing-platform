@@ -5,10 +5,9 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
-// outDir 直接指向 admin 的 classpath：⑥ 的产物是**入仓文件**，构建即落位，
-// 不需要 maven 去装 node（spec §3 / §10）。
-// emptyOutDir 必须开：留着上一次的 assets/*.js，index.html 就不引用它们了，
-// 但 jar 里那一层还在——症状是"包越来越大而界面没变"。
+// 前后端分离（2026-10-01）：产物不再入仓、不再进后端 jar——输出到 vite 默认的
+// dist/（gitignore），由 marketing-web 的多阶段 Dockerfile 在镜像内构建并经
+// nginx 以 /ui/ 承载。本地预览用 npm run dev（5173，dev proxy 保持同源零 CORS）。
 export default defineConfig({
   base: '/ui/',
   plugins: [
@@ -18,7 +17,7 @@ export default defineConfig({
   ],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   build: {
-    outDir: '../marketing-admin/src/main/resources/static/ui',
+    outDir: 'dist',
     emptyOutDir: true,
   },
   server: {

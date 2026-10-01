@@ -2,15 +2,15 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-// C 端 H5：产物直接落进 admin 的 classpath（与 ⑥ 的 /ui 同一套"构建即落位、
-// 产物入仓"的口径）。base=/h5/ 让网关的 /h5/** 路由与资源前缀对齐；
-// outDir 指到 static/h5，emptyOutDir 防上一版指纹资源残留把包撑大却界面没变。
+// C 端 H5：前后端分离（2026-10-01）后产物输出到 vite 默认 dist/（gitignore），
+// 由 marketing-web 镜像内构建并经 nginx 以 /h5/ 承载。base=/h5/ 让网关的
+// /h5/** 路由与资源前缀对齐；本地预览用 npm run dev（5174，dev proxy 保持同源）。
 export default defineConfig({
   base: '/h5/',
   plugins: [vue()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   build: {
-    outDir: '../marketing-admin/src/main/resources/static/h5',
+    outDir: 'dist',
     emptyOutDir: true,
   },
   server: {
