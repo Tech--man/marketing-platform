@@ -33,6 +33,7 @@ docs/superpowers/
 .zion-mcp/
 .codegraph/
 .zcodeignore
+.zcode/
 
 # ---- 前端源码与本地构建中间产物（前后端分离 2026-10-01）----
 # 前端产物不再入仓：界面由 marketing-web 容器在镜像内构建并承载（nginx）。

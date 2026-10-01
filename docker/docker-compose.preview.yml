@@ -1,9 +1,10 @@
 # ============================================================
-# LITE 服役档（preview）：应用侧全栈容器化 —— 四业务模块单 JVM 聚合 + 网关，共 2 个 JVM
+# LITE 服役档（preview）：应用侧全栈容器化 —— 四业务模块单 JVM 聚合 + 网关 + 前端静态容器，共 3 个 JVM + 1 个 nginx
 #   · 定位：非活跃期 7×24 常态服役，小机器真跑流量，不是演示环境
 #   · 数据层不在本文件里：MySQL/Redis 由 docker-compose.data.yml 常驻提供，
 #     本形态只是接入同一个网络 —— 这正是"同一份数据原地升档到 FULL"的前提
-#   · 内存：实测整机 ≈ 1.0 GiB（JVM 小堆 + G1 + mem_limit 留余量）
+#   · 前后端分离（2026-10-01）：/ui 与 /h5 由 marketing-web（nginx）承载，
+#     产物在镜像内构建，不再入仓、不再进 standalone jar
 #   · 消息：Redis Stream 替代 RocketMQ；无 Nacos（网关静态路由）；无 Prometheus
 # 启动：./scripts/deploy-preview.sh（会自动把数据层拉起来）
 # ============================================================
@@ -69,6 +70,26 @@ services:
     mem_limit: 832m
     logging: *log
 
+  # 前端静态承载（前后端分离 2026-10-01）：nginx + 镜像内构建的双 UI 产物。
+  # 与 docker-compose.web.yml 同构（那份供 host 进程形态、发布 127.0.0.1:8088；
+  # 本份不发布端口，网关经容器名直连）。三处定义刻意保持同构，改一处看三处。
+  web:
+    build:
+      context: ..
+      dockerfile: marketing-web/Dockerfile
+    image: marketing-web:preview
+    container_name: mkt-preview-web
+    networks: [mkt-data]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ui/index.html || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    mem_limit: 64m
+    logging: *log
+
   gateway:
     build:
       context: ../marketing-gateway
@@ -77,6 +98,8 @@ services:
     depends_on:
       standalone:
         condition: service_healthy
+      web:
+        condition: service_healthy
     networks: [mkt-data]
     environment:
       REDIS_HOST: mkt-redis
@@ -84,6 +107,9 @@ services:
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
       ADMIN_HOST: standalone
       ADMIN_PORT: "8085"
+      # 前后端分离（2026-10-01）：/ui 与 /h5 走 nginx 容器（本编排里的 web 服务）
+      WEB_HOST: mkt-preview-web
+      WEB_PORT: "80"
       # 账号服务同理聚在 standalone 里（8087 只是 FULL 进程形态的默认端口）。
       # 漏这两行的表现与当年漏 ADMIN_HOST 同形：LITE 下 /api/auth/** 全部连到
       # 网关自己的 127.0.0.1:8087（那里什么都没有），登录直接 500。

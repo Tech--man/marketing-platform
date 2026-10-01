@@ -28,11 +28,13 @@ done
 case "${1:-}" in
   --down)
     docker compose -f "$DATA_COMPOSE" down
-    echo "==> 数据层已停止（卷保留）。注意它是三套形态共用的数据层。"
+    docker compose -f "$PWD/docker/docker-compose.web.yml" down
+    echo "==> 数据层与前端容器已停止（卷保留）。注意数据层是三套形态共用的。"
     ;;
   -v)
     echo "!! -v 会清空三套形态共用的数据卷（mysql + redis AOF），不可恢复" >&2
     docker compose -f "$DATA_COMPOSE" down -v
-    echo "==> 数据层与数据卷已清空"
+    docker compose -f "$PWD/docker/docker-compose.web.yml" down
+    echo "==> 数据层与数据卷已清空，前端容器已停止"
     ;;
 esac

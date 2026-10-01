@@ -67,6 +67,11 @@ assert_port_not_shadowed "$REDIS_PORT"
 echo "==> 数据层常驻检查（与 LITE 同一份数据，支持原地双向切换）"
 docker compose -f "$ROOT/docker/docker-compose.data.yml" up -d --wait
 
+# 前端静态承载（前后端分离 2026-10-01）：FULL 本机进程形态的网关是本机 JVM，
+# 连 compose.web.yml 发布的 127.0.0.1:8088（yml 默认值，无需 export）。
+echo "==> 前端容器（marketing-web，nginx，127.0.0.1:8088）"
+docker compose -f "$ROOT/docker/docker-compose.web.yml" up -d --build --wait
+
 # 迁移接进入口（2026-10-01 审计 P1-1；复审 N-2 补齐本脚本）：FULL 本机形态与
 # LITE/dev 共用同一常驻卷，四个部署入口此前只差这一个没串迁移——新 jar 起在未迁移
 # 卷上时，SchemaMigrationGuard 会把 JVM 拦在启动期（fail-fast 但不如迁移先行友好；

@@ -40,6 +40,11 @@ assert_port_not_shadowed "$DEV_REDIS_PORT"
 echo "==> 数据层常驻检查（mysql + redis，与 LITE/FULL 同一份数据）"
 docker compose -f "$DATA_COMPOSE" up -d --wait
 
+# 前端静态承载（前后端分离 2026-10-01）：dev 的网关跑在本机 JVM，
+# 连 compose.web.yml 发布的 127.0.0.1:8088；产物在镜像内构建，宿主机无需 node。
+echo "==> 前端容器（marketing-web，nginx，127.0.0.1:8088）"
+docker compose -f "$ROOT/docker/docker-compose.web.yml" up -d --build --wait
+
 # 迁移接进入口（2026-10-01 审计 P1-1）：dev 与 LITE/FULL 共用同一常驻卷，
 # 新代码硬依赖 claim_token/source_id 两列，JVM 起在未迁移卷上会全线 Unknown column。
 echo "==> 迁移台账（ALL_DBS：对全部 marketing% 库执行未应用迁移）"
@@ -80,6 +85,8 @@ export ACTIVITY_HOST=127.0.0.1 COUPON_HOST=127.0.0.1 DISCOUNT_HOST=127.0.0.1 SEC
 export ACTIVITY_PORT=8085 COUPON_PORT=8085 DISCOUNT_PORT=8085 SECKILL_PORT=8085
 # 后台与 LITE 同进程：路由指向 standalone 的 8085
 export ADMIN_HOST=127.0.0.1 ADMIN_PORT=8085
+# 前后端分离：/ui 与 /h5 走本地 web 容器（compose.web.yml 发布的回环端口）
+export WEB_HOST=127.0.0.1 WEB_PORT=8088
 # 账号服务同理：dev 下它聚在 standalone 里，8087 只是 FULL 进程形态的默认端口。
 # 漏这两行的表现与当年漏 ADMIN_HOST 完全同形：POST /api/auth/login 被网关打到
 # 127.0.0.1:8087（那里没人听）→ 500 Connection refused，而冒烟在第一步就停。
