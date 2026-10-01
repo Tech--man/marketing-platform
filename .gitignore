@@ -34,11 +34,11 @@ docs/superpowers/
 .codegraph/
 .zcodeignore
 
-# ---- 前端依赖与 vite 默认中间产物 ----
-# 注意：marketing-admin/src/main/resources/static/ui/** 与 static/h5/**
-# 是**故意入仓**的构建产物（clone 下来 mvn package 就能跑出带界面的 jar，
-# 重建唯一入口是 scripts/build-ui.sh / build-h5.sh）。
-# 这里只忽略 node_modules 与 vite 的默认 dist，绝不忽略 static/ui、static/h5。
+# ---- 前端源码与本地构建中间产物（前后端分离 2026-10-01）----
+# 前端产物不再入仓：界面由 marketing-web 容器在镜像内构建并承载（nginx）。
+# 旧脚本若在本地把产物写进 admin classpath，这里兜住不进版本库；
+# 本地构建输出走各 ui 目录的 dist/（vite 默认）。
+marketing-admin/src/main/resources/static/
 node_modules/
 marketing-admin-ui/dist/
 marketing-h5-ui/dist/
