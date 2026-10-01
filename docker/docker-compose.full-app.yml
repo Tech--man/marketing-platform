@@ -34,7 +34,10 @@ x-app-defaults: &app-defaults
   # W5.3（2026-09-30 第二轮复审）：容器级内存上限与探活——JVM 有界但容器无界，
   # 多副本 scale 时 OOM 会杀掉整个容器而不是单进程；无 healthcheck 则 --wait 的
   # 就绪语义缺失（镜像内有 curl 的 JRE 基础镜像没有，用 java 自身做 TCP 探活代理）。
-  mem_limit: 768m
+  # 2026-10-01 审计 P1-4：768m 恰等于 -Xmx512m + MaxMetaspaceSize=256m，线程栈 /
+  # 代码缓存 / 直接缓冲 / GC 结构零余量，满载会被 kernel OOM-killer 杀容器——
+  # 抬到 1g 留 ~30% 余量（JVM 自身承诺之上）。
+  mem_limit: 1g
   healthcheck:
     # 容器内 TCP 探活业务端口（$$ 转义 = 容器内环境变量 APP_PORT，各服务单独设）。
     # 镜像是精简 JRE（无 curl/wget），bash 的 /dev/tcp 是可用的最小手段

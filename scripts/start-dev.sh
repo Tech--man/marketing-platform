@@ -22,8 +22,11 @@ DATA_COMPOSE="$ROOT/docker/docker-compose.data.yml"
 DEV_MYSQL_PORT="${DEV_MYSQL_PORT:-3307}"
 DEV_REDIS_PORT="${DEV_REDIS_PORT:-6380}"
 # 小堆 + SerialGC + 只跑 C1：换更快的启动与更小的常驻，牺牲峰值吞吐
-STANDALONE_OPTS="${STANDALONE_OPTS:--Xmx320m -Xss512k -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -XX:TieredStopAtLevel=1}"
-GATEWAY_OPTS="${GATEWAY_OPTS:--Xmx192m -Xss512k -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1}"
+# -Duser.timezone：DB 连接串是 serverTimezone=Asia/Shanghai，JVM 走 UTC 主机时到期收口/
+# 超时取消类"LocalDateTime.now() 直比 DATETIME"的判定会整体偏移（2026-10-01 审计 P2-2；
+# 容器形态已由 Dockerfile ENV TZ 收口，这里收的是宿主进程形态）
+STANDALONE_OPTS="${STANDALONE_OPTS:--Xmx320m -Xss512k -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Duser.timezone=Asia/Shanghai}"
+GATEWAY_OPTS="${GATEWAY_OPTS:--Xmx192m -Xss512k -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Duser.timezone=Asia/Shanghai}"
 
 if [ "${1:-}" != "--no-build" ]; then
   echo "==> mvn package（standalone + gateway）"
@@ -36,6 +39,11 @@ assert_port_not_shadowed "$DEV_REDIS_PORT"
 
 echo "==> 数据层常驻检查（mysql + redis，与 LITE/FULL 同一份数据）"
 docker compose -f "$DATA_COMPOSE" up -d --wait
+
+# 迁移接进入口（2026-10-01 审计 P1-1）：dev 与 LITE/FULL 共用同一常驻卷，
+# 新代码硬依赖 claim_token/source_id 两列，JVM 起在未迁移卷上会全线 Unknown column。
+echo "==> 迁移台账（ALL_DBS：对全部 marketing% 库执行未应用迁移）"
+ALL_DBS=1 "$(dirname "$0")/migrate.sh"
 
 export MYSQL_PORT="$DEV_MYSQL_PORT" REDIS_PORT="$DEV_REDIS_PORT"
 # 必须在启动任何 JVM 之前导出：standalone 里就装着 admin 模块，AdminSecurityConfig 对空密钥
@@ -56,7 +64,7 @@ start_jvm() { # name jar opts
     return
   fi
   if [ ! -f "$jar" ]; then
-    echo "!! 未找到 $jar，请先执行 mvn package" >&2
+    echo "!! 未找到 ${jar}，请先执行 mvn package" >&2
     exit 1
   fi
   nohup java $opts -jar "$jar" > "$LOG_DIR/$name.log" 2>&1 &

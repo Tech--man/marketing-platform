@@ -18,7 +18,10 @@ RUN_DIR="$ROOT/run"
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
 # 每个服务一份独立堆：不给定则 JVM 默认按物理内存 1/4 取堆，5 个进程会失控
-JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m}"
+# -Duser.timezone：DB 是 serverTimezone=Asia/Shanghai，JVM 走 UTC 主机时
+# "LocalDateTime.now() 直比 DATETIME"的到期收口/超时取消判定整体偏 8 小时
+# （2026-10-01 审计 P2-2；容器形态已由 Dockerfile ENV TZ 收口，这里收宿主进程形态）
+JAVA_OPTS="${JAVA_OPTS:--Xmx512m -XX:MaxMetaspaceSize=256m -Duser.timezone=Asia/Shanghai}"
 
 # PROFILES=nacos → 注册到 Nacos 且网关改用 lb:// 服务发现路由（多实例扩容的前置）；
 # 留空则是默认的 local 静态路由（按端口直连），单实例够用、启动更快
@@ -63,6 +66,13 @@ assert_port_not_shadowed "$REDIS_PORT"
 
 echo "==> 数据层常驻检查（与 LITE 同一份数据，支持原地双向切换）"
 docker compose -f "$ROOT/docker/docker-compose.data.yml" up -d --wait
+
+# 迁移接进入口（2026-10-01 审计 P1-1；复审 N-2 补齐本脚本）：FULL 本机形态与
+# LITE/dev 共用同一常驻卷，四个部署入口此前只差这一个没串迁移——新 jar 起在未迁移
+# 卷上时，SchemaMigrationGuard 会把 JVM 拦在启动期（fail-fast 但不如迁移先行友好；
+# 四库隔离档同样覆盖：ALL_DBS 对全部 marketing% 库执行）。
+echo "==> 迁移台账（ALL_DBS：对全部 marketing% 库执行未应用迁移）"
+ALL_DBS=1 "$(dirname "$0")/migrate.sh"
 
 # 进程形态需要 broker 广播 127.0.0.1；容器形态（deploy-full.sh）挂的是另一份
 # broker.container.conf。两边都 --force-recreate broker：bind 挂载钉的是 inode，

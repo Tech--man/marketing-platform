@@ -48,8 +48,11 @@ services:
       # 这既是吞吐墙也是两形态行为不等价，故显式可调：宿主机 MQ_STREAM_CONCURRENCY 覆盖
       MARKETING_MQ_STREAM_CONCURRENCY: ${MQ_STREAM_CONCURRENCY:-8}
       # 320M 堆够四个模块低峰承载；GC 用 G1 而非 SerialGC —— SerialGC 的 Full GC 会把
-      # 结算线程全停，"小机器常态服役"下这是可见的业务抖动。mem_limit 按
-      # 堆 320 + 元空间 160 + code cache/线程栈/direct ~150 给足余量，避免容器 OOMKill。
+      # 结算线程全停，"小机器常态服役"下这是可见的业务抖动。
+      # mem_limit 口径（2026-10-01 复审 N-4）：承诺不止 Xmx+Metaspace —— 压缩类空间
+      # 不受 MaxMetaspaceSize 约束，code cache/线程栈(2 topic×8 worker + tomcat + 定时)/
+      # direct/GC 结构合计 ~128m 常驻。320+160+128=608m 足迹，limit 取 832m
+      # （余量 224m ≈ 足迹的 37%）。此前 768m 的账只算了堆+元空间，真实余量 ~25%。
       JAVA_OPTS: "-Xmx320m -Xss512k -XX:MaxMetaspaceSize=160m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
     ports:
       # 只绑回环（2026-09-29 架构审查收口）：8085 上挂着全部七个模块的端点，直连它
@@ -63,7 +66,7 @@ services:
       retries: 30
       start_period: 60s
     restart: unless-stopped
-    mem_limit: 768m
+    mem_limit: 832m
     logging: *log
 
   gateway:
@@ -97,6 +100,9 @@ services:
       SECKILL_HOST: standalone
       SECKILL_PORT: "8085"
       JAVA_OPTS: "-Xmx192m -Xss512k -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      # mem_limit 同 standalone 口径（N-4）：192+128+96（网关线程少，常驻开销取 96m）
+      # = 416m 足迹，limit 576m（余量 160m ≈ 足迹的 38%）。此前 448m 是全仓最薄的一档
+      # ——按"堆+元空间"记账只余 128m，算上 code cache/栈/direct 后真实余量不足 50m。
       # 入口阈值随形态收口：与实测排空能力（108-142 msg/s/topic）对齐，
       # 纯同步的优惠计算给到 500/s 不影响（单次 ~0.4ms）
       RL_COUPON: "120"
@@ -118,7 +124,7 @@ services:
       retries: 30
       start_period: 40s
     restart: unless-stopped
-    mem_limit: 448m
+    mem_limit: 576m
     logging: *log
 
 networks:

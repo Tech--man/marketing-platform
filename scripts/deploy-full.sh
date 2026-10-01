@@ -50,7 +50,7 @@ for pid_file in run/*.pid; do
   [ -e "$pid_file" ] || continue
   pid=$(cat "$pid_file")
   if kill -0 "$pid" 2>/dev/null; then
-    echo "!! 本机进程形态还在跑（$(basename "$pid_file" .pid) pid $pid），先执行 ./scripts/stop-all.sh" >&2
+    echo "!! 本机进程形态还在跑（$(basename "$pid_file" .pid) pid ${pid}），先执行 ./scripts/stop-all.sh" >&2
     exit 1
   fi
 done
@@ -69,6 +69,11 @@ BUILD_FLAG="--build"
 
 echo "==> 数据层 + 扩容档中间件（nacos / rocketmq / prometheus，broker 用容器形态广播地址）"
 docker compose -f "$DATA" up -d --wait
+# 迁移接进部署入口（2026-10-01 审计 P1-1）：FULL 与 LITE 同理，数据层就绪后先跑台账迁移
+# （对 marketing + 全部 marketing_* 幂等执行），失败即中止——否则既有卷上新 jar 的
+# 幂等写与审计落库会全线 Unknown column。
+echo "==> 迁移台账（ALL_DBS：对全部 marketing% 库执行未应用迁移）"
+ALL_DBS=1 "$(dirname "$0")/migrate.sh"
 docker compose -f "$MW" -f "$MW_C" up -d --wait
 # 单独重建 broker：bind 挂载钉 inode，只改 conf 内容时 compose 不会认为服务有变化（详见 start-all.sh 同处注释）
 docker compose -f "$MW" -f "$MW_C" up -d --wait --force-recreate rocketmq-broker
@@ -106,7 +111,7 @@ wait_route() { # url desc 期望片段
   done
   # 把末次响应带出来：路径漂了（接口改名/404）与订阅没到位是两种病，
   # 只看"没返回预期响应"会让人去查服务发现（实测这样红过一次，真因是探针路径已不存在）
-  echo "!! $desc 在 120s 内没有返回预期响应（$url），末次响应: $(echo "$body" | head -c 160)" >&2
+  echo "!! $desc 在 120s 内没有返回预期响应（${url}），末次响应: $(echo "$body" | head -c 160)" >&2
   return 1
 }
 # ③：业务后台前缀要带 admin token（C 端 demo token 打 /api/admin/** 必 40100）
@@ -136,7 +141,7 @@ wait_route_admin() { # url desc 期望片段
     fi
     sleep 2
   done
-  echo "!! $desc 在 120s 内没有返回预期响应（$url），末次响应: $(echo "$body" | head -c 160)" >&2
+  echo "!! $desc 在 120s 内没有返回预期响应（${url}），末次响应: $(echo "$body" | head -c 160)" >&2
   echo "   若末次仍是 40100：先查 gateway 与 marketing-admin 两侧的 ADMIN_JWT_SECRET 是否同值" >&2
   return 1
 }

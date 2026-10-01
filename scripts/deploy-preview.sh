@@ -27,7 +27,7 @@ if [ -z "${ADMIN_JWT_SECRET:-}" ]; then
   SECRET_FILE="$PWD/.admin-jwt-secret"
   if [ ! -f "$SECRET_FILE" ]; then
     (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=' > "$SECRET_FILE")
-    echo "==> 已生成后台 JWT 密钥 → $SECRET_FILE（0600，已在 .gitignore 内）"
+    echo "==> 已生成后台 JWT 密钥 → ${SECRET_FILE}（0600，已在 .gitignore 内）"
   fi
   ADMIN_JWT_SECRET="$(cat "$SECRET_FILE")"
   export ADMIN_JWT_SECRET
@@ -40,7 +40,7 @@ if [ -z "${CONSUMER_JWT_SECRET:-}" ]; then
   CONSUMER_SECRET_FILE="$PWD/.consumer-jwt-secret"
   if [ ! -f "$CONSUMER_SECRET_FILE" ]; then
     (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=' > "$CONSUMER_SECRET_FILE")
-    echo "==> 已生成消费者 JWT 密钥 → $CONSUMER_SECRET_FILE（0600，已在 .gitignore 内）"
+    echo "==> 已生成消费者 JWT 密钥 → ${CONSUMER_SECRET_FILE}（0600，已在 .gitignore 内）"
   fi
   CONSUMER_JWT_SECRET="$(cat "$CONSUMER_SECRET_FILE")"
   export CONSUMER_JWT_SECRET
@@ -48,6 +48,14 @@ fi
 
 echo "==> 数据层常驻检查（mysql + redis，与 FULL/dev 同一份数据）"
 docker compose -f "$DATA_COMPOSE" up -d --wait
+
+# 迁移必须接进部署入口（2026-10-01 审计 P1-1）：新代码硬依赖 idempotent_record.claim_token
+# 与 admin_audit_log.source_id，未迁移的既有卷上起新 jar，C 端幂等写与审计落库会全线
+# Unknown column。此前只有"操作者记得跑 migrate.sh"这一道软闸——现在起 LITE 升级路径
+# 由脚本自己收口：数据层就绪后、应用栈启动前，对 marketing + 全部 marketing_* 跑台账迁移
+# （幂等，已应用的跳过），失败即中止部署。
+echo "==> 迁移台账（ALL_DBS：对全部 marketing% 库执行未应用迁移）"
+ALL_DBS=1 "$(dirname "$0")/migrate.sh"
 
 echo "==> 构建并启动 LITE 应用栈（standalone 首次启动约 40-90s）"
 docker compose -f "$COMPOSE" up -d --build --wait
