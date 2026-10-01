@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 错误码归一的最后一块：客户端写坏请求体不能被报成"系统繁忙"。
@@ -69,5 +70,67 @@ class GlobalExceptionHandlerTest {
     void unexpectedStaysSystemError() {
         assertEquals(ErrorCode.SYSTEM_ERROR.getCode(),
                 handler.handleUnknown(new IllegalStateException("boom")).getCode());
+    }
+
+    // ========== Boot 3.4 / Spring 6.2 参数校验异常族（v3 N-16 → v4 计划 R-10）==========
+    // 直接调 handler 方法断言 Result code；@ExceptionHandler 的分发面（"哪类异常进哪个
+    // handler"）用反射钉住注解清单——从注解里删掉任一异常类型，此处变红。
+
+    @Test
+    @DisplayName("类型不匹配 / 约束违反 / 缺参 → 40000（客户端问题，不是 50000）")
+    void clientParameterErrorsAreBadRequest() {
+        Result<Void> r1 = handler.handleClientParameterErrors(
+                new org.springframework.web.method.annotation.MethodArgumentTypeMismatchException(
+                        "abc", Long.class, "activityNo", null, null));
+        Result<Void> r2 = handler.handleClientParameterErrors(
+                new jakarta.validation.ConstraintViolationException("cv", new java.util.HashSet<>()));
+        Result<Void> r3 = handler.handleClientParameterErrors(
+                new org.springframework.web.bind.MissingServletRequestParameterException("activityNo", "String"));
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), r1.getCode());
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), r2.getCode());
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), r3.getCode());
+    }
+
+    @Test
+    @DisplayName("HandlerMethodValidationException（@RequestParam 约束）也走 40000")
+    void handlerMethodValidationIsBadRequest() throws Exception {
+        org.springframework.validation.method.MethodValidationResult result =
+                org.mockito.Mockito.mock(org.springframework.validation.method.MethodValidationResult.class);
+        Result<Void> r = handler.handleClientParameterErrors(
+                new org.springframework.web.method.annotation.HandlerMethodValidationException(result));
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), r.getCode());
+        assertEquals(false, r.isSuccess());
+    }
+
+    @Test
+    @DisplayName("请求方式不支持 → 40000 语义 + HTTP 405 状态（@ResponseStatus 钉住）")
+    void methodNotSupportedIsClientErrorWith405() throws Exception {
+        Result<Void> r = handler.handleMethodNotSupported(
+                new org.springframework.web.HttpRequestMethodNotSupportedException("DELETE"));
+        assertEquals(ErrorCode.BAD_REQUEST.getCode(), r.getCode());
+        org.springframework.web.bind.annotation.ResponseStatus status =
+                handler.getClass().getMethod("handleMethodNotSupported",
+                        org.springframework.web.HttpRequestMethodNotSupportedException.class)
+                        .getAnnotation(org.springframework.web.bind.annotation.ResponseStatus.class);
+        assertEquals(org.springframework.http.HttpStatus.METHOD_NOT_ALLOWED, status.value());
+    }
+
+    @Test
+    @DisplayName("N-16 变异闸：@ExceptionHandler 清单必须含全部四类校验异常（删一类即红）")
+    void clientParameterHandlerAnnotationCoversAllFour() throws Exception {
+        Class<? extends java.lang.annotation.Annotation> annoType =
+                org.springframework.web.bind.annotation.ExceptionHandler.class;
+        java.lang.annotation.Annotation anno = handler.getClass()
+                .getMethod("handleClientParameterErrors", Exception.class)
+                .getAnnotation(annoType);
+        String valueString = anno.toString();
+        for (String required : new String[]{
+                "HandlerMethodValidationException",
+                "MethodArgumentTypeMismatchException",
+                "ConstraintViolationException",
+                "MissingServletRequestParameterException"}) {
+            assertTrue(valueString.contains(required),
+                    "@ExceptionHandler 清单缺 " + required + "——该类异常会落进 handleUnknown 的 50000");
+        }
     }
 }
