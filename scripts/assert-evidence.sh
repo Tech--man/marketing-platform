@@ -84,6 +84,16 @@ if [ "$REPORTS" -gt 0 ] && [ "$NEWEST_SRC" -gt 0 ]; then
   fi
 fi
 
+# v3 复审 N-20：用例数下限——"-pl 局部跑 + 旧报告残留"也能凑出"报告全绿"的假证据；
+# 全量基线（2026-10-01 第九批后）是 106 份 / 561 例，下限打 ~85 折，跌破即红。
+# 用例只增不减时永不触发；确需大规模裁撤用例时显式 ASSERT_MIN_REPORTS/ASSERT_MIN_TESTS=0。
+MIN_REPORTS="${ASSERT_MIN_REPORTS:-90}"
+MIN_TESTS="${ASSERT_MIN_TESTS:-500}"
+if [ "$REPORTS" -lt "$MIN_REPORTS" ] || [ "$TESTS" -lt "$MIN_TESTS" ]; then
+  echo "!! 报告/用例数低于全量下限（${REPORTS}<${MIN_REPORTS} 份 或 ${TESTS}<${MIN_TESTS} 例）——疑似局部跑或残留报告，不能当全量证据" >&2
+  RC=1
+fi
+
 # ---------- ② 双前端 ----------
 front_json() { # dir name → 解析 vitest JSON，echo "passed failed suites"
   local dir=$1

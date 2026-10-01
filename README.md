@@ -150,6 +150,13 @@ admin 的 `admin_audit_log.source_id`、standalone 兼两者）在缺列卷上�
 直接给出上述命令——但那是"起不来"，不是"迁移完成"，别把兜底当流程。（2026-10-01
 审计 P1-1；复审 N-2 之前 `start-all.sh` 是四个入口里唯一没串迁移的一个。）
 
+**灰度键形状升级的滚动顺序（2026-10-01 复审 §5.3）**：灰度键值形状自第九批起为
+`percent|w1,w2|version`（三段，尾部是版本号）。滚动发布同库混跑两种版本的窗口内，
+顺序必须是**先升消费侧（coupon），再升发布侧（activity）**——旧 coupon 读侧按
+"第一个 `|` 之后整串"解析白名单，读到新三段值会把最后一项（如 `70002|7`）当坏项
+跳过，白名单尾号在那段时间静默失效；反向（新读旧写）无此问题，新旧读侧都兼容
+两段旧形状。FULL 多副本形态下"先升完所有 coupon 副本、再动 activity"同理。
+
 ### 数据层与端口矩阵
 
 MySQL 与 Redis **不属于任何形态**：由 `docker/docker-compose.data.yml` 单独常驻，三套形态共用
@@ -618,7 +625,9 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 `?next=`（这次没写进去，回得去）、**40102 不回原页也绝不自动重放**（那一发可能已经落库）、
 40100 只清 token。倒计时用登录响应的 `expiresInSeconds`，不前端写死 TTL。不做 refresh token。
 
-**dist 的三道闸**（仓库没有 CI，所以只有第三道会被自动跑到）：
+**dist 的三道闸**（CI 于 2026-10-01 起接了 mvn/vitest/check-scripts 三步——注意
+**重建对拍仍未进 CI**：`build-ui.sh` 之后 `git diff --exit-code` 的步骤还没有，改了
+`.vue` 不重建仍是"作者记得做"，见第六节"已知噪音"）：
 ① `scripts/build-ui.sh` 是唯一重建入口（并把 `rev`/时间注进 `index.html` 指纹）；
 ② `scripts/check-ui-dist.sh` 比对 jar 与仓库的逐项 sha256，双向；
 ③ `UiDistIntegrityTest`（不连库、不起上下文）断言索引页存在、它引用的指纹资源都在、
@@ -777,7 +786,7 @@ cd marketing-h5-ui && npm test       # 96 条 C 端用例 / 7 个文件（响应
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（419 用例 / 82 类）**分十族：
+**单测（561 用例 / 106 类，2026-10-01 第九批后）**分十族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、

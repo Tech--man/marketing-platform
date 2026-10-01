@@ -396,8 +396,10 @@ expect "不存在的账号与口令错同码" '"code":40100' "$R_GHOST"
 expect "无凭证访问后台被拒" '"code":40100' "$(curl -s -m 10 "$GW/api/admin/users")"
 expect "C 端 token 打后台被拒" '"code":40100' "$(curl -s -m 10 -H "$AUTH" "$GW/api/admin/users")"
 # P1-7（2026-10-01 审计）：401/403/429 的真实 HTTP 状态也要钉住——body.code 契约前端照旧
-# 只认它，但监控/熔断/LB 健康判定看的是状态码；状态映射一旦被渲染管道盖回 200
-# （52863dc→e23d0a5 之间就是这种状态），这条会先红。
+# 只认它，但监控/熔断/LB 健康判定看的是状态码。归属（v3 复审 N-21 修正）：这条钉的是
+# **网关侧**拒绝（无凭证在网关 AdminAuthFilter 就被 401，到不了 MVC advice）；进程内
+# advice 的状态映射由 ActivityControllerTest 的 MockMvc 断言钉住——渲染管道盖回 200
+# 那类回归（52863dc→e23d0a5）的第一现场在那边，排障别找错地方。
 expect "无凭证打后台回真实 HTTP 401（不是 200+40100）" '^401$' \
   "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$GW/api/admin/users")"
 
