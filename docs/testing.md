@@ -5,19 +5,18 @@
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 561 个单测 / 106 个类：见下
-cd marketing-admin-ui && npm test    # 49 条前端用例 / 9 个文件（vitest + jsdom，见 ⑥）
-cd marketing-h5-ui && npm test       # 101 条 C 端用例 / 7 个文件（响应形状与 40101/40102 分流）
-./scripts/build-ui.sh    # ⑥ 唯一的前端重建入口（产物入仓，机器上没 node 也能跑 jar）
-./scripts/check-ui-dist.sh  # jar 与仓库的 static/ui 逐项 sha256 比对（前提：已 package）
-./scripts/build-h5.sh    # C 端 H5 的唯一重建入口（产物入 static/h5）
-./scripts/check-h5-dist.sh  # 同一道产物闸的 H5 版（前提：已 package）
+mvn test                 # 549 个单测 / 102 个类：见下
+cd marketing-admin-ui && npm ci && npm test && npm run build   # 49 条前端用例 + 构建闸（CI 同款）
+cd marketing-h5-ui && npm ci && npm test && npm run build      # 101 条 C 端用例 + 构建闸
+# 前后端分离（2026-10-01）：产物不再入仓，build-ui/build-h5/check-*-dist 四个产物闸
+# 脚本随产物入仓口径一起退役——构建可破坏性由上面的 npm run build 与 marketing-web
+# 镜像构建（docker build 内置 npm ci + vite build）覆盖。
 ./scripts/smoke-test.sh  # 端到端 119 条断言 / 九条链路，需服务已启动
                          # （LITE 与 dev 各实测 113/113，2026-09-25；FULL 两种形态见第六节矩阵）
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（561 用例 / 106 类，2026-10-01 第九批后）**分十族：
+**单测（549 用例 / 102 类，2026-10-01 前后端分离后）**分十族：
 
 - **业务语义**：三层幂等（首执/回放/PROCESSING 拒重入/FAILED 可重抢）、非法状态流转拒绝、
   比例分摊尾差归末项、末行占满顺延、互斥组最优（priority desc → discount desc）、
@@ -69,10 +68,11 @@ cd marketing-h5-ui && npm test       # 101 条 C 端用例 / 7 个文件（响�
 - **后台界面（⑥，vitest 那一套）**：api 客户端（凭证注入、业务码非 0 抛错并带整份响应、
   **三个 401 类码走三条路**、被吊销的会话绝不自动重放、42900 把 `Retry-After` 带出来）、
   会话 store（TTL 只取登录响应、角色→按钮、退出失败也清本地）、`TriState`
-  （-1/"不适用"/真 0 三种画法，绝不归一化）、`UiResourceSupport`（回退判据 + 缓存头 + CSP，
-  用 `MockHttpServletResponse` 测）、`GatewayUiRouteConfigTest`（按 `---` 拆 yml 文档，
-  逐段断言 local 与 nacos 都有 `ui-route`、白名单、限流桶，并钉住"探针自己的分段假设"）、
-  `UiDistIntegrityTest`（产物自洽与孤儿检测）、`routes.spec`（侧栏每个链接都必须
+  （-1/"不适用"/真 0 三种画法，绝不归一化）、`GatewayUiRouteConfigTest`（按 `---` 拆 yml 文档，
+  逐段断言 local 与 nacos 都有 `ui-route`、白名单、限流桶，并钉住"探针自己的分段假设"；
+  前后端分离后补一条"静态路由必须含 WEB 占位符且不得指回 admin"——原
+  `UiResourceSupport`/`UiDistIntegrityTest` 的职责随静态承载移交 marketing-web 的
+  nginx 而移除）、`routes.spec`（侧栏每个链接都必须
   resolve 到带组件的记录——大盘一度只在空路径上注册，点进去整页空白而单测全绿）。
   变异检查逐条做过，并且**先证明文件真的被改了再跑**：第一版有一条 perl 锚点写错，
   变异没落地却报"没抓到"——那比漏红更坏。

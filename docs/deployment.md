@@ -17,11 +17,18 @@
 
 | 入口 | `DEPLOY_FORM` | 应用侧装配 | 消息通道 | 中间件 compose |
 |---|---|---|---|---|
-| `start-dev.sh` | `DEV` | 本机 2 JVM（standalone 8085 + gateway 8090），四业务模块与后台**聚进一个进程** | Redis Stream | data |
-| `deploy-preview.sh` | `LITE` | 全栈容器，**聚合方式与 dev 相同**（compose 里 standalone 与 gateway 各写一份） | Redis Stream | preview |
-| `start-all.sh` | `FULL` | 本机 6 个独立 JVM（默认无 profile=local 静态路由，`PROFILES=nacos` 才走注册发现） | RocketMQ | prod |
-| `deploy-full.sh` | `FULL` | 6 个应用容器 + `lb://`（`full-app.yml` 里同时下发 `SPRING_PROFILES_ACTIVE=nacos`） | RocketMQ | prod + full-app |
+| `start-dev.sh` | `DEV` | 本机 2 JVM（standalone 8085 + gateway 8090）+ web 容器（8088），四业务模块与后台**聚进一个进程** | Redis Stream | data + web |
+| `deploy-preview.sh` | `LITE` | 全栈容器，**聚合方式与 dev 相同**（compose 里 standalone / gateway / web 各一份） | Redis Stream | preview（含 web） |
+| `start-all.sh` | `FULL` | 本机 6 个独立 JVM + web 容器（默认无 profile=local 静态路由，`PROFILES=nacos` 才走注册发现） | RocketMQ | prod + web |
+| `deploy-full.sh` | `FULL` | 6 个应用容器 + web 容器 + `lb://`（`full-app.yml` 里同时下发 `SPRING_PROFILES_ACTIVE=nacos`） | RocketMQ | prod + full-app（含 web） |
 | `MYSQL_DB_PER_SERVICE=1` | 仍是 `FULL` | 同上，只把数据层拆成 5 库 | RocketMQ | 同上 |
+
+> **前后端分离（2026-10-01）**：前端产物不再入仓、不进后端 jar——/ui 与 /h5 由
+> **marketing-web**（nginx 容器）承载，网关的两套 profile 都把 ui-route/h5-route
+> 指向 `WEB_HOST/WEB_PORT`（host 形态 127.0.0.1:8088；容器形态 mkt-web/mkt-preview-web/mkt-full-web:80）。
+> nginx 的行为契约（assets 一年 immutable、静态后缀缺失 404 不回退、SPA 深链回退
+> index、索引 no-store、全路径 CSP）在 `marketing-web/nginx.conf`，由冒烟链路 8
+> 的六条断言逐条钉住。nacos 段的静态路由**刻意不用 lb://**——nginx 不注册 nacos。
 
 所以 `LITE × prod` 这种组合在本仓**不成立**，理由不是硬件不够：`prod` 那套中间件给的是
 RocketMQ + Nacos，而"LITE"这个词的定义里就含"四模块聚进一个进程 + 消息走 Redis Stream"——
@@ -220,9 +227,9 @@ Apple Silicon 开发机 + OrbStack；容器取 `docker stats`，本机进程取 
 
 | 形态 | 应用侧 | 数据层与中间件 | 合计 | 测量口径 |
 |---|---|---|---|---|
-| **LITE 服役档** | standalone 517-599 + gateway 323-361 MiB | mysql 172-266 + redis 8-13 MiB | **≈ 1.09-1.24 GiB** | `docker stats`；standalone 内含管理后台模块。区间是同日多次采样的跨度 —— JVM 常驻集随负载与运行时长爬升，单点数字会骗人。**加后台没触到调 `mem_limit` 的阈值（640 MiB）**，最高一次 599 MiB；⑤ 复跑当天两次采样 517 / 526 MiB（区间下沿因此放宽）；④ 复跑跑完七条链路 551.6 MiB（gateway 362.8），点大盘的抓取成本没把它顶出去 |
-| **dev 开发档** | 2 个本机 JVM ≈ 175-244 MiB | 数据层 184-256 MiB | **≈ 0.35-0.49 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比；区间是多次实测（④ 复跑 standalone 175 MiB），差值主要是 MySQL 缓冲池预热程度 |
-| **FULL 扩容档**（容器化，5 服务单副本） | 5 容器 ≈ 2.7 GiB（484-689 MiB/个） | nacos 1.11 + rocketmq 1.68 + 数据层 0.26 + prometheus 0.03 GiB | **≈ 5.8 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
+| **LITE 服役档** | standalone 517-599 + gateway 323-361 + web ≈5 MiB | mysql 172-266 + redis 8-13 MiB | **≈ 1.09-1.25 GiB**（含 web 容器） | `docker stats`；standalone 内含管理后台模块。区间是同日多次采样的跨度 —— JVM 常驻集随负载与运行时长爬升，单点数字会骗人。**加后台没触到调 `mem_limit` 的阈值（640 MiB）**，最高一次 599 MiB；⑤ 复跑当天两次采样 517 / 526 MiB（区间下沿因此放宽）；④ 复跑跑完七条链路 551.6 MiB（gateway 362.8），点大盘的抓取成本没把它顶出去 |
+| **dev 开发档** | 2 个本机 JVM ≈ 175-244 MiB + web 容器 ≈5 MiB | 数据层 184-256 MiB | **≈ 0.35-0.50 GiB** | JVM 部分是 `ps` RSS，**macOS 下会低估**（文件映射与压缩页不计），只宜横向比；区间是多次实测（④ 复跑 standalone 175 MiB），差值主要是 MySQL 缓冲池预热程度 |
+| **FULL 扩容档**（容器化，5 服务 + web） | 5 容器 ≈ 2.7 GiB（484-689 MiB/个）+ web ≈5 MiB | nacos 1.11 + rocketmq 1.68 + 数据层 0.26 + prometheus 0.03 GiB | **≈ 5.8 GiB** | `docker stats`；`--scale marketing-discount=2` 时实测约 +0.5 GiB/副本 |
 | **FULL 扩容档**（本机进程，5 JVM） | 5 JVM `ps` RSS 合计 253 MiB（**刚启动即采样**；同一进程跑 10 分钟后到 309 MiB，ps RSS 随负载爬升） | rocketmq 1.77 GiB（nacos/prometheus 未起） | **≈ 2.0 GiB** | 混合口径 + 采样时点不一致，只作量级参考，别与上三行比 |
 
 > 口径说明：跨形态比较一律用 `docker stats`。本机进程的 `ps` RSS 在 macOS 上系统性偏低

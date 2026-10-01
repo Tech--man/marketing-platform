@@ -27,15 +27,17 @@ marketing-platform/
 ├── marketing-discount/         # 8083 优惠计算引擎
 ├── marketing-seckill/          # 8084 秒杀中心
 ├── marketing-account/          # 8087 消费者账号：注册/登录/刷新/登出/改密/会话/身份事件
-├── marketing-admin/            # 8086 后台：账号/会话/审计/运维入口 + 两份静态产物 /ui /h5
+├── marketing-admin/            # 8086 后台：账号/会话/审计/运维入口
 ├── marketing-standalone/       # 8085 LITE 与 dev 的聚合进程（四业务 + 后台 + 账号同 JVM）
 ├── marketing-admin-ui/         # ⑥ 后台 SPA 源码（Vue3 + vite，不进 maven 生命周期）
-├── marketing-h5-ui/            # C 端 H5 源码（同一套产物纪律：dist 入仓到 static/h5）
+├── marketing-h5-ui/            # C 端 H5 源码（前后端分离：dist 不入仓，构建在 marketing-web 镜像内）
+├── marketing-web/              # 前端静态承载（nginx 容器，多阶段构建：node→nginx；不进 maven）
 ├── docker/
 │   ├── docker-compose.data.yml     # 常驻数据层（mysql + redis AOF），三套形态共用
-│   ├── docker-compose.preview.yml  # LITE 服役档全栈（standalone + gateway 两容器）
+│   ├── docker-compose.web.yml      # 前端容器（host 进程形态用，发布 127.0.0.1:8088）
+│   ├── docker-compose.preview.yml  # LITE 服役档全栈（standalone + gateway + web 容器）
 │   ├── docker-compose.prod.yml     # FULL 中间件：RocketMQ/Nacos/Prometheus
-│   ├── docker-compose.full-app.yml # FULL 应用侧：一容器一服务，可 --scale
+│   ├── docker-compose.full-app.yml # FULL 应用侧：一容器一服务 + web，可 --scale
 │   ├── mysql/init-lite/            # 单库 DDL + 种子（数据层默认，自动执行）
 │   ├── mysql/init/                 # 六库布局（配合 MYSQL_DB_PER_SERVICE=1）
 │   ├── mysql/migrate/              # 现存卷的增量迁移（有守卫，重复执行 no-op）
@@ -50,8 +52,11 @@ marketing-platform/
     ├── smoke-test.sh                          # 九条链路端到端冒烟（三套形态通用）
     ├── load-probe.sh                          # 容量夹具：按业务落库数算端到端，不看队列长度
     ├── reset-demo-data.sh                     # 演示容量复位
-    └── build-ui.sh / check-ui-dist.sh         # ⑥ 后台产物的唯一重建入口 + jar/仓库 sha256 对拍
-        build-h5.sh / check-h5-dist.sh         # C 端 H5 同一条纪律的两个脚本
+    ├── lua-contract.sh                        # 8 个 Lua 的真 Redis 契约清单（CI gates-docker）
+    ├── check-migrate-chain.sh                 # init↔迁移链真 MySQL 对拍（CI gates-docker）
+    ├── check-migrate-immutable.sh             # 已发布迁移不可变性闸（CI gates）
+    ├── check-scripts.sh                       # shell 引号形状门禁（CI gates）
+    └── assert-evidence.sh                     # 证据链生成器（mvn + 双前端 + 新鲜度）
 ```
 
 种子数据：活动 `ACT2026001`、券模板 `CT2026001`(5元无门槛)/`CT2026002`(满100减20)、

@@ -53,9 +53,9 @@
 
 | 形态 | 定位 | 拓扑 | 消息通道 | 数据库 | 可靠性口径 |
 |---|---|---|---|---|---|
-| **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 4 容器：mysql / redis / standalone（四业务模块 + 后台 + 账号聚合）/ gateway | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
-| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 两种交付形态二选一：**本机进程** 7 JVM（8081-8084、8086、8087 + 8090）／**容器化** 一容器一服务且可 `--scale` 多副本（只有网关发布端口，后台与账号服务不对外直连）；配 RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库，六个库：四业务 + `marketing_admin` + `marketing_account`） | 中间件默认全持久化 |
-| **dev 开发档** | 本机改代码，允许丢数据 | 中间件容器 + 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 不持久化；**淘汰策略仍与 LITE 一致** |
+| **LITE 服役档**<br>（preview） | 非活跃期 7×24 真跑流量，小机器常态承载 | 全栈容器化 5 容器：mysql / redis / standalone（四业务模块 + 后台 + 账号聚合）/ gateway / web（nginx 前端） | Redis Stream | 单库 `marketing` | Redis **AOF everysec + noeviction**、MySQL flush=1、restart 策略、日志轮转 |
+| **FULL 扩容档**<br>（prod） | 活跃期承接洪流，与生产同构 | 两种交付形态二选一：**本机进程** 7 JVM + web 容器（8081-8084、8086、8087、8090 + nginx）／**容器化** 一容器一服务且可 `--scale` 多副本（网关 + web，后台与账号服务不对外直连）；配 RocketMQ + Nacos + Prometheus | RocketMQ | 默认同一单库（可选每服务一库，六个库：四业务 + `marketing_admin` + `marketing_account`） | 中间件默认全持久化 |
+| **dev 开发档** | 本机改代码，允许丢数据 | 中间件容器 + 前端 web 容器（127.0.0.1:8088）+ 本机 2 JVM（standalone 8085 / gateway 8090） | Redis Stream | 单库 `marketing` | 不持久化；**淘汰策略仍与 LITE 一致** |
 
 LITE 的省内存**一律不靠牺牲可靠性换**，四条不可退让：淘汰策略必须 `noeviction`
 （`allkeys-lru` 会静默丢掉库存/券预扣/幂等键，后果是超卖与重复领券）；状态要落 AOF 且挂卷；
@@ -138,7 +138,7 @@ C 端种子账号 `demo / demo123456`；后台账号见 `docs/testing.md` 冒烟
 | 4 | 管理后台 | 两套凭证不互通、行级乐观锁（冲突 41008）、管理写全量审计、运维入口 |
 | 5 | 在线配置 | 改阈值与灰度不重启：`form 行 > GLOBAL 行 > 出厂值`，5s 内全档收敛 |
 | 6 | 运维读数 | 不接 Prometheus 的只读大盘（代理抓各服务 actuator，聚合一致性/账实恒等式） |
-| 7 | 后台界面 | 同源挂在网关 `/ui/`，零新增进程 |
+| 7 | 后台界面 | 同源挂在网关 `/ui/`（前后端分离后由 marketing-web nginx 容器承载） |
 | · | 消费者账号体系 | C 端身份唯一来源：注册/登录/refresh 轮换/登出/改密全会话吊销 + 身份事件流水 |
 
 **"写入口收口"是横切边界**——管理面写（`/api/admin/**`，admin token + 审计 + 乐观锁）与
@@ -156,19 +156,19 @@ C 端交易写（幂等键 + 削峰，不进审计）的结构分界见第五节
 ## 六、测试与验证
 
 ```bash
-mvn test                 # 561 个单测 / 106 个类：见下
-cd marketing-admin-ui && npm test    # 49 条前端用例 / 9 个文件（vitest + jsdom，见 ⑥）
-cd marketing-h5-ui && npm test       # 101 条 C 端用例 / 7 个文件（响应形状与 40101/40102 分流）
-./scripts/build-ui.sh    # ⑥ 唯一的前端重建入口（产物入仓，机器上没 node 也能跑 jar）
-./scripts/check-ui-dist.sh  # jar 与仓库的 static/ui 逐项 sha256 比对（前提：已 package）
-./scripts/build-h5.sh    # C 端 H5 的唯一重建入口（产物入 static/h5）
-./scripts/check-h5-dist.sh  # 同一道产物闸的 H5 版（前提：已 package）
+mvn test                 # 549 个单测 / 102 个类：见下
+cd marketing-admin-ui && npm ci && npm test && npm run build   # 49 条前端用例 + 构建闸（CI 同款）
+cd marketing-h5-ui && npm ci && npm test && npm run build      # 101 条 C 端用例 + 构建闸
 ./scripts/smoke-test.sh  # 端到端 119 条断言 / 九条链路，需服务已启动
                          # （LITE 与 dev 各实测 113/113，2026-09-25；FULL 两种形态见第六节矩阵）
 ./scripts/reset-demo-data.sh [总库存]  # 演示容量复位（默认 5000；③ 起走后台端点，不再 restart 应用）
 ```
 
-**单测（561 用例 / 106 类，2026-10-01 第九批后）**分十族：
+**前后端分离（2026-10-01）**：前端产物不再入仓、不进后端 jar——界面由
+**marketing-web**（nginx 容器）在镜像内构建承载，`deploy-preview.sh` 等入口
+自动带起；构建可破坏性由 CI 的 `npm run build` 步骤与 web 镜像构建天然覆盖。
+
+**单测（549 用例 / 102 类，2026-10-01 前后端分离后）**分十族：
 
 
 单测十族构成（业务语义/资金与消息正确性/公共契约/后台鉴权与审计/…）、冒烟九链路 ×
@@ -190,3 +190,4 @@ cd marketing-h5-ui && npm test       # 101 条 C 端用例 / 7 个文件（响�
 | [docs/testing.md](docs/testing.md) | 单测构成、冒烟矩阵、已知噪音、测试纪律 |
 | [docs/structure.md](docs/structure.md) | 扩展点与目录结构 |
 | [docs/landing/](docs/landing/) | 项目落地页（纯静态，可直接浏览器打开） |
+| `marketing-web/` | 前端静态承载容器（前后端分离后的新模块，不进 Maven reactor） |

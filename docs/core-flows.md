@@ -185,51 +185,45 @@ Redis + MySQL，Prometheus 只是可选的第二消费者。
 LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `mem_limit` 阈值。
 保留策略与历史趋势（Prometheus 抓取、告警）**刻意推迟**：那是"看得更久"，不是"现在能看见"。
 
-### 7. 后台界面（⑥：同源挂在 `/ui/`，零新增进程）
+### 7. 后台界面（⑥：同源挂在 `/ui/`，前后端分离后的 nginx 承载）
 
-**形态**：`marketing-admin-ui/`（Vue3 + Vite + Element Plus，**不进 root pom、不进 maven 生命周期**）
-构建出的 `dist` **入仓**到 `marketing-admin/src/main/resources/static/ui/`。
-所以 clone 下来 `mvn package` 就能跑出一个带界面的 jar，机器上没有 node 也一样——
-这是这个仓库给"常态服役档"留的确定性，代价是产物必须由人重建（见下面的三道闸）。
+**形态**（前后端分离，2026-10-01）：`marketing-admin-ui/`（Vue3 + Vite + Element Plus，
+**不进 root pom、不进 maven 生命周期**）与 `marketing-h5-ui/` 的产物**不再入仓、
+不进后端 jar**——由 **marketing-web** 容器（nginx）在镜像内构建承载：多阶段
+Dockerfile 里 `npm ci && vite build`（宿主机无需 node），`nginx.conf` 精确复刻原
+Spring 版的行为契约（缓存/回退/404/CSP）。clone 下来 `deploy-preview.sh` 一条命令
+起全栈（含前端），`mvn package` 出的 jar 只有 API——这是分离后的新确定性。
 
-**为什么同源**：仓库零 CORS 配置，也不打算加。`/ui/**` 由网关新增的 `ui-route` 转给 admin
-（local 与 nacos **两套 profile 各一条**，LITE 复用同一对 `ADMIN_HOST/ADMIN_PORT` 指到 standalone:8085），
+**为什么同源**：仓库零 CORS 配置，也不打算加。`/ui/**` 由网关的 `ui-route` 转给
+marketing-web 容器（local 与 nacos **两套 profile 各一条**，占位符 `WEB_HOST/WEB_PORT`；
+host 形态 127.0.0.1:8088，容器形态 mkt-* -web:80），
 并且必须进 `rate-limit` map——**route 不在 map 里 = 完全不限流且不报错**。
 它不需要任何白名单条目：C 端鉴权托管的是 `\u002fapi/**`，`/ui/**` 与 `/h5/**` 天然不在罩子里。
 
-**history 回退在 admin，不在网关**：`UiWebMvcConfig` 给 `/ui/**` 注册资源并回退 `index.html`，
-网关不该懂前端路由。两个只起进程才看得见的坑（都是真栈实测抓的，纯函数单测两次都绿）：
-空路径时 `createRelative("")` 返回的是**目录**且 `exists()` 为真；而即便跳过它，
-`ResourceHttpRequestHandler.processPath` 对空路径也直接判 404——最后用 `addViewController`
-把 `/ui` 与 `/ui/` 显式转发到 `index.html`。
+**history 回退在 nginx，不在网关**：`try_files $uri /ui/index.html` 处理 SPA 深链，
+网关不该懂前端路由。**静态后缀（.js/.css/…）缺失必须 404 不许回退**——回退会把
+"缺文件"伪装成"白屏"，冒烟链路 8 的 `--path-as-is` 断言钉住这条。
 
 **缓存头只能有一个主人**：`/ui/index.html` 是 `no-store`（旧索引配上新的指纹文件名就是白屏），
 `/ui/assets/**` 是 `max-age=31536000, immutable`（文件名带内容指纹）。
-所以**不能**用 `ResourceHandlerRegistry.setCacheControl(...)`——它会在 handler 里再写一次
-`Cache-Control`，把 `immutable` 覆盖成 `no-store`，看起来"更保守"实际让每发 assets 都回源。
-另外整个 `/ui/*` 带 CSP `script-src 'self'; object-src 'none'; base-uri 'self'`。
+整个 `/ui/*`、`/h5/*` 带 CSP `script-src 'self'; object-src 'none'; base-uri 'self'`。
 
 **token 存 localStorage**：`Authorization: Bearer` 是网关唯一识别路径，改 cookie 要么动 ③ 的鉴权链
 要么加反代；不写 cookie 就没有 CSRF。三个鉴权码在界面上走**三条**路——40101 跳登录并带
 `?next=`（这次没写进去，回得去）、**40102 不回原页也绝不自动重放**（那一发可能已经落库）、
 40100 只清 token。倒计时用登录响应的 `expiresInSeconds`，不前端写死 TTL。不做 refresh token。
 
-**dist 的三道闸**（CI 于 2026-10-01 起接了 mvn/vitest/check-scripts 三步——注意
-**重建对拍仍未进 CI**：`build-ui.sh` 之后 `git diff --exit-code` 的步骤还没有，改了
-`.vue` 不重建仍是"作者记得做"，见第六节"已知噪音"）：
-① `scripts/build-ui.sh` 是唯一重建入口（并把 `rev`/时间注进 `index.html` 指纹）；
-② `scripts/check-ui-dist.sh` 比对 jar 与仓库的逐项 sha256，双向；
-③ `UiDistIntegrityTest`（不连库、不起上下文）断言索引页存在、它引用的指纹资源都在、
-**且 dist 里没有没被引用的孤儿文件**。第三道已经在第一次跑时抓到真漂移：Maven 的资源拷贝
-只覆盖不删除，`target/classes/static/ui` 会攒下上一版的 `assets/*` 被打进 jar——
-所以现在 `build-ui.sh` 构建后顺手清掉那个目录。
+**构建可破坏性**（产物入仓时代的"三道闸"已随口径退役）：CI frontend job 的
+`npm run build` + marketing-web 镜像构建（同一命令）；`GatewayUiRouteConfigTest`
+钉住静态路由必须含 WEB 占位符且不得指回 admin。改了 `.vue` 不需要"记得重建入仓"——
+下一次 `deploy-preview.sh` 的 `--build` 天然带新源码。
 
 **界面只把后端已有的判断显示出来，不复制一份权限**：角色只用来灰化入口，
 真正的判定在每个写端点（operator 改阈值仍是 40300）。前端那张状态机表也只裁按钮不当校验，
 非法流转照样显示后端的 41001 原文。
 
 **实测**：dist **252 KiB**（未压缩，JS 96KB + CSS ~52KB），全量注册 Element Plus 时要 1388 KiB——
-按需引入是必要的而不是洁癖，因为这份产物进的是常态服役档那个 jar。
+按需引入是必要的而不是洁癖，因为这份产物进的是 web 镜像不是后端 jar。
 冒烟链路 8 六条（首页 200、索引 `no-store`、深链回退、指纹 `immutable`、缺文件必须 404、
 无凭证打 `/api/admin/users` 仍 40100）在 LITE 与 FULL 容器档各全绿；
 真浏览器走了一遍登录 → 十页渲染 → 界面改秒杀库存并核对 Redis 分桶真的按 `total-sold` 重建。

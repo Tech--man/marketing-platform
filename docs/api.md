@@ -39,7 +39,8 @@
 | PUT/DELETE | /api/admin/config（body `cfgKey`+`form`+`value`+`remark` / `?cfgKey=&form=`） | 写在线覆盖 · 删行=恢复出厂。**只有 `admin` 角色**（operator 在网关可写运维，但改不动阈值），未声明的键与越界值一律 40000 |
 | POST | /api/admin/config/rebroadcast | 按 DB 现状重发快照（幂等）：修 `41009 配置已落库但未广播` 的那个窗口 |
 | GET | /api/admin/ops | **运维只读总览（④，仅 `admin`）**：`mode` 与逐 target 的抓取路径/样本数、进程存活三态、`local_message` 跨库未排空合计、Stream 通道深度、缓存与账的不符条数、审计量与前几个动作、限流拒绝数（带 route）。读不到的一律 `-1`/`ERROR`/`applicable=false`，**不填 0**；这个面里没有任何写 |
-| GET | /ui/** | **后台界面（⑥）**：入仓的 Vue3 构建产物，由 admin 提供、网关 `ui-route` 转发。静态资源本身匿名可读（不含数据），索引页 `no-store`、指纹资源 `immutable`、整个 `/ui/*` 带 CSP `script-src 'self'`；深链（`/ui/audits`）由 admin 回退 `index.html`。所有数据仍走下面那些 `/api/admin/**` 并要 admin token |
+| GET | /ui/** | **后台界面（⑥）**：marketing-web 容器（nginx）承载、网关 `ui-route` 转发（前后端分离 2026-10-01，产物不入仓）。静态资源本身匿名可读（不含数据），索引页 `no-store`、指纹资源 `immutable`、整个 `/ui/*` 带 CSP `script-src 'self'`；深链（`/ui/audits`）由 nginx `try_files` 回退 `index.html`。所有数据仍走下面那些 `/api/admin/**` 并要 admin token |
+| GET | /h5/** | **C 端 H5**：同款 nginx 承载（`/h5/assets/` 一年 immutable、索引 no-store、CSP 同值）。hash 路由本不依赖回退，nginx 保留同款 `try_files` 与 /ui 对称。所有数据走 `/api/**` 并要 C 端 accessToken |
 | GET/POST | /api/admin/activities · POST /api/admin/activities/{no}/transition?event= | 活动列表 / 创建（DRAFT）/ 状态机流转（仅 `admin`）。乐观锁 `version` 不匹配回 `41008` |
 | PUT | /api/admin/activities/{no}/budget · /gray | 改预算（同事务重预热，立刻反映到 C 端余额）· 改灰度（只写 DB，由每 5s 回源生效，不刷缓存） |
 | GET/POST | /api/admin/discount/rules | 规则列表 / upsert（仅 `admin`；启停也走这条，body 里带 `status`）。写与快照 bump 在同一事务，规则版本号变了 C 端计算秒级跟随 |

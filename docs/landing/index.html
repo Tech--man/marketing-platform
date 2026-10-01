@@ -1815,7 +1815,7 @@ td .no {
   <span class="c">mvn package</span>  <span class="c"># JDK 17 由 common.sh 锁定</span>
   <span class="c">compose up -d --build --wait</span>
   <span class="c">actuator 就绪收口</span>
-  <span class="c">→ mysql / redis / standalone / gateway</span>
+  <span class="c">→ mysql / redis / standalone / gateway / web</span>
 
 <span class="p">$</span> ./scripts/smoke-test.sh
   <span class="g">113/113</span>  九条链路全绿
@@ -1903,7 +1903,7 @@ td .no {
             </div>
             <div class="node">
               <div class="node__top"><span class="node__name">marketing-admin</span><span class="node__port mono">:8086</span></div>
-              <p class="node__desc">后台账号 / 会话 / 审计 / 运维读数 · 两份静态产物 <code class="mono">/ui</code> <code class="mono">/h5</code></p>
+              <p class="node__desc">后台账号 / 会话 / 审计 / 运维读数（前后端分离后静态承载在 marketing-web）</p>
             </div>
             <div class="node">
               <div class="node__top"><span class="node__name">marketing-account</span><span class="node__port mono">:8087</span></div>
@@ -1967,7 +1967,7 @@ td .no {
           <h3>非活跃期 7×24 跑真流量</h3>
           <p class="form-card__role">小机器常态承载，省内存一律不靠牺牲可靠性换。</p>
           <div class="spec">
-            <div class="spec__r"><span class="spec__k">拓扑</span><span class="spec__v">4 容器：mysql / redis / standalone / gateway</span></div>
+            <div class="spec__r"><span class="spec__k">拓扑</span><span class="spec__v">5 容器：mysql / redis / standalone / gateway / web</span></div>
             <div class="spec__r"><span class="spec__k">聚合</span><span class="spec__v">四业务 + 后台 + 账号 ≈ 1.15 GiB 单 JVM</span></div>
             <div class="spec__r"><span class="spec__k">消息</span><span class="spec__v">Redis Stream</span></div>
             <div class="spec__r"><span class="spec__k">常驻实测</span><span class="spec__v mono">1.09 – 1.24 GiB</span></div>
@@ -1986,8 +1986,8 @@ td .no {
           <h3>活跃期承接洪流</h3>
           <p class="form-card__role">与生产同构，两种交付形态二选一。</p>
           <div class="spec">
-            <div class="spec__r"><span class="spec__k">拓扑</span><span class="spec__v">本机 7 JVM，或一容器一服务可 <code class="mono">--scale</code></span></div>
-            <div class="spec__r"><span class="spec__k">聚合</span><span class="spec__v mono">容器 5 服务 ≈ 5.8 GiB（+0.5 GiB/副本）</span></div>
+            <div class="spec__r"><span class="spec__k">拓扑</span><span class="spec__v">本机 7 JVM + web 容器，或一容器一服务可 <code class="mono">--scale</code></span></div>
+            <div class="spec__r"><span class="spec__k">聚合</span><span class="spec__v mono">容器 5 服务 + web ≈ 5.8 GiB（+0.5 GiB/副本）</span></div>
             <div class="spec__r"><span class="spec__k">消息</span><span class="spec__v">RocketMQ + Nacos 注册发现</span></div>
             <div class="spec__r"><span class="spec__k">数据层</span><span class="spec__v">默认仍单库；<code class="mono">MYSQL_DB_PER_SERVICE=1</code> 拆六库</span></div>
             <div class="spec__r"><span class="spec__k">同构证据</span><span class="spec__v">两 seckill 副本 <code class="mono">grab</code> 各 61 / 62 次，消费侧 35 / 26</span></div>
@@ -2235,8 +2235,8 @@ td .no {
         <p class="section__num">可验证性</p>
         <h2>架构方案的可信度，来自断言有没有分辨力</h2>
         <p class="section__lede">
-          这套东西没有 CI，所以验证靠「一条命令能自己跑完」：<code class="mono">mvn test</code> 不需要中间件，
-          <code class="mono">smoke-test.sh</code> 在五种形态入口下各真跑过一遍，
+          CI（GitHub Actions，6 job）跑 <code class="mono">mvn test</code> 全量单测、双前端 vitest + build、
+          两道真库门禁（Lua 契约 × 真 Redis、DDL 对拍 × 真 MySQL）；冒烟在五种形态入口下各真跑过一遍，
           <code class="mono">load-probe.sh</code> 把容量读数变成可复现输出。
         </p>
       </div>
@@ -2286,10 +2286,11 @@ td .no {
     <div class="container">
       <div class="section__head reveal">
         <p class="section__num">快速开始</p>
-        <h2>三条命令换一档，clone 下来就有界面</h2>
+        <h2>三条命令换一档，clone 下来一条命令起全栈</h2>
         <p class="section__lede">
-          两份前端的构建产物是<strong>故意入仓</strong>的：机器上没有 node，<code class="mono">mvn package</code> 出来的 jar 一样带界面。
-          改了 <code class="mono">.vue</code> 必须走唯一重建入口，产物对拍脚本与 <code class="mono">UiDistIntegrityTest</code> 是两道闸。
+          前后端分离（2026-10-01）：前端产物不入仓、不进后端 jar——<code class="mono">marketing-web</code>（nginx 容器）
+          在镜像内构建双 UI 并承载 <code class="mono">/ui</code> 与 <code class="mono">/h5</code>，
+          部署入口自动带起，宿主机不需要 node。构建可破坏性由 CI 的 <code class="mono">npm run build</code> 钉住。
         </p>
       </div>
 
@@ -2319,11 +2320,11 @@ cd marketing-admin-ui && npm test">
               <svg class="ic" style="width:15px;height:15px" aria-hidden="true"><use href="#i-copy"/></svg><span>复制</span>
             </button>
           </div>
-<pre><code><span class="p">$</span> ./scripts/start-dev.sh        <span class="c"># 中间件容器 + 2 JVM</span>
-<span class="p">$</span> mvn test                     <span class="c"># 419 单测，不需要中间件</span>
+<pre><code><span class="p">$</span> ./scripts/start-dev.sh        <span class="c"># 中间件 + 前端容器 + 2 JVM</span>
+<span class="p">$</span> mvn test                     <span class="c"># 549 单测，不需要中间件</span>
 <span class="p">$</span> mvn test -pl marketing-coupon
 <span class="p">$</span> cd marketing-admin-ui && npm test
-  <span class="c"># 46 条 vitest + jsdom；H5 另有 90 条</span></code></pre>
+  <span class="c"># 49 条 vitest + jsdom；H5 另有 101 条</span></code></pre>
         </div>
 
         <div class="term">
@@ -2336,7 +2337,7 @@ export ADMIN_JWT_SECRET=$(openssl rand -base64 32)
               <svg class="ic" style="width:15px;height:15px" aria-hidden="true"><use href="#i-copy"/></svg><span>复制</span>
             </button>
           </div>
-<pre><code><span class="p">$</span> ./scripts/start-all.sh        <span class="c"># 本机 7 JVM</span>
+<pre><code><span class="p">$</span> ./scripts/start-all.sh        <span class="c"># 本机 7 JVM + web 容器</span>
 <span class="p">$</span> PROFILES=nacos ./scripts/start-all.sh
   <span class="c"># 开注册发现与配置中心</span>
 <span class="p">$</span> <span class="w">export ADMIN_JWT_SECRET=$(openssl rand -base64 32)</span>
@@ -2365,7 +2366,7 @@ export ADMIN_JWT_SECRET=$(openssl rand -base64 32)
     <div class="container">
       <div class="section__head reveal">
         <p class="section__num">模块与端口</p>
-        <h2>九个 Maven 模块，两份不入 reactor 的前端</h2>
+        <h2>九个 Maven 模块 + 前端承载容器，两份不入 reactor 的前端</h2>
       </div>
 
       <div class="table-wrap reveal">
@@ -2383,9 +2384,10 @@ export ADMIN_JWT_SECRET=$(openssl rand -base64 32)
             <tr><td><code>marketing-discount</code></td><td class="mono">8083</td><td>规则 DSL、位图倒排索引、最优组合与分摊、超时降级</td></tr>
             <tr><td><code>marketing-seckill</code></td><td class="mono">8084</td><td>分桶预热、Lua 抢购、MQ 异步下单、支付、超时回补</td></tr>
             <tr><td><code>marketing-standalone</code></td><td class="mono">8085</td><td>LITE 与 dev 的聚合进程：四业务 + 后台 + 账号单 JVM，Redis Stream 代 MQ</td></tr>
-            <tr><td><code>marketing-admin</code></td><td class="mono">8086</td><td>后台账号 / 会话 / 审计 / 运维 + 两份静态产物 <code>/ui</code> <code>/h5</code></td></tr>
+            <tr><td><code>marketing-admin</code></td><td class="mono">8086</td><td>后台账号 / 会话 / 审计 / 运维</td></tr>
+            <tr><td><code>marketing-web</code></td><td class="mono">nginx</td><td>前端静态承载：/ui 与 /h5，镜像内构建双 UI（前后端分离，产物不入仓）</td></tr>
             <tr><td><code>marketing-account</code></td><td class="mono">8087</td><td>消费者账号：注册 / 登录 / 刷新 / 登出 / 改密 / 会话与身份事件</td></tr>
-            <tr><td><code>marketing-admin-ui</code> · <code>marketing-h5-ui</code></td><td class="mono">5173 / 5174</td><td>Vue3 源码，不进 Maven reactor；dist 入仓到 admin 的 static</td></tr>
+            <tr><td><code>marketing-admin-ui</code> · <code>marketing-h5-ui</code></td><td class="mono">5173 / 5174</td><td>Vue3 源码，不进 Maven reactor；dist 只进 marketing-web 镜像，不入仓</td></tr>
           </tbody>
         </table>
       </div>
