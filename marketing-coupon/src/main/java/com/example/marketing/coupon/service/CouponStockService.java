@@ -93,6 +93,14 @@ public class CouponStockService {
      * 二次到达返回 -2（只计数，不动账）——否则同一张券的库存被还两份。
      * 去重 TTL 取 30 天下限（与限领计数同窗）：覆盖补偿定时器 + FAILED 90 天
      * 归档前的人工 redrive 窗口。</p>
+     *
+     * <p><b>已知窗口（v3 P3-1 / v4 P3-1 声明，lua-contract.sh 已钉为契约）</b>：
+     * token 粒度 = requestId，而"一次预扣"的真实身份是"第几轮预扣"——同一
+     * requestId 走"回补 → 再预扣（幂等 FAILED 重试整体重跑 action 的合法时序）→
+     * 再回补"时，第二次回补会被 {@code -2} 当幂等重放吞掉，库存账少一张
+     * （<b>偏少卖</b>方向，不超发；残余差值由 ④ 的 coupon mismatch 恒等式暴露、
+     * 人工收敛）。要收紧需把 token 升级为 requestId+代次（动事件载荷协议），
+     * 收益是一张/每窗口的少卖，代价是 -2 的窄双退防护变弱——当前取舍：保持现状。</p>
      */
     public void rollback(Long templateId, Long userId, int quantity, String dedupToken) {
         // N-6②（复审）：空白 token 不能拼出共享常量键 coupon:rollback:null——坏载荷分支

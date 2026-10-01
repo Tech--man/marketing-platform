@@ -101,6 +101,17 @@ expect_eq "库存键缺失拒绝回补（-1，不占 token）" -1 \
   "$(ev "$SHA_ROLLBACK" 3 lc:rstock2 lc:ruser2 lc:rback:t3 1 3600)"
 expect_eq "未凭空创建幽灵库存键" 0 "$(r EXISTS lc:rstock2)"
 expect_eq "  去重标记也未落（之后的合法重试仍可回补）" 0 "$(r EXISTS lc:rback:t3)"
+# P3-1 声明（v3/v4 审计）：token=requestId 时"回补→同键再预扣→再回补"的窗口里，
+# 第二次回补被 -2 吞（少发方向，由 mismatch 面板收敛）。这里把当前行为钉成文档化契约：
+# 改 token 粒度前先想清楚谁依赖 -2 的幂等防窄双退。
+fresh lc:wstock lc:wuser lc:wback:t9
+r SET lc:wstock 5 >/dev/null
+expect_eq "窗口①预扣 1 张（库存 5→4）" 1 "$(ev "$SHA_STOCK" 2 lc:wstock lc:wuser 1 2 60)"
+expect_eq "窗口②首次回补 token=t9（库存回 5）" 5 "$(ev "$SHA_ROLLBACK" 3 lc:wstock lc:wuser lc:wback:t9 1 3600)"
+expect_eq "窗口③同 requestId 第二次预扣（5→4）" 1 "$(ev "$SHA_STOCK" 2 lc:wstock lc:wuser 1 2 60)"
+expect_eq "窗口④第二次回补 token=t9 被 -2 吞（已声明窗口）" -2 \
+  "$(ev "$SHA_ROLLBACK" 3 lc:wstock lc:wuser lc:wback:t9 1 3600)"
+expect_eq "  库存停在 4（少一张，mismatch 面板可见）" 4 "$(r GET lc:wstock)"
 
 echo "== 4/8 deduct_budget.lua（预算扣减）"
 fresh lc:budget
