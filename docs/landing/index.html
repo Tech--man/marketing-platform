@@ -1,0 +1,2618 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>营销管理平台 · 可运行的微服务架构方案</title>
+<meta name="description" content="面向日常 QPS 万级 / 大促 10 万+ / 秒杀 50 万+ 的可运行营销中台脚手架：券中心、优惠计算引擎、秒杀中心深度实现，LITE 服役档与 FULL 扩容档共享同一份数据原地双向切换。">
+<meta property="og:title" content="营销管理平台 · 可运行的微服务架构方案">
+<meta property="og:description" content="换档不换数据：LITE 1.09 GiB 常态服役，FULL 与生产同构承接洪流，同一份代码原地双向切换。">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.25' y='3.25' width='17.5' height='17.5' rx='5.25' fill='none' stroke='%231f5f5b' stroke-width='1.8'/%3E%3Crect x='11.75' y='11.75' width='7.25' height='7.25' rx='2.5' fill='%231f5f5b'/%3E%3C/svg%3E">
+<style>
+/* ============================================================
+ * 落地页样式 V2 · 工程文档编辑风
+ * 墨青单强调色 · 纸感底色 · 细线分隔 · 终端 3D 悬浮
+ * 语义 token 与 marketing-admin-ui/src/styles/tokens.css 同名，
+ * 亮色在 :root、暗色在 [data-theme=dark] 重映射。
+ * 零外部依赖（系统字体栈 + 内联 SVG），file:// 打开即可渲染。
+ * ============================================================ */
+
+:root {
+  /* —— 表面与描边（暖纸底 · 中性细线） —— */
+  --c-canvas: #f6f5f2;
+  --c-surface: #fdfcfa;
+  --c-surface-2: #f4f2ee;
+  --c-surface-3: #edeae4;
+  --c-border: #e5e1d8;
+  --c-border-strong: #d3cec2;
+
+  /* —— 文字（墨色阶） —— */
+  --c-text: #23262d;
+  --c-text-2: #464b55;
+  --c-text-muted: #6d737e; /* 仅用于 ≥16px 的次要说明 */
+  --c-text-small: #5a6069; /* 小字次要文本，保证 4.5:1 */
+  --c-text-faint: #9da3ab; /* 仅装饰，正文禁用 */
+
+  /* —— 强调（墨青 ink-teal，唯一强调色） —— */
+  --c-accent: #1f5f5b;
+  --c-accent-hover: #16443f;
+  --c-accent-soft: #e9efec;
+  --c-accent-line: #b9cdc6;
+  --c-on-accent: #f7fbf9;
+
+  /* —— 语义状态（同族降饱和） —— */
+  --c-success: #1f6b43;
+  --c-warning: #96590f;
+  --c-info: #31597c;
+
+  /* —— 终端面板（恒深，不随主题翻转） —— */
+  --c-code-bg: #101613;
+  --c-code-surface: #17201b;
+  --c-code-border: #27332c;
+  --c-code-text: #dfe7e1;
+  --c-code-dim: #89998f;
+  --c-code-accent: #8fc7b8;
+  --c-code-good: #71c598;
+
+  /* —— 间距阶（8px 基准，落地页比后台疏朗） —— */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --space-10: 128px;
+
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 13px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(35, 38, 45, 0.05), 0 1px 3px rgba(35, 38, 45, 0.03);
+  --shadow-2: 0 2px 6px rgba(35, 38, 45, 0.06), 0 8px 20px rgba(35, 38, 45, 0.07);
+  --shadow-3: 0 6px 16px rgba(35, 38, 45, 0.08), 0 24px 56px rgba(35, 38, 45, 0.14);
+  --shadow-float: 0 2px 6px rgba(23, 32, 27, 0.28),
+    0 30px 70px -18px rgba(8, 14, 11, 0.55),
+    0 90px 140px -40px rgba(31, 95, 91, 0.30);
+  --ring: 0 0 0 3px rgba(31, 95, 91, 0.32);
+
+  --z-nav: 20;
+  --z-pop: 30;
+
+  --dur: 180ms;
+  --dur-slow: 260ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --maxw: 1120px;
+  --nav-h: 60px;
+  --dot: rgba(35, 38, 45, 0.055);
+}
+
+[data-theme="dark"] {
+  --c-canvas: #101413;
+  --c-surface: #171d1b;
+  --c-surface-2: #1d2422;
+  --c-surface-3: #242c29;
+  --c-border: #2b3430;
+  --c-border-strong: #3d4742;
+
+  --c-text: #e5e9e6;
+  --c-text-2: #b7bfba;
+  --c-text-muted: #98a19b; /* 暗色下抬一档，小字也够对比 */
+  --c-text-small: #aeb6b1;
+  --c-text-faint: #5c645f;
+
+  --c-accent: #7cc3b6;
+  --c-accent-hover: #a3d8cd;
+  --c-accent-soft: #1a2b28;
+  --c-accent-line: #3c5a53;
+  --c-on-accent: #0c1513;
+
+  --c-success: #79c99b;
+  --c-warning: #d9b36a;
+  --c-info: #85b8dd;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.4),
+    0 30px 70px -18px rgba(0, 0, 0, 0.75),
+    0 90px 140px -40px rgba(124, 195, 182, 0.16);
+  --ring: 0 0 0 3px rgba(124, 195, 182, 0.5);
+  --dot: rgba(229, 233, 230, 0.045);
+}
+
+/* ============================================================
+ * 基础
+ * ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* 锚点跳转给浮动导航留出高度 */
+  scroll-padding-top: calc(var(--nav-h) + 24px);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-canvas);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--c-text);
+  font-weight: 640;
+  letter-spacing: -0.012em;
+  line-height: 1.24;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0 0 var(--space-4);
+}
+
+a {
+  color: var(--c-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-feature-settings: normal;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-feature-settings: normal;
+  letter-spacing: -0.01em;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -48px;
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  font-weight: 600;
+  transition: top var(--dur) var(--ease);
+}
+
+.skip-link:focus-visible {
+  top: 12px;
+}
+
+::selection {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+}
+
+.ic {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: 4px;
+}
+
+/* ============================================================
+ * 顶部导航
+ * ============================================================ */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+  border-bottom: 1px solid var(--c-border);
+  background: color-mix(in srgb, var(--c-canvas) 82%, transparent);
+  backdrop-filter: saturate(150%) blur(14px);
+  -webkit-backdrop-filter: saturate(150%) blur(14px);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .topbar {
+    background: var(--c-canvas);
+  }
+}
+
+.topbar__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  height: var(--nav-h);
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  color: var(--c-text);
+  font-weight: 640;
+  font-size: 15px;
+  letter-spacing: -0.005em;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.brand__logo {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.brand__logo-frame {
+  fill: none;
+  stroke: var(--c-text);
+  stroke-width: 1.7;
+}
+
+.brand__logo-core {
+  fill: var(--c-accent);
+}
+
+.brand__sub {
+  color: var(--c-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 480;
+  letter-spacing: 0;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.nav::-webkit-scrollbar {
+  display: none;
+}
+
+.nav a {
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--c-text-2);
+  font-size: 13.5px;
+  font-weight: 520;
+  white-space: nowrap;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.nav a:hover {
+  color: var(--c-text);
+  background: var(--c-surface-3);
+  text-decoration: none;
+}
+
+.nav a.is-current {
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-2);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.icon-btn:hover {
+  color: var(--c-text);
+  background: var(--c-surface-3);
+}
+
+.icon-btn .ic {
+  width: 18px;
+  height: 18px;
+}
+
+/* 双主题按钮：只显示当前主题该用的那一个 */
+html[data-theme="light"] .ic-moon,
+html[data-theme="dark"] .ic-sun {
+  display: none;
+}
+
+.nav-toggle {
+  display: none;
+}
+
+/* ============================================================
+ * Hero
+ * ============================================================ */
+
+.hero {
+  position: relative;
+  padding-top: calc(var(--nav-h) + var(--space-9));
+  padding-bottom: var(--space-8);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.35px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+  /* 点阵向下淡出，收进纸面 */
+  -webkit-mask-image: linear-gradient(#000 55%, transparent 96%);
+  mask-image: linear-gradient(#000 55%, transparent 96%);
+}
+
+.hero__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+  gap: var(--space-8);
+  align-items: center;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  padding: 5px 12px 5px 6px;
+  border: 1px solid var(--c-accent-line);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.eyebrow .tag {
+  padding: 2.5px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(33px, 4.6vw, 52px);
+  font-weight: 680;
+  line-height: 1.14;
+  letter-spacing: -0.02em;
+}
+
+.hero h1 em {
+  font-style: normal;
+  color: var(--c-accent);
+  box-shadow: inset 0 -0.28em var(--c-accent-soft);
+}
+
+.hero__lede {
+  margin-top: var(--space-5);
+  max-width: 34em;
+  color: var(--c-text-2);
+  font-size: 17.5px;
+  line-height: 1.78;
+}
+
+.hero__lede .mono {
+  color: var(--c-text);
+  font-size: 15.5px;
+  background: var(--c-surface-3);
+  border: 1px solid var(--c-border);
+  border-radius: 5px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 15.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn .ic {
+  width: 17px;
+  height: 17px;
+}
+
+.btn--primary {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  box-shadow: var(--shadow-2);
+}
+
+.btn--primary:hover {
+  background: var(--c-accent-hover);
+  color: var(--c-on-accent);
+  box-shadow: var(--shadow-3);
+}
+
+.btn--ghost {
+  background: var(--c-surface);
+  border-color: var(--c-border-strong);
+  color: var(--c-text);
+}
+
+.btn--ghost:hover {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+/* ============================================================
+ * 读数条：hero 底部一行硬指标
+ * ============================================================ */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  margin-top: var(--space-9);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.stat {
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-left: 1px solid var(--c-border);
+}
+
+.stat:first-child {
+  border-left: none;
+}
+
+.stat__v {
+  margin: 0;
+  color: var(--c-accent);
+  font-size: 25px;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+}
+
+.stat__k {
+  margin: 6px 0 0;
+  font-size: 14.5px;
+  font-weight: 560;
+}
+
+.stat__note {
+  margin: 3px 0 0;
+  color: var(--c-text-small);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+ * 章节骨架
+ * ============================================================ */
+
+.section {
+  padding: var(--space-10) 0;
+  border-top: 1px solid var(--c-border);
+}
+
+.section--tint {
+  background: var(--c-surface);
+  border-top: 1px solid var(--c-border);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.section__head {
+  max-width: 760px;
+}
+
+.section__num {
+  margin: 0 0 var(--space-3);
+  color: var(--c-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 520;
+  letter-spacing: 0.02em;
+}
+
+.section h2 {
+  margin: 0;
+  font-size: clamp(24px, 2.8vw, 33px);
+  line-height: 1.28;
+  letter-spacing: -0.015em;
+}
+
+.section__lede {
+  margin: var(--space-4) 0 0;
+  color: var(--c-text-2);
+  font-size: 16.5px;
+  line-height: 1.78;
+}
+
+/* ============================================================
+ * 卡片与杂项
+ * ============================================================ */
+
+.card {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-6);
+}
+
+.section--tint .card {
+  background: var(--c-canvas);
+}
+
+.card--hover {
+  transition: border-color var(--dur) var(--ease),
+    box-shadow var(--dur-slow) var(--ease), transform var(--dur-slow) var(--ease);
+}
+
+.card--hover:hover {
+  border-color: var(--c-accent-line);
+  box-shadow: var(--shadow-2);
+  transform: translateY(-2px);
+}
+
+.card h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.card h3 .ic {
+  color: var(--c-accent);
+  width: 19px;
+  height: 19px;
+}
+
+.card p {
+  margin: 0 0 var(--space-3);
+  color: var(--c-text-2);
+  font-size: 14.5px;
+  line-height: 1.75;
+}
+
+.card p:last-child {
+  margin-bottom: 0;
+}
+
+.card p .mono,
+.card li .mono {
+  font-size: 13px;
+}
+
+.pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.chip {
+  padding: 4px 11px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface);
+  color: var(--c-text-small);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.chip--accent {
+  border-color: var(--c-accent-line);
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+
+.section--tint .chip {
+  background: var(--c-surface);
+}
+
+/* ============================================================
+ * 架构分层
+ * ============================================================ */
+
+.stack {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.tier {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-1);
+}
+
+.tier__label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+
+.tier__hint {
+  color: var(--c-text-muted);
+  font-size: 13px;
+  font-weight: 480;
+  letter-spacing: 0;
+}
+
+.tier__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.node {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  padding: var(--space-4);
+  transition: border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.node:hover {
+  border-color: var(--c-accent-line);
+  background: var(--c-accent-soft);
+}
+
+.node--accent {
+  border-color: var(--c-accent-line);
+  background: var(--c-accent-soft);
+}
+
+.node--accent:hover {
+  background: color-mix(in srgb, var(--c-accent-soft) 60%, var(--c-surface));
+}
+
+.node--dashed {
+  border-style: dashed;
+  background: transparent;
+}
+
+.node__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 8px;
+}
+
+.node__name {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+}
+
+.node__port {
+  color: var(--c-accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.node__desc {
+  margin: 0;
+  color: var(--c-text-small);
+  font-size: 13px;
+  line-height: 1.68;
+}
+
+.node__desc .mono,
+.tier__hint .mono {
+  font-size: 12px;
+}
+
+.connector {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.connector__line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--c-border-strong) 18%, var(--c-border-strong) 82%, transparent);
+}
+
+.connector__t {
+  color: var(--c-text-muted);
+  font-size: 12.5px;
+  font-weight: 540;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* ============================================================
+ * 双形态对比
+ * ============================================================ */
+
+.duality {
+  display: grid;
+  grid-template-columns: 1fr 120px 1fr;
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.form-card {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-canvas);
+  padding: var(--space-6);
+}
+
+.form-card--lite {
+  border-color: var(--c-accent-line);
+  box-shadow: 0 0 0 1px var(--c-accent-line), var(--shadow-1);
+}
+
+.form-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.form-card--lite .form-card__badge {
+  background: var(--c-surface);
+  border: 1px solid var(--c-accent-line);
+  color: var(--c-accent);
+}
+
+.form-card h3 {
+  margin: var(--space-4) 0 6px;
+  font-size: 20px;
+}
+
+.form-card__role {
+  margin: 0 0 var(--space-5);
+  color: var(--c-text-2);
+  font-size: 14px;
+}
+
+.spec {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--c-border);
+}
+
+.spec__r {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.spec__k {
+  color: var(--c-text-muted);
+  font-size: 12.5px;
+  font-weight: 540;
+}
+
+.spec__v {
+  color: var(--c-text-2);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.spec__v .mono {
+  font-size: 12.5px;
+}
+
+.switcher {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.switcher__arrows {
+  color: var(--c-accent);
+  opacity: 0.9;
+}
+
+.switcher__t {
+  margin: 0;
+  color: var(--c-text-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ============================================================
+ * 切换证据链
+ * ============================================================ */
+
+.proof {
+  margin-top: var(--space-7);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-canvas);
+  padding: var(--space-6);
+}
+
+.proof__t {
+  margin: 0 0 var(--space-5);
+  color: var(--c-text-2);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.chain {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-2);
+}
+
+.chain__step {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: var(--space-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+}
+
+.chain__step b {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--c-success);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.chain__step b .ic {
+  width: 15px;
+  height: 15px;
+}
+
+.chain__step span {
+  color: var(--c-text-small);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+ * 链路 tabs
+ * ============================================================ */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-7);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 560;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.tab:hover {
+  color: var(--c-text);
+  border-color: var(--c-border-strong);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-on-accent);
+  box-shadow: var(--shadow-2);
+}
+
+.panel {
+  margin-top: var(--space-5);
+  display: grid;
+  gap: var(--space-6);
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.flow {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.flow__row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: 13px var(--space-5);
+  border-bottom: 1px solid var(--c-border);
+  font-size: 14.5px;
+  line-height: 1.7;
+}
+
+.flow__row:last-child {
+  border-bottom: none;
+}
+
+.flow__i {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+  border: 1px solid var(--c-accent-line);
+  border-radius: 50%;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.flow__row:not(:last-child) .flow__i::after {
+  content: "";
+  position: absolute;
+  margin-top: 34px;
+  height: calc(1.7em + 8px);
+  border-left: 1px dashed var(--c-accent-line);
+}
+
+.flow__txt {
+  color: var(--c-text-2);
+}
+
+.flow__txt code {
+  font-size: 13px;
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+
+.point {
+  border-top: 2px solid var(--c-accent);
+  padding-top: var(--space-4);
+}
+
+.point h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 15.5px;
+  line-height: 1.45;
+}
+
+.point p {
+  margin: 0;
+  color: var(--c-text-small);
+  font-size: 13.5px;
+  line-height: 1.72;
+}
+
+.point p .mono {
+  font-size: 12.5px;
+}
+
+/* ============================================================
+ * 表格
+ * ============================================================ */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-1);
+}
+
+table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+caption {
+  padding: var(--space-4) var(--space-5);
+  color: var(--c-text-small);
+  font-size: 13.5px;
+  text-align: left;
+  background: var(--c-surface-2);
+  border-bottom: 1px solid var(--c-border);
+}
+
+th,
+td {
+  padding: 12px var(--space-5);
+  text-align: left;
+  border-bottom: 1px solid var(--c-border);
+  vertical-align: top;
+  line-height: 1.65;
+}
+
+thead th {
+  color: var(--c-text);
+  font-size: 12.5px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  background: var(--c-surface-2);
+  white-space: nowrap;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr {
+  transition: background var(--dur) var(--ease);
+}
+
+tbody tr:hover {
+  background: var(--c-surface-2);
+}
+
+td code,
+td .mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+td .yes {
+  color: var(--c-success);
+  font-weight: 600;
+}
+
+td .no {
+  color: var(--c-text-muted);
+}
+
+/* ============================================================
+ * 终端块（3D 悬浮，仅 Hero）
+ * ============================================================ */
+
+.term {
+  position: relative;
+  border: 1px solid var(--c-code-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-code-bg);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+}
+
+/* —— Hero 里的终端：页面之上的悬浮面板 —— */
+.hero .term {
+  --rx: 0deg;
+  --ry: 0deg;
+  --gx: 50%;
+  --gy: 40%;
+  transform: perspective(1100px) rotateX(var(--rx)) rotateY(var(--ry))
+    translateZ(0);
+  transform-style: preserve-3d;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-float);
+  transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 480ms var(--ease);
+  will-change: transform;
+}
+
+.hero .term::before {
+  /* 面板高光，跟随光标 */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    420px 300px at var(--gx) var(--gy),
+    rgba(143, 199, 184, 0.09),
+    transparent 62%
+  );
+  opacity: 0;
+  transition: opacity 360ms var(--ease);
+}
+
+.hero .term:hover::before {
+  opacity: 1;
+}
+
+.hero .term:hover {
+  box-shadow: 0 2px 6px rgba(23, 32, 27, 0.3),
+    0 36px 80px -16px rgba(8, 14, 11, 0.6),
+    0 100px 160px -40px rgba(31, 95, 91, 0.4);
+}
+
+.hero .term__bar {
+  transform: translateZ(24px);
+}
+
+.term__bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px var(--space-4);
+  border-bottom: 1px solid var(--c-code-border);
+  background: var(--c-code-surface);
+  color: var(--c-code-dim);
+  font-size: 12.5px;
+}
+
+/* 窄栏里标题省略号收尾，别让"复制"竖排 */
+.term__bar > span:not(.term__dots) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term__dots {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-right: var(--space-2);
+}
+
+.term__dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c-code-border);
+}
+
+.term__dots i:first-child {
+  background: #d1797c;
+}
+
+.term__dots i:nth-child(2) {
+  background: #c9a35e;
+}
+
+.term__dots i:last-child {
+  background: #74ab86;
+}
+
+.term__copy {
+  position: relative;
+  z-index: 3;
+  margin-left: auto;
+  flex: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--c-code-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-code-dim);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.term__copy:hover {
+  color: var(--c-code-text);
+  border-color: var(--c-code-accent);
+}
+
+.term__copy.is-done {
+  color: var(--c-code-good);
+  border-color: var(--c-code-good);
+}
+
+.term pre {
+  position: relative;
+  z-index: 2;
+  margin: 0;
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  color: var(--c-code-text);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.8;
+  /* 长命令换行而不是横向滚动：窄栏里滚动条会把人误导成"内容不全" */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+  tab-size: 2;
+}
+
+.term .c {
+  color: var(--c-code-dim);
+}
+
+.term .p {
+  color: var(--c-code-accent);
+}
+
+.term .g {
+  color: var(--c-code-good);
+}
+
+.term .w {
+  color: #d3b575;
+}
+
+.term-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.term-grid .term + .term + .term {
+  /* 三列时第二行的第三个贴住顶行 */
+}
+
+/* ============================================================
+ * 引言块
+ * ============================================================ */
+
+.quote {
+  margin-top: var(--space-7);
+  padding: var(--space-5) var(--space-6);
+  border-left: 3px solid var(--c-accent);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: var(--c-canvas);
+}
+
+.quote p {
+  margin: 0 0 var(--space-3);
+  color: var(--c-text-2);
+  font-size: 15.5px;
+  line-height: 1.8;
+}
+
+.quote p:last-of-type {
+  margin-bottom: var(--space-3);
+}
+
+.quote cite {
+  color: var(--c-text-muted);
+  font-size: 12.5px;
+  font-style: normal;
+}
+
+/* ============================================================
+ * 网格与清单
+ * ============================================================ */
+
+.grid-3 {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.grid-2 {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.honest {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.honest li {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px dashed var(--c-border);
+}
+
+.honest li:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.honest .ic {
+  width: 16px;
+  height: 16px;
+  margin-top: 4px;
+  color: var(--c-warning);
+}
+
+.honest b {
+  color: var(--c-text);
+}
+
+.honest li span {
+  color: var(--c-text-small);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+/* ============================================================
+ * 页脚
+ * ============================================================ */
+
+.footer {
+  border-top: 1px solid var(--c-border);
+  padding: var(--space-7) 0 var(--space-8);
+  background: var(--c-canvas);
+}
+
+.footer__in {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.footer p {
+  margin: 0;
+  color: var(--c-text-muted);
+  font-size: 13.5px;
+}
+
+.footer .mono {
+  font-size: 12.5px;
+}
+
+/* ============================================================
+ * 入场动效
+ * ============================================================ */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 560ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reveal.is-in {
+  opacity:  1;
+  transform: none;
+}
+
+/* ============================================================
+ * 响应式
+ * ============================================================ */
+
+@media (max-width: 1240px) {
+  .hero .term {
+    transform: none;
+    transition: box-shadow var(--dur) var(--ease);
+  }
+
+  .hero .term::before {
+    display: none;
+  }
+}
+
+@media (max-width: 1080px) {
+  .nav {
+    display: none;
+  }
+
+  .nav-toggle {
+    display: grid;
+    margin-left: auto;
+    order: 5;
+  }
+
+  .topbar.is-open .nav {
+    display: flex;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right:  0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: var(--space-3) var(--space-5) var(--space-4);
+    border-bottom: 1px solid var(--c-border);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-2);
+  }
+
+  .topbar.is-open .nav a {
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 15px;
+  }
+
+  .hero__grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-7);
+  }
+
+  .stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stat {
+    border-left: none;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .stat:nth-child(2n) {
+    border-left: 1px solid var(--c-border);
+  }
+
+  .stat:nth-child(-n + 2) {
+    border-top: none;
+  }
+
+  .duality {
+    grid-template-columns: 1fr;
+  }
+
+  .switcher {
+    flex-direction: row;
+    padding: var(--space-2) 0;
+  }
+
+  .switcher__arrows {
+    transform: rotate(90deg);
+  }
+
+  .switcher__t {
+    text-align: left;
+  }
+
+  .chain {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .section {
+    padding: var(--space-9) 0;
+  }
+
+  .hero {
+    padding-top: calc(var(--nav-h) + var(--space-8));
+  }
+
+  .hero__lede {
+    font-size: 16.5px;
+  }
+
+  .flow__row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    padding: 12px var(--space-4);
+  }
+
+  .flow__row:not(:last-child) .flow__i::after {
+    height: calc(1.7em + 10px);
+  }
+
+  .quote {
+    padding: var(--space-5);
+  }
+}
+
+@media (max-width: 560px) {
+  .stats,
+  .chain {
+    grid-template-columns: 1fr;
+  }
+
+  .stat {
+    border-left: none !important;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .stat:first-child {
+    border-top: none;
+  }
+
+  .chain {
+    gap: var(--space-3);
+  }
+
+  .spec__r {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .cta-row {
+    gap: var(--space-2);
+  }
+
+  .term pre {
+    font-size: 12.5px;
+  }
+}
+
+/* ============================================================
+ * 动效降级与打印
+ * ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .hero .term {
+    transform: none;
+    transition: none;
+  }
+
+  .card--hover,
+  .btn,
+  .tab,
+  .node,
+  tbody tr,
+  .nav a {
+    transition: none;
+  }
+}
+
+@media print {
+  .topbar,
+  .term__copy,
+  .nav-toggle {
+    display: none;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .section,
+  .hero {
+    padding: 24px 0;
+  }
+
+  .term {
+    break-inside: avoid;
+  }
+}
+
+</style>
+</head>
+<body>
+
+<!-- 图标精灵：全站唯一图标来源，统一 24×24 viewBox、stroke 1.6 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="M3 14l9 5 9-5"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 9v5M12 17h.01"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 6H11M7 6H3M21 12h-4M11 12H3M21 18H9M5 18H3M11 4v4M19 10v4M9 16v4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-badge" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.4 2.4 4.6-4.9"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></symbol>
+    <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2M13 11v2M13 17v2"/></symbol>
+    <symbol id="i-calc" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 12h2M14 12h2M8 16h2M14 16h2"/></symbol>
+  </defs>
+</svg>
+
+<a class="skip-link" href="#main">跳到正文</a>
+
+<header class="topbar" id="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="#hero">
+      <svg class="brand__logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect class="brand__logo-frame" x="3.25" y="3.25" width="17.5" height="17.5" rx="5.25"/>
+        <rect class="brand__logo-core" x="11.75" y="11.75" width="7.25" height="7.25" rx="2.5"/>
+      </svg>
+      <span>营销管理平台<span class="brand__sub">　marketing-platform</span></span>
+    </a>
+    <nav class="nav" id="nav" aria-label="页面章节">
+      <a href="#overview">架构全景</a>
+      <a href="#duality">双形态</a>
+      <a href="#paths">核心链路</a>
+      <a href="#boundary">边界收口</a>
+      <a href="#runtime">在线配置</a>
+      <a href="#proof">可验证</a>
+      <a href="#start">快速开始</a>
+      <a href="#modules">模块端口</a>
+    </nav>
+    <button class="icon-btn" id="themeBtn" type="button" aria-label="切换到暗色主题">
+      <svg class="ic ic-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+      <svg class="ic ic-moon" aria-hidden="true"><use href="#i-moon"/></svg>
+    </button>
+    <button class="icon-btn nav-toggle" id="navBtn" type="button" aria-label="展开章节导航" aria-expanded="false" aria-controls="nav">
+      <svg class="ic" aria-hidden="true"><use href="#i-menu"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ===================== Hero ===================== -->
+  <section class="hero" id="hero">
+    <div class="container">
+      <div class="hero__grid">
+        <div>
+          <p class="eyebrow"><span class="tag">RUNNABLE</span>可运行脚手架，不是 PPT 架构</p>
+          <h1>洪峰来了不换架构，<br>只换<em>进程形态</em>。</h1>
+          <p class="hero__lede">
+            面向日常 <span class="mono">QPS 万级</span> / 大促 <span class="mono">10 万+</span> / 秒杀 <span class="mono">50 万+</span>
+            的营销中台。券中心、优惠计算引擎、秒杀中心<strong>深度实现</strong>；
+            非活跃期由 <strong>LITE 服役档</strong> 单 JVM 常态承载真流量，活跃期原地升档到与生产同构的
+            <strong>FULL 扩容档</strong>——<strong>不动数据、不改代码</strong>，允许双向。
+          </p>
+          <div class="cta-row">
+            <a class="btn btn--primary" href="#start">
+              跑起来看看<svg class="ic" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </a>
+            <a class="btn btn--ghost" href="#overview">
+              看架构全景<svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg>
+            </a>
+          </div>
+        </div>
+
+        <div class="term" id="heroTerm">
+          <div class="term__bar">
+            <span class="term__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>一台 16GB 开发机 · LITE 服役档</span>
+            <button class="term__copy" type="button" data-copy="./scripts/deploy-preview.sh
+./scripts/smoke-test.sh">
+              <svg class="ic" style="width:15px;height:15px" aria-hidden="true"><use href="#i-copy"/></svg>
+              <span>复制</span>
+            </button>
+          </div>
+<pre><code><span class="p">$</span> ./scripts/deploy-preview.sh
+  <span class="c">mvn package</span>  <span class="c"># JDK 17 由 common.sh 锁定</span>
+  <span class="c">compose up -d --build --wait</span>
+  <span class="c">actuator 就绪收口</span>
+  <span class="c">→ mysql / redis / standalone / gateway</span>
+
+<span class="p">$</span> ./scripts/smoke-test.sh
+  <span class="g">113/113</span>  九条链路全绿
+  <span class="g">1.09 GiB</span> 应用侧 + 数据层常驻</code></pre>
+        </div>
+      </div>
+
+      <div class="stats reveal">
+        <div class="stat">
+          <p class="stat__v mono">114 / 114</p>
+          <p class="stat__k">端到端断言全绿</p>
+          <p class="stat__note">九条链路 · FULL 档 · 2026-09-28 两副本复跑</p>
+        </div>
+        <div class="stat">
+          <p class="stat__v mono">419</p>
+          <p class="stat__k">单测用例 / 82 个类</p>
+          <p class="stat__note">H2 MODE=MySQL 跑真 SQL，不起中间件</p>
+        </div>
+        <div class="stat">
+          <p class="stat__v mono">5 档入口</p>
+          <p class="stat__k">每格都是真跑结果</p>
+          <p class="stat__note">LITE / dev / FULL 进程 / 容器 1·2 副本 / 六库隔离</p>
+        </div>
+        <div class="stat">
+          <p class="stat__v mono">≈0.4 ms</p>
+          <p class="stat__k">单次优惠计算均值</p>
+          <p class="stat__note">1 万规则 / 20 行购物车，剪枝后候选 400 条</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 01 架构全景 ===================== -->
+  <section class="section" id="overview">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">分层限流</p>
+        <h2>请求只进一个门，压力在每一层被拦下一次</h2>
+        <p class="section__lede">
+          网关是唯一对外入口，限流用 Redis + Lua 滑动窗口；四个业务模块按写语义分工，
+          状态与削峰下沉到 MySQL / Redis / RocketMQ。Nacos 与 Prometheus 只在扩容档出现。
+        </p>
+      </div>
+
+      <div class="stack reveal">
+        <div class="tier">
+          <p class="tier__label">入口 <span class="tier__hint">两套凭证不互通，鉴权只在这一层做</span></p>
+          <div class="tier__row" style="grid-template-columns:minmax(0,1fr)">
+            <div class="node node--accent">
+              <div class="node__top">
+                <span class="node__name">marketing-gateway</span>
+                <span class="node__port mono">:8090</span>
+              </div>
+              <p class="node__desc">
+                Path 路由（local 静态 uri / nacos lb://）· C 端 <code class="mono">ConsumerAuthFilter</code>
+                与后台 <code class="mono">AdminAuthFilter</code> 两套 HS256 密钥 · Redis+Lua 滑动窗口限流，
+                超限返回排队码 · <code class="mono">/ui/</code> 与 <code class="mono">/h5/</code> 同源转发，仓库零 CORS 配置
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="connector" aria-hidden="true">
+          <span class="connector__line"></span><span class="connector__t">Path 路由 · 限流阈值按形态参数化</span><span class="connector__line"></span>
+        </div>
+
+        <div class="tier">
+          <p class="tier__label">业务面 <span class="tier__hint">三个深度实现 + 一个状态机</span></p>
+          <div class="tier__row">
+            <div class="node">
+              <div class="node__top"><span class="node__name">marketing-activity</span><span class="node__port mono">:8081</span></div>
+              <p class="node__desc">活动状态机 · 预算 Redis 预扣 + 流水对账 · 灰度分流</p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">marketing-coupon</span><span class="node__port mono">:8082</span></div>
+              <p class="node__desc">券模板 / 库存预热 · 领券 Lua 预扣 · 结果轮询 · 核销</p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">marketing-discount</span><span class="node__port mono">:8083</span></div>
+              <p class="node__desc">规则 DSL · 位图倒排索引 · 最优组合与分摊 · 超时降级</p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">marketing-seckill</span><span class="node__port mono">:8084</span></div>
+              <p class="node__desc">16 分桶 Lua 抢购 · MQ 异步下单 · 超时回补</p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">marketing-admin</span><span class="node__port mono">:8086</span></div>
+              <p class="node__desc">后台账号 / 会话 / 审计 / 运维读数 · 两份静态产物 <code class="mono">/ui</code> <code class="mono">/h5</code></p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">marketing-account</span><span class="node__port mono">:8087</span></div>
+              <p class="node__desc">C 端消费者账号：注册 / 登录 / 刷新 / 登出 / 改密 / 身份事件</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="connector" aria-hidden="true">
+          <span class="connector__line"></span><span class="connector__t">状态 · 削峰 · 最终一致</span><span class="connector__line"></span>
+        </div>
+
+        <div class="tier">
+          <p class="tier__label">数据与通道 <span class="tier__hint">不属于任何形态，三套形态共用同一份</span></p>
+          <div class="tier__row">
+            <div class="node">
+              <div class="node__top"><span class="node__name">MySQL 8</span><span class="node__port mono">:3307</span></div>
+              <p class="node__desc">默认单库 <code class="mono">marketing</code>；FULL 可选每服务一库（共六库）。AOF 侧 counterpart：flush=1</p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">Redis 7</span><span class="node__port mono">:6380</span></div>
+              <p class="node__desc">限流窗口 · 库存分桶 · 预扣与幂等标记 · AOF everysec + <strong>必须 noeviction</strong></p>
+            </div>
+            <div class="node">
+              <div class="node__top"><span class="node__name">RocketMQ 5</span><span class="node__port mono">:9876</span></div>
+              <p class="node__desc">削峰与最终一致（FULL 通道）；LITE 与 dev 用 Redis Stream 原地替代</p>
+            </div>
+            <div class="node node--dashed">
+              <div class="node__top"><span class="node__name">Nacos / Prometheus</span><span class="node__port mono">:8848 / 9091</span></div>
+              <p class="node__desc">仅扩容档：注册发现由 <code class="mono">nacos</code> profile 一键开启，是全仓唯一 Spring profile</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="quote reveal">
+        <p>「Redis 淘汰策略配成 <code class="mono">allkeys-lru</code> 会静默丢掉库存、券预扣和幂等键——
+        后果是超卖与重复领券，而且没有任何报错。」所以 <code class="mono">noeviction</code> 是服役档四条不可退让之一，
+        不是调优建议。</p>
+        <cite>README 第三节 · LITE 的四条可靠性底线</cite>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 02 双形态 ===================== -->
+  <section class="section section--tint" id="duality">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">形态切换</p>
+        <h2>两个容量档，同一份数据，原地双向切换</h2>
+        <p class="section__lede">
+          形态只定义「应用侧怎么起进程、消息走哪条通道」。数据层由
+          <code class="mono">docker-compose.data.yml</code> 单独常驻、两侧共挂，
+          所以升档降档都不需要搬数据，也不需要改一行业务代码。
+        </p>
+      </div>
+
+      <div class="duality reveal">
+        <article class="form-card form-card--lite">
+          <span class="form-card__badge"><svg class="ic" style="width:17px;height:17px" aria-hidden="true"><use href="#i-terminal"/></svg>LITE 服役档</span>
+          <h3>非活跃期 7×24 跑真流量</h3>
+          <p class="form-card__role">小机器常态承载，省内存一律不靠牺牲可靠性换。</p>
+          <div class="spec">
+            <div class="spec__r"><span class="spec__k">拓扑</span><span class="spec__v">4 容器：mysql / redis / standalone / gateway</span></div>
+            <div class="spec__r"><span class="spec__k">聚合</span><span class="spec__v">四业务 + 后台 + 账号 ≈ 1.15 GiB 单 JVM</span></div>
+            <div class="spec__r"><span class="spec__k">消息</span><span class="spec__v">Redis Stream</span></div>
+            <div class="spec__r"><span class="spec__k">常驻实测</span><span class="spec__v mono">1.09 – 1.24 GiB</span></div>
+            <div class="spec__r"><span class="spec__k">排空能力</span><span class="spec__v mono">入口 ~100 msg/s · 8 worker 消费 115 msg/s</span></div>
+            <div class="spec__r"><span class="spec__k">入口阈值</span><span class="spec__v">领券/秒杀 120/s · 活动 200/s · 优惠 500/s</span></div>
+          </div>
+        </article>
+
+        <div class="switcher">
+          <svg class="ic switcher__arrows" style="width:34px;height:34px" aria-hidden="true"><use href="#i-swap"/></svg>
+          <p class="switcher__t">同一份数据<br>原地双向</p>
+        </div>
+
+        <article class="form-card">
+          <span class="form-card__badge"><svg class="ic" style="width:17px;height:17px" aria-hidden="true"><use href="#i-branch"/></svg>FULL 扩容档</span>
+          <h3>活跃期承接洪流</h3>
+          <p class="form-card__role">与生产同构，两种交付形态二选一。</p>
+          <div class="spec">
+            <div class="spec__r"><span class="spec__k">拓扑</span><span class="spec__v">本机 7 JVM，或一容器一服务可 <code class="mono">--scale</code></span></div>
+            <div class="spec__r"><span class="spec__k">聚合</span><span class="spec__v mono">容器 5 服务 ≈ 5.8 GiB（+0.5 GiB/副本）</span></div>
+            <div class="spec__r"><span class="spec__k">消息</span><span class="spec__v">RocketMQ + Nacos 注册发现</span></div>
+            <div class="spec__r"><span class="spec__k">数据层</span><span class="spec__v">默认仍单库；<code class="mono">MYSQL_DB_PER_SERVICE=1</code> 拆六库</span></div>
+            <div class="spec__r"><span class="spec__k">同构证据</span><span class="spec__v">两 seckill 副本 <code class="mono">grab</code> 各 61 / 62 次，消费侧 35 / 26</span></div>
+            <div class="spec__r"><span class="spec__k">跨副本</span><span class="spec__v"><code class="mono">@Scheduled</code> 租约互斥，累计跳过 109 次</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="proof reveal">
+        <p class="proof__t">2026-09-22 一条数据卷从头用到尾、全程未重建的实测链路（52 条断言那一版，后来涨到 113）：</p>
+        <div class="chain">
+          <div class="chain__step"><b><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>113/113</b><span>LITE 服役档</span></div>
+          <div class="chain__step"><b><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>113/113</b><span>原地升 FULL · 本机进程</span></div>
+          <div class="chain__step"><b><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>113/113</b><span>FULL · 容器 1 副本</span></div>
+          <div class="chain__step"><b><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>113/113</b><span>FULL · 容器 2 副本</span></div>
+          <div class="chain__step"><b><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>113/113</b><span>降回 LITE</span></div>
+        </div>
+        <p class="proof__t" style="margin-top:16px">
+          累计数据连续：秒杀 <code class="mono">sold_stock</code> 从 13 一路涨到 362，逐段递增、无丢失无翻倍。
+          唯一要留意的是切换瞬间在途消息——正确性由本地消息表兜住，代价是最多一个退避周期（≤300s），
+          所以切换选低峰期，并在切完确认 <code class="mono">local_message</code> 无长期 PENDING 残留。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 03 三条深度链路 ===================== -->
+  <section class="section" id="paths">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">核心链路</p>
+        <h2>券、优惠、秒杀：三条链路各自解决一个具体问题</h2>
+        <p class="section__lede">
+          削峰要的是「早拒优于慢扛」，计算要的是「再快也不能挡住结算」，抢购要的是
+          「热点不能压垮单 key」。三条链路的取舍不一样，实现方式也就不一样。
+        </p>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="核心链路" id="pathTabs">
+        <button class="tab" role="tab" id="tab-coupon" aria-controls="panel-coupon" aria-selected="true" type="button">
+          <svg class="ic" style="width:18px;height:18px" aria-hidden="true"><use href="#i-ticket"/></svg>券中心
+        </button>
+        <button class="tab" role="tab" id="tab-discount" aria-controls="panel-discount" aria-selected="false" tabindex="-1" type="button">
+          <svg class="ic" style="width:18px;height:18px" aria-hidden="true"><use href="#i-calc"/></svg>优惠计算引擎
+        </button>
+        <button class="tab" role="tab" id="tab-seckill" aria-controls="panel-seckill" aria-selected="false" tabindex="-1" type="button">
+          <svg class="ic" style="width:18px;height:18px" aria-hidden="true"><use href="#i-zap"/></svg>秒杀中心
+        </button>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-coupon" aria-labelledby="tab-coupon" tabindex="0">
+        <ol class="flow">
+          <li class="flow__row"><span class="flow__i">1</span><span class="flow__txt"><code>POST /api/coupon/grant</code>，客户端带 <code>requestId</code> 幂等键</span></li>
+          <li class="flow__row"><span class="flow__i">2</span><span class="flow__txt">网关限流 → 风控扩展点（占位）→ 模板校验 → <code>IdempotentExecutor</code> 抢占</span></li>
+          <li class="flow__row"><span class="flow__i">3</span><span class="flow__txt">Redis + Lua 原子预扣库存，含单人限领</span></li>
+          <li class="flow__row"><span class="flow__i">4</span><span class="flow__txt">写本地消息表 + 投 MQ，立刻返回 <code>ACCEPTED</code></span></li>
+          <li class="flow__row"><span class="flow__i">5</span><span class="flow__txt">客户端轮询 <code>GET /grant/result/{requestId}</code></span></li>
+          <li class="flow__row"><span class="flow__i">6</span><span class="flow__txt">消费端幂等落库（<code>user_coupon.request_id</code> 唯一索引兜底）→ confirm 消息</span></li>
+        </ol>
+        <div class="points">
+          <div class="point">
+            <h3>三层幂等，任何一层单独坏掉都不重复发券</h3>
+            <p><code class="mono">idempotent_record</code> 状态机（首执 / 回放 / PROCESSING 拒重入 / FAILED 可重抢）、<code class="mono">local_message.biz_key</code> 唯一、业务表唯一索引。</p>
+          </div>
+          <div class="point">
+            <h3>重启与抖动都自愈</h3>
+            <p><code class="mono">LocalMessageRetryer</code> 按退避重投未确认消息；<code class="mono">StockWarmUpRunner</code> 启动时按 DB 已发量重算 Redis 库存，而不是把 Redis 当账本。</p>
+          </div>
+          <div class="point">
+            <h3>洪流被拒掉，不是被排队淹掉</h3>
+            <p>LITE 超阈值爆发实测（400 条 / 并发 100）：<code class="mono">327 受理 + 73 个 HTTP 429</code>，受理吞吐稳定 ≈104 msg/s——正好等于排空能力。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-discount" aria-labelledby="tab-discount" tabindex="0" hidden>
+        <ol class="flow">
+          <li class="flow__row"><span class="flow__i">1</span><span class="flow__txt">购物车进来，读 <code>volatile</code> 本地快照（位图倒排索引）</span></li>
+          <li class="flow__row"><span class="flow__i">2</span><span class="flow__txt">候选剪枝：标签 OR 位图</span></li>
+          <li class="flow__row"><span class="flow__i">3</span><span class="flow__txt">逐条精确匹配：活动 / 用户标签 / 商品范围 / 门槛</span></li>
+          <li class="flow__row"><span class="flow__i">4</span><span class="flow__txt">互斥组最优组合：≤2 万组合精确枚举，超限转贪心</span></li>
+          <li class="flow__row"><span class="flow__i">5</span><span class="flow__txt">按比例分摊（DOWN）+ 尾差归范围内末项 + 行级剩余额度 cap</span></li>
+          <li class="flow__row"><span class="flow__i">6</span><span class="flow__txt">专用线程池 <code>orTimeout(50ms)</code>，任何异常或超时降级返回原价（<code>degraded=true</code>）</span></li>
+        </ol>
+        <div class="points">
+          <div class="point">
+            <h3>目标 P99 &lt; 20ms，实测比目标低两个量级</h3>
+            <p>基准：1 万条规则、20 行购物车，剪枝后候选 400 条，开发机单次计算均值 <code class="mono">≈0.4ms</code>。</p>
+          </div>
+          <div class="point">
+            <h3>降级不是兜底文案，是一个契约</h3>
+            <p>引擎挂了的后果被限定为「按原价结算」并带上 <code class="mono">degraded</code> 标记，主链路不会因为优惠而失败。</p>
+          </div>
+          <div class="point">
+            <h3>规则三级缓存，改完秒级生效</h3>
+            <p>本地快照 → Redis 版本号 → DB 重建（synchronized + double check）。后台 upsert 规则后 bump 版本，全实例刷新——GET 也一并收进了后台前缀，因为规则列表本身就是可反推定价策略的资产。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-seckill" aria-labelledby="tab-seckill" tabindex="0" hidden>
+        <ol class="flow">
+          <li class="flow__row"><span class="flow__i">1</span><span class="flow__txt"><code>POST /api/seckill/grab</code> → SETNX 防重购标记</span></li>
+          <li class="flow__row"><span class="flow__i">2</span><span class="flow__txt">Lua 分桶原子扣减：<code>hash(userId)%16</code> 定位桶 + 顺序借桶</span></li>
+          <li class="flow__row"><span class="flow__i">3</span><span class="flow__txt">占名额成功即返回 token → 本地消息表 + MQ</span></li>
+          <li class="flow__row"><span class="flow__i">4</span><span class="flow__txt">消费端建单（<code>unique(activity_no, user_id)</code> 兜底）+ <code>sold_stock</code> 原子递增</span></li>
+          <li class="flow__row"><span class="flow__i">5</span><span class="flow__txt">轮询返回 <code>ACCEPTED</code> / <code>SUCCESS:{orderNo}</code> / <code>FAIL:{reason}</code></span></li>
+          <li class="flow__row"><span class="flow__i">6</span><span class="flow__txt">5 分钟未支付由 Job 取消订单并 Lua 回补库存</span></li>
+        </ol>
+        <div class="points">
+          <div class="point">
+            <h3>同步路径只有一次 Redis 调用</h3>
+            <p>DB 写全部异步化；分桶把一个 key 的热点摊到 16 个 key。<code class="mono">50 万 QPS</code> 是这一档的设计口径。</p>
+          </div>
+          <div class="point">
+            <h3>预热只有一份口径</h3>
+            <p>启动 Runner 与运维重预热共用 <code class="mono">SeckillWarmUpService</code>；非 ONLINE 或已过结束时间的活动<strong>拒绝重预热</strong>——否则 force 等于给已下线活动重新开闸。</p>
+          </div>
+          <div class="point">
+            <h3>恒等式当验收闸</h3>
+            <p>冒烟断言 <code class="mono">分桶余量 + DB 已售 == 总库存</code>，基线从接口读而不写死，对超时取消抖动免疫；超卖、漏扣、回补异常都会破坏它。可连跑 3 轮全绿。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 04 边界收口 ===================== -->
+  <section class="section section--tint" id="boundary">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">横切边界</p>
+        <h2>管理面写与交易写，是结构分界不是命名约定</h2>
+        <p class="section__lede">
+          改「规则」的写（一次影响所有用户、大多要重算缓存）与记「行为」的写（幂等键 + 削峰）
+          不是一回事。收口完成的唯一可测证据是：C 端旧写路径直接删掉且<strong>不留转发别名</strong>，命中就是
+          <code class="mono">40400</code>。留着别名，等于收口只是加了一层前缀。
+        </p>
+      </div>
+
+      <div class="grid-2 reveal">
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>两套凭证互不相通</h3>
+          <p>C 端 Bearer accessToken 与后台 admin token 各有各的密钥，分别落在根目录的
+          <code class="mono">.consumer-jwt-secret</code> 与 <code class="mono">.admin-jwt-secret</code>（已 gitignore；缺失时对应那一片整体拒绝服务）。
+          空值时 admin 侧启动即失败——宁可不签，也不签一枚谁都能伪造的 token。</p>
+        </div>
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-database"/></svg>审计落表只在一个进程</h3>
+          <p>四个业务进程不连 <code class="mono">admin_audit_log</code>，只把 <code class="mono">AuditPayload</code> 投进
+          Redis Stream，由 admin 每 5s drain 落表并 <code class="mono">XACK</code>+<code class="mono">XDEL</code>。
+          不用带 TTL 的 list 方案：TTL 淘汰等于<strong>静默丢审计</strong>。建组从 <code class="mono">0</code> 开始，
+          默认最新位置会让「先投递后建组」那批永远不被读。</p>
+        </div>
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>乐观锁无处不在</h3>
+          <p>所有改配置的行都带 <code class="mono">version</code>，撞了回 <code class="mono">41008 已被他人修改</code>，
+          并附带你看到的与当前的两个数——后台是多人的，运营 A 打开的页面可能已经过时十分钟。
+          行级冲突不用后写覆盖先写。</p>
+        </div>
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-badge"/></svg>界面不复制一份权限</h3>
+          <p>前端角色只用来灰化入口，真正的判定在每个写端点（operator 改阈值仍是 <code class="mono">40300</code>）。
+          三个鉴权码在界面上走三条路：40101 跳登录带 <code class="mono">?next=</code>、
+          <strong>40102 绝不自动重放</strong>（那一发可能已经落库）、40100 只清 token。</p>
+        </div>
+      </div>
+
+      <div class="table-wrap reveal" style="margin-top:32px">
+        <table>
+          <caption>写入口矩阵（节选）：谁在听这个写、要什么角色、留不留痕、同事务还做了什么</caption>
+          <thead>
+            <tr><th scope="col">写动作</th><th scope="col">路径</th><th scope="col">角色</th><th scope="col">审计</th><th scope="col">同事务的后续动作</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>建活动 / 状态流转</td><td><code>/api/admin/activities</code></td><td>admin</td><td><span class="yes">进审计</span></td><td>非法流转回 41001</td></tr>
+            <tr><td>改预算</td><td><code>PUT /api/admin/activities/{no}/budget</code></td><td>admin</td><td><span class="yes">进审计</span></td><td><code>reheat(force=true)</code> 按流水重算预扣缓存</td></tr>
+            <tr><td>改灰度</td><td><code>PUT /api/admin/activities/{no}/gray</code></td><td>admin</td><td><span class="yes">进审计</span></td><td>只写 DB，由缓存每 5s 回源（不刷 Redis）</td></tr>
+            <tr><td>规则 upsert</td><td><code>POST /api/admin/discount/rules</code></td><td>admin</td><td><span class="yes">进审计</span></td><td>bump 规则版本号 → 全实例快照刷新</td></tr>
+            <tr><td>券模板改库存</td><td><code>PUT /api/admin/coupon/templates/{no}/stock</code></td><td>admin</td><td><span class="yes">进审计</span></td><td>reheat；低于已发数回 40000</td></tr>
+            <tr><td>秒杀改库存 / 上下线</td><td><code>/api/admin/seckill/activities/{no}/*</code></td><td>admin</td><td><span class="yes">进审计</span></td><td>ONLINE 时同事务按 <code>total-sold</code> 重建 16 桶</td></tr>
+            <tr><td>改在线配置阈值</td><td><code>PUT·DELETE /api/admin/config</code></td><td>admin</td><td><span class="yes">进审计</span></td><td>写 DB → INCR → 快照 → 版本键，失败回 41009</td></tr>
+            <tr><td>重预热</td><td><code>POST /api/admin/cache/reheat</code></td><td>admin+operator</td><td><span class="yes">含被拒的</span></td><td>本进程执行，或投给 owning 服务等回执</td></tr>
+            <tr><td>领券 / 核销 / 抢购 / 支付</td><td><code>/api/{coupon,seckill,activity}/**</code></td><td>C 端 token</td><td><span class="no">不进后台审计</span></td><td>幂等键、库存扣减、异步消息</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 05 在线配置与运维读数 ===================== -->
+  <section class="section" id="runtime">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">运行时治理</p>
+        <h2>改阈值不重启，看读数不依赖监控栈</h2>
+        <p class="section__lede">
+          在线配置解决「这个形态该用哪个阈值」，只读大盘解决「此刻它到底在不在跑」。
+          两者的取数路径都限定在 JDK + Redis + MySQL 之内。
+        </p>
+      </div>
+
+      <div class="grid-2 reveal">
+        <div class="card">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-sliders"/></svg>在线配置下发：form 行 &gt; GLOBAL 行 &gt; 出厂值</h3>
+          <p>真值在 <code class="mono">admin_config</code> 表，唯一键是 <code class="mono">cfg_key + form</code> 两列。
+          删行 = 恢复出厂，而不是写回原值——否则改了 yml 会被一行陈旧 DB 值永远压住。</p>
+          <p>admin 写库后按形态各生成一份<strong>全量合并快照</strong>，各进程每 5s 比对版本号、变了才取。
+          单键全量而不是每参数一键：多键存在「改了 A 又改 B、读方拿到一新一旧」的半应用窗口。
+          版本号取 <code class="mono">INCR</code> 而不是 <code class="mono">MAX+1</code>——并发撞号会让读方停在陈旧快照上。</p>
+          <div class="pill-list">
+            <span class="chip chip--accent">未声明键在写侧就拒</span>
+            <span class="chip">越界值读侧逐条校验后忽略</span>
+            <span class="chip">快照 JSON 坏了按空应用</span>
+            <span class="chip">落库成功广播失败 → 41009 + 重广播</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg>运维读数：故障时最该能问的三个问题</h3>
+          <p><strong>进程活着吗</strong>——读各进程自述键的 TTL，三态判定：有键 = 在跑 / 无键但本档该有 = 没在跑 / 本档压根没这个进程 = <em>不适用</em>（不参与判活）。</p>
+          <p><strong>异步堵了多少</strong>——<code class="mono">local_message</code> 的 PENDING+SENT 跨库求和 + Stream 的 <code class="mono">XLEN</code>/<code class="mono">XPENDING</code>；跨库靠 <code class="mono">information_schema</code> 发现。</p>
+          <p><strong>缓存和账对不对</strong>——gauge 的判定长在 owning 模块里，同一段代码既是修的手也是查的眼，才不会「修完还报不符」。</p>
+          <div class="pill-list">
+            <span class="chip">target 是启动期校验的正面白名单</span>
+            <span class="chip">Redirect.NEVER · 1s 超时 · &gt;256KB 判失败</span>
+            <span class="chip">④ 只读，这个面里没有任何写</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="quote reveal">
+        <p>「FULL 档的队列深度只在 broker 里，客户端读不到。那一行就写 <code class="mono">applicable=false</code>、
+        <code class="mono">len=-1</code> 加一句说明，而不是 0。把『读不到』画成 0，
+        就是让大盘在最该说话的时候说『一切正常』。」</p>
+        <cite>README 第四节 · 链路 6 运维读数</cite>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 06 可验证性 ===================== -->
+  <section class="section section--tint" id="proof">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">可验证性</p>
+        <h2>架构方案的可信度，来自断言有没有分辨力</h2>
+        <p class="section__lede">
+          这套东西没有 CI，所以验证靠「一条命令能自己跑完」：<code class="mono">mvn test</code> 不需要中间件，
+          <code class="mono">smoke-test.sh</code> 在五种形态入口下各真跑过一遍，
+          <code class="mono">load-probe.sh</code> 把容量读数变成可复现输出。
+        </p>
+      </div>
+
+      <div class="grid-3 reveal">
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-badge"/></svg>419 单测跑真 SQL</h3>
+          <p>H2 以 <code class="mono">MODE=MySQL</code> 运行，<code class="mono">INSERT IGNORE</code> 和唯一索引作用域都能验。
+          分十族：业务语义、资金与消息正确性、公共契约、后台鉴权与审计、消费者账号、在线配置、
+          业务管理面、运维只读聚合、后台界面、装配层回归。</p>
+        </div>
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>关键断言必须会红</h3>
+          <p>口径是变异检查：把生产代码改回旧值，断言必须红，不然只是自证通过。
+          ⑤ 做了 20 处全部咬人；③ 的 T1–T8 也做了 20 处，其中三处专门防「看起来实现了其实没实现」。
+          审计脱敏那条把判定改成恒 false，5 条里红 4 条。</p>
+        </div>
+        <div class="card card--hover">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-terminal"/></svg>合成用例抓真缺陷</h3>
+          <p>refresh 轮换那条：两个用例分开测各自绿，真值里 rotate 是同一行就地换摘要 → 旧摘要永远查不到 →
+          吊销从未发生。补一条「先轮换、再重放旧值」的合成用例，把实现退回「按摘要找」它立即红。</p>
+        </div>
+      </div>
+
+      <div class="table-wrap reveal" style="margin-top:32px">
+        <table>
+          <caption>端到端覆盖矩阵：每格都是真跑 <code>smoke-test.sh</code> 的结果，不是推断</caption>
+          <thead>
+            <tr><th scope="col">形态入口</th><th scope="col">最近一次</th><th scope="col">这一格独有的证据</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>LITE 服役档（容器）</td><td><code class="mono">113/113</code> 2026-09-25</td><td>⑥ 的真浏览器旅程就在这档：十页逐屏渲染 + 一次真写，界面改秒杀库存后直读 Redis 求和 <code class="mono">4725 == 5010-285</code>，分桶真的重建了</td></tr>
+            <tr><td>dev 开发档（本机 2 JVM）</td><td><code class="mono">113/113</code> 2026-09-25</td><td>同一份 dist 换一种装配：<code class="mono">/ui/</code> 由 standalone 里的 admin 模块发出，六条界面断言全绿</td></tr>
+            <tr><td>FULL · 本机进程形态</td><td><code class="mono">114/114</code> 2026-09-25</td><td>重预热走跨进程投递 + 回执分支（这就是比 LITE 多的那一条）；裸头直连 <code class="mono">:8082</code> 被拒而带签名 token 放行</td></tr>
+            <tr><td>FULL · 每服务一库隔离档</td><td><code class="mono">114/114</code> 2026-09-25</td><td>跨库发现唯一被真正用到的一档；④ 当场抓到真漂移：上一套布局留在 Redis 的缓存对不上本布局的 DB</td></tr>
+            <tr><td>FULL · 容器化 1 副本</td><td><code class="mono">114/114</code> 2026-09-25</td><td>只有这一格能验 <code class="mono">ui-route</code> 的 <code class="mono">lb://</code> 那条；可抓清单从六条变七条（account 进清单）</td></tr>
+            <tr><td>FULL · 容器 2 副本（seckill+coupon）</td><td><code class="mono">114/114</code> 2026-09-28</td><td>跨副本限领实测只生效一次：24 发并发打两副本 → 受理 1、41000 23、落库 1；<code class="mono">jobs</code> 出现两个不同持锁者</td></tr>
+            <tr><td>FULL · 容器 2 副本（admin）</td><td><code class="mono">114/114</code> 2026-09-28</td><td>12 次后台写 → 审计恰好 12 行、12 个不同 <code class="mono">resource_id</code>、零重复，且两个消费者同时在搬——「没重复」不是「只有一个在干活」的假象</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 07 快速开始 ===================== -->
+  <section class="section" id="start">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">快速开始</p>
+        <h2>三条命令换一档，clone 下来就有界面</h2>
+        <p class="section__lede">
+          两份前端的构建产物是<strong>故意入仓</strong>的：机器上没有 node，<code class="mono">mvn package</code> 出来的 jar 一样带界面。
+          改了 <code class="mono">.vue</code> 必须走唯一重建入口，产物对拍脚本与 <code class="mono">UiDistIntegrityTest</code> 是两道闸。
+        </p>
+      </div>
+
+      <div class="term-grid reveal">
+        <div class="term">
+          <div class="term__bar">
+            <span>LITE 服役档 · 默认推荐</span>
+            <button class="term__copy" type="button" data-copy="./scripts/deploy-preview.sh
+./scripts/smoke-test.sh
+./scripts/load-probe.sh 600 80 3">
+              <svg class="ic" style="width:15px;height:15px" aria-hidden="true"><use href="#i-copy"/></svg><span>复制</span>
+            </button>
+          </div>
+<pre><code><span class="p">$</span> ./scripts/deploy-preview.sh   <span class="c"># 全栈容器</span>
+<span class="p">$</span> ./scripts/smoke-test.sh       <span class="c"># 端到端验收</span>
+<span class="p">$</span> ./scripts/load-probe.sh 600 80 3
+  <span class="c"># 吞吐测量：入口 / 消费排空 / 端到端</span>
+<span class="p">$</span> ./scripts/stop-preview.sh     <span class="c"># -v 连数据卷清空</span></code></pre>
+        </div>
+
+        <div class="term">
+          <div class="term__bar">
+            <span>dev 开发档 · 本机改代码</span>
+            <button class="term__copy" type="button" data-copy="./scripts/start-dev.sh
+mvn test
+cd marketing-admin-ui && npm test">
+              <svg class="ic" style="width:15px;height:15px" aria-hidden="true"><use href="#i-copy"/></svg><span>复制</span>
+            </button>
+          </div>
+<pre><code><span class="p">$</span> ./scripts/start-dev.sh        <span class="c"># 中间件容器 + 2 JVM</span>
+<span class="p">$</span> mvn test                     <span class="c"># 419 单测，不需要中间件</span>
+<span class="p">$</span> mvn test -pl marketing-coupon
+<span class="p">$</span> cd marketing-admin-ui && npm test
+  <span class="c"># 46 条 vitest + jsdom；H5 另有 90 条</span></code></pre>
+        </div>
+
+        <div class="term">
+          <div class="term__bar">
+            <span>FULL 扩容档 · 两种交付形态</span>
+            <button class="term__copy" type="button" data-copy="./scripts/start-all.sh
+PROFILES=nacos ./scripts/start-all.sh
+export ADMIN_JWT_SECRET=$(openssl rand -base64 32)
+./scripts/deploy-full.sh --scale marketing-seckill=2">
+              <svg class="ic" style="width:15px;height:15px" aria-hidden="true"><use href="#i-copy"/></svg><span>复制</span>
+            </button>
+          </div>
+<pre><code><span class="p">$</span> ./scripts/start-all.sh        <span class="c"># 本机 7 JVM</span>
+<span class="p">$</span> PROFILES=nacos ./scripts/start-all.sh
+  <span class="c"># 开注册发现与配置中心</span>
+<span class="p">$</span> <span class="w">export ADMIN_JWT_SECRET=$(openssl rand -base64 32)</span>
+<span class="p">$</span> ./scripts/deploy-full.sh <span class="g">--scale marketing-seckill=2</span>
+  <span class="c"># 缺这个 env 入口直接退出，不起后台不可用的栈</span></code></pre>
+        </div>
+      </div>
+
+      <div class="grid-2 reveal" style="margin-top:32px">
+        <div class="quote" style="margin-top:0">
+          <p>形态三层别混：<code class="mono">DEPLOY_FORM</code>（DEV / LITE / FULL）是形态的唯一定义处，
+          由各入口脚本写死；Spring profile <strong>只有 <code class="mono">nacos</code></strong>，不存在 dev / preview / prod profile。</p>
+          <cite>AGENTS.md · 架构边界</cite>
+        </div>
+        <div class="quote" style="margin-top:0">
+          <p><code class="mono">LITE × prod</code> 这种组合在本仓不成立，理由不是硬件不够：
+          「LITE」这个词的定义里就含「四模块聚进一个进程 + 消息走 Redis Stream」，换过去它就不是 LITE 了。</p>
+          <cite>README 第三节 · 形态 × 入口 × profile</cite>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 08 模块端口 + 技术栈 + 扩展点 ===================== -->
+  <section class="section section--tint" id="modules">
+    <div class="container">
+      <div class="section__head reveal">
+        <p class="section__num">模块与端口</p>
+        <h2>九个 Maven 模块，两份不入 reactor 的前端</h2>
+      </div>
+
+      <div class="table-wrap reveal">
+        <table>
+          <caption>模块与端口：唯一对外入口是网关 8090；8086 / 8087 在容器形态不发布端口</caption>
+          <thead>
+            <tr><th scope="col">模块</th><th scope="col">端口</th><th scope="col">职责</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>marketing-common</code></td><td class="mono">—</td><td>Result / 异常、幂等执行器、本地消息表、Lua 工具、两套 JWT 自动装配</td></tr>
+            <tr><td><code>marketing-open-api</code></td><td class="mono">—</td><td>风控 / 分销 / ROI 领域接口与占位实现（可替换）</td></tr>
+            <tr><td><code>marketing-gateway</code></td><td class="mono">8090</td><td>路由、两套凭证鉴权、Redis+Lua 滑动窗口限流</td></tr>
+            <tr><td><code>marketing-activity</code></td><td class="mono">8081</td><td>活动状态机、预算 Redis 预扣 + 流水、灰度分流</td></tr>
+            <tr><td><code>marketing-coupon</code></td><td class="mono">8082</td><td>券模板与库存预热、领券、结果轮询、核销</td></tr>
+            <tr><td><code>marketing-discount</code></td><td class="mono">8083</td><td>规则 DSL、位图倒排索引、最优组合与分摊、超时降级</td></tr>
+            <tr><td><code>marketing-seckill</code></td><td class="mono">8084</td><td>分桶预热、Lua 抢购、MQ 异步下单、支付、超时回补</td></tr>
+            <tr><td><code>marketing-standalone</code></td><td class="mono">8085</td><td>LITE 与 dev 的聚合进程：四业务 + 后台 + 账号单 JVM，Redis Stream 代 MQ</td></tr>
+            <tr><td><code>marketing-admin</code></td><td class="mono">8086</td><td>后台账号 / 会话 / 审计 / 运维 + 两份静态产物 <code>/ui</code> <code>/h5</code></td></tr>
+            <tr><td><code>marketing-account</code></td><td class="mono">8087</td><td>消费者账号：注册 / 登录 / 刷新 / 登出 / 改密 / 会话与身份事件</td></tr>
+            <tr><td><code>marketing-admin-ui</code> · <code>marketing-h5-ui</code></td><td class="mono">5173 / 5174</td><td>Vue3 源码，不进 Maven reactor；dist 入仓到 admin 的 static</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="reveal" style="margin-top:32px">
+        <h3 style="font-size:19px">技术栈</h3>
+        <div class="pill-list">
+          <span class="chip">Java 17</span>
+          <span class="chip">Spring Boot 3.2.5</span>
+          <span class="chip">Spring Cloud 2023.0.1</span>
+          <span class="chip">Spring Cloud Alibaba 2023.0.1.0</span>
+          <span class="chip">MyBatis-Plus 3.5.7</span>
+          <span class="chip">MySQL 8</span>
+          <span class="chip">Redis 7 + Lua</span>
+          <span class="chip">RocketMQ 5</span>
+          <span class="chip">Caffeine / 本地快照</span>
+          <span class="chip">Micrometer / Prometheus</span>
+          <span class="chip">Vue 3 + Vite + Element Plus</span>
+        </div>
+      </div>
+
+      <div class="table-wrap reveal" style="margin-top:32px">
+        <table>
+          <caption>扩展点：占位实现到生产方案的升级路径，接口不变</caption>
+          <thead>
+            <tr><th scope="col">当前占位</th><th scope="col">生产替换</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>AllowAllRiskCheckService</code></td><td>风控中心 RPC + 设备指纹 + 黑名单布隆过滤器</td></tr>
+            <tr><td>网关演示鉴权</td><td>OAuth2/JWT 网关鉴权 + 用户维度限流键</td></tr>
+            <tr><td><code>@Scheduled</code> 超时回补 / 消息补偿</td><td>已做多实例去重（Redis 周期租约）；按 user_id 分片仍是 XXL-Job / SchedulerX 的事</td></tr>
+            <tr><td>本地消息表最终一致</td><td>强一致场景接 Seata AT（订单 / 预算已按 bizKey 幂等设计）</td></tr>
+            <tr><td>volatile 规则快照</td><td>规模增长后演进 ES 标签检索 / 多维索引</td></tr>
+            <tr><td>MQ 削峰计数</td><td>Flink 实时 ROI 大盘 + ClickHouse 明细</td></tr>
+            <tr><td>Nacos 默认关闭（local 静态路由）</td><td><code>--spring.profiles.active=nacos</code> 一键开启</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2 reveal" style="margin-top:40px">
+        <div class="card">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>诚实的边界</h3>
+          <ul class="honest" style="margin-top:12px">
+            <li><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span><b>LITE 不是洪峰档。</b>入口实测 ~90–100 msg/s（每单 4 个 autocommit × fsync），再往上就是升 FULL 的场景，而不是继续调 LITE 的参数。</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span><b>判活读数有一处已知缺陷。</b>无可改参数的进程不写自述键，FULL 容器档会把真在跑的 activity / coupon / admin 报成 <code class="mono">false</code>（已知 #82）。</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span><b>一处泄漏待办未修。</b><code class="mono">admin-drain</code> 消费组每次进程启动注册一个消费者条目、从不清理，实测累积 48 个：投递正确、不影响 pending，但 Redis 元数据无界增长。</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span><b>单库默认共享。</b>跨模块 join 在两个形态里都不会被 DB 拦住，隔离只能靠约定；拆六库就不再有「原地来回切」这个前提。</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span><b>业务端口不对外收口。</b>FULL 进程形态 808x 绑 <code class="mono">*</code>，四个 C 端交易路径本来就不校验 token（鉴权在网关），所以任何形态都不该把业务服务端口暴露到不可信网络。</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span><b>换数据布局要复位。</b>Redis 分桶键两套布局共用（键名只有活动号），而 <code class="mono">sold_stock</code> 各算各的——不重置就冒烟会红在恒等式上，那不是账目错，是两个布局互相不认识。</span></li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>为什么这些细节值得写进代码注释</h3>
+          <p>仓里的注释承载的是「为什么这么做」：取舍、地雷、机制实测。几个例子——</p>
+          <p>登录口的 BCrypt 单次 50–100ms 花在 CPU 上，所以后台路由限流（默认 50/s）之外还要一条每 IP 撞库限速（10 次/分钟，<strong>含成功尝试</strong>），两回事。</p>
+          <p>口令校验在账号不存在时也跑一次 dummy hash，否则登录口就是一个掐表式用户名枚举接口。</p>
+          <p>灰度真值故意留在 <code class="mono">activity.gray_percent</code> 直接回源 DB，不走 Redis 通知：「Redis 被清空 → 曾设 5% 的活动意外全量」这个后果不该存在。</p>
+          <p>Lettuce 在 macOS 缺可选原生 DNS 库，网关启动固定打一条 ERROR——不为它往交付物里加平台特定依赖，那会污染 Linux 部署。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="container footer__in">
+    <p>营销管理平台微服务脚手架 · Java 17 · Spring Boot 3.2.5 · MyBatis-Plus · Redis(Lua) · RocketMQ 5</p>
+    <p>权威文档在仓库根 <code class="mono">README.md</code>，各工作流设计在 <code class="mono">docs/superpowers/</code>。</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var html = document.documentElement;
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* 主题：默认跟随系统，手动选择后落 localStorage */
+  var KEY = 'mkt-landing-theme';
+  var btn = document.getElementById('themeBtn');
+  function apply(t) {
+    html.setAttribute('data-theme', t);
+    btn.setAttribute('aria-label', t === 'dark' ? '切换到亮色主题' : '切换到暗色主题');
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) { /* file:// 下可能不可用 */ }
+  apply(saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  btn.addEventListener('click', function () {
+    var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    apply(next);
+    try { localStorage.setItem(KEY, next); } catch (e) { /* 忽略 */ }
+  });
+
+  /* 移动端章节导航 */
+  var topbar = document.getElementById('topbar');
+  var navBtn = document.getElementById('navBtn');
+  function setNav(open) {
+    topbar.classList.toggle('is-open', open);
+    navBtn.setAttribute('aria-expanded', String(open));
+    navBtn.setAttribute('aria-label', open ? '收起章节导航' : '展开章节导航');
+  }
+  navBtn.addEventListener('click', function () {
+    setNav(!topbar.classList.contains('is-open'));
+  });
+  document.getElementById('nav').addEventListener('click', function (e) {
+    if (e.target.tagName === 'A') setNav(false);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') setNav(false);
+  });
+
+  /* 链路 tab：roving tabindex + 方向键 */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('#pathTabs [role=tab]'));
+  function select(i, focus) {
+    tabs.forEach(function (t, j) {
+      var on = i === j;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      var panel = document.getElementById(t.getAttribute('aria-controls'));
+      panel.hidden = !on;
+      if (on && focus) t.focus();
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { select(i, false); });
+    t.addEventListener('keydown', function (e) {
+      var k = e.key, n = null;
+      if (k === 'ArrowRight') n = (i + 1) % tabs.length;
+      else if (k === 'ArrowLeft') n = (i - 1 + tabs.length) % tabs.length;
+      else if (k === 'Home') n = 0;
+      else if (k === 'End') n = tabs.length - 1;
+      if (n !== null) { e.preventDefault(); select(n, true); }
+    });
+  });
+
+  /* 复制：file:// 下 clipboard API 可能被拒，退回 execCommand */
+  function fallback(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    done(ok);
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.term__copy'), function (b) {
+    b.addEventListener('click', function () {
+      var label = b.querySelector('span'), text = b.getAttribute('data-copy');
+      function done(ok) {
+        label.textContent = ok ? '已复制' : '复制失败';
+        b.classList.toggle('is-done', ok);
+        setTimeout(function () { label.textContent = '复制'; b.classList.remove('is-done'); }, 1800);
+      }
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallback(text, done); });
+      } else {
+        fallback(text, done);
+      }
+    });
+  });
+
+  /* 滚动入场 */
+  var items = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+  if (reduced || !('IntersectionObserver' in window)) {
+    items.forEach(function (el) { el.classList.add('is-in'); });
+  } else {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { en.target.classList.add('is-in'); io.unobserve(en.target); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    items.forEach(function (el) { io.observe(el); });
+  }
+
+  /* 当前章节高亮 */
+  var links = {};
+  Array.prototype.forEach.call(document.querySelectorAll('.nav a'), function (a) {
+    links[a.getAttribute('href').slice(1)] = a;
+  });
+  if ('IntersectionObserver' in window) {
+    var so = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        Object.keys(links).forEach(function (id) {
+          var on = id === en.target.id;
+          links[id].classList.toggle('is-current', on);
+          if (on) links[id].setAttribute('aria-current', 'true');
+          else links[id].removeAttribute('aria-current');
+        });
+      });
+    }, { rootMargin: '-45% 0px -50% 0px' });
+    Object.keys(links).forEach(function (id) {
+      var s = document.getElementById(id);
+      if (s) so.observe(s);
+    });
+  }
+})();
+
+/* Hero 终端：3D 悬浮微倾斜（仅精确指针 + 未开减少动效时） */
+(function () {
+  var t = document.getElementById('heroTerm');
+  if (!t) return;
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  if (reduced || !fine) return;
+  var raf = 0, cx = 0.5, cy = 0.5;
+  function frame() {
+    raf = 0;
+    t.style.setProperty('--rx', ((cy - 0.5) * -4).toFixed(2) + 'deg');
+    t.style.setProperty('--ry', ((cx - 0.5) * 5.5).toFixed(2) + 'deg');
+    t.style.setProperty('--gx', (cx * 100).toFixed(1) + '%');
+    t.style.setProperty('--gy', (cy * 100).toFixed(1) + '%');
+  }
+  function apply() { if (!raf) raf = requestAnimationFrame(frame); }
+  t.addEventListener('pointerenter', function () { t.style.transition = ''; });
+  t.addEventListener('pointermove', function (e) {
+    var r = t.getBoundingClientRect();
+    cx = (e.clientX - r.left) / r.width;
+    cy = (e.clientY - r.top) / r.height;
+    apply();
+  });
+  t.addEventListener('pointerleave', function () {
+    cx = 0.5; cy = 0.5;
+    t.style.transition = 'transform 640ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 480ms ease';
+    apply();
+  });
+})();
+</script>
+</body>
+</html>
