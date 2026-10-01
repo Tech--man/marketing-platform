@@ -74,7 +74,12 @@ SET @s := (SELECT IF(@has_order > 0,
         '   AND column_name = ''active'') AS active_column, ',
         '(SELECT COUNT(*) FROM information_schema.statistics ',
         ' WHERE table_schema = DATABASE() AND table_name = ''seckill_order'' ',
-        '   AND index_name = ''uk_activity_user'' AND column_name = ''active'') AS index_cols, ',
+        '   AND index_name = ''uk_activity_user'') AS index_cols, ',
         '(SELECT COUNT(*) FROM seckill_order WHERE active = 0) AS cancelled_rows'),
     'DO 0'));
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- v3 复审 N-21④：index_cols 原查询带 AND column_name='active'（恒为 1），与上方
+-- "期望 index_cols=3"的文案矛盾——自检被改写窄了。现按 index_name 全量计数（=3），
+-- 才能分辨"三列唯一索引"与"两列旧索引残留"两种形状。已应用过本文件的老卷按台账
+-- 文件名跳过，不重放；该自检只服务新卷跑链时的肉眼核对。
