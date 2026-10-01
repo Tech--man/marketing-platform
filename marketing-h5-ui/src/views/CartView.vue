@@ -8,7 +8,7 @@ import MSheet from "@/components/MSheet.vue";
 import Icon from "@/components/Icon.vue";
 import { discountApi, couponApi } from "@/api";
 import { ApiError, noteThrottle, messageFor } from "@/api/client";
-import { yuan } from "@/utils/format";
+import { yuan, cutYuan, netPayable, hasAmt } from "@/utils/format";
 import { CATALOG, useCart } from "@/stores/cart";
 import { useToast } from "@/stores/toast";
 
@@ -74,10 +74,15 @@ function chooseCoupon(c) {
   cart.selectCoupon(c);
 }
 
-const payable = computed(() => calc.value?.payableAmount ?? 0);
-const saved = computed(() => calc.value?.totalDiscount ?? 0);
-const couponCut = computed(() => Number(selectedCoupon.value?.faceValue) || 0);
-const grandTotal = computed(() => Math.max(0, Number(payable.value) - couponCut.value));
+// N-5：金额在视图层保持 null（"读不到"），塌缩成 0 的动作留给 yuan/MPrice/cutYuan
+// 这些已修好的叶子去做——它们会给 "—"/"--"。这里若先 ?? 0，叶子永远见不到 null。
+const payable = computed(() => calc.value?.payableAmount ?? null);
+const saved = computed(() => calc.value?.totalDiscount ?? null);
+const couponCut = computed(() => {
+  const f = selectedCoupon.value?.faceValue;
+  return hasAmt(f) ? Number(f) : null;
+});
+const grandTotal = computed(() => netPayable(payable.value, couponCut.value));
 
 function itemLabel(lineId) {
   const l = cart.lines.find((x) => String(x.skuId) === String(lineId));
@@ -149,7 +154,7 @@ function itemLabel(lineId) {
               <div class="rule__top">
                 <span class="rule__badge">{{ RULE_TYPE[r.type] || r.type }}</span>
                 <span class="rule__name truncate">{{ r.name }}</span>
-                <span class="amount-cut">-{{ yuan(r.discountAmount, { sign: false }) }}</span>
+                <span class="amount-cut">{{ cutYuan(r.discountAmount) }}</span>
               </div>
               <div v-if="r.shares?.length" class="rule__shares tiny muted">
                 分摊：<span v-for="(sh, k) in r.shares" :key="sh.lineId">
@@ -170,8 +175,8 @@ function itemLabel(lineId) {
         <section class="card card--pad ct__summary">
           <h2 class="strong ct__summaryTitle">摘要</h2>
           <div class="sum"><span class="muted">商品 {{ cart.totalQuantity }} 件</span><span class="num">{{ yuan(calc?.originalAmount) }}</span></div>
-          <div class="sum"><span class="muted">活动优惠</span><span class="amount-cut num">-{{ yuan(saved) }}</span></div>
-          <div v-if="selectedCoupon" class="sum"><span class="muted">优惠券</span><span class="amount-cut num">-{{ yuan(couponCut) }}</span></div>
+          <div class="sum"><span class="muted">活动优惠</span><span class="amount-cut num">{{ cutYuan(saved) }}</span></div>
+          <div v-if="selectedCoupon" class="sum"><span class="muted">优惠券</span><span class="amount-cut num">{{ cutYuan(couponCut) }}</span></div>
           <hr class="divider" />
           <div class="sum sum--total"><span class="strong">合计</span><MPrice :value="grandTotal" /></div>
 
@@ -192,8 +197,8 @@ function itemLabel(lineId) {
                 @click="chooseCoupon(c)"
               >
                 <Icon name="ticket" :size="14" />
-                <span class="cchip__amt">-{{ Number(c.faceValue).toFixed(2) }}</span>
-                <span class="tiny muted">{{ Number(c.thresholdAmount) > 0 ? `满${c.thresholdAmount}` : '无门槛' }}</span>
+                <span class="cchip__amt">{{ cutYuan(c.faceValue) }}</span>
+                <span class="tiny muted">{{ hasAmt(c.thresholdAmount) && Number(c.thresholdAmount) > 0 ? `满${c.thresholdAmount}` : '无门槛' }}</span>
                 <Icon v-if="cart.selectedCouponCode === c.couponCode" name="check" :size="14" class="cchip__check" />
               </button>
             </div>

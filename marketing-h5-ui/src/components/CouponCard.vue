@@ -1,10 +1,14 @@
 <script setup>
 import MPrice from "./MPrice.vue";
 import Icon from "./Icon.vue";
+import { hasAmt } from "@/utils/format";
 
+// N-5：faceValue/threshold 不给 default: 0——缺省（父组件没传/接口没回）保持
+// undefined，交给 MPrice/hasAmt 显示 "--"/"无门槛"；default: 0 会把"读不到"
+// 伪装成"真 0 元券"。
 defineProps({
-  faceValue: { type: [Number, String], default: 0 },
-  threshold: { type: [Number, String], default: 0 },
+  faceValue: { type: [Number, String], default: null },
+  threshold: { type: [Number, String], default: null },
   name: { type: String, default: "" },
   scene: { type: String, default: "" },
   expireText: { type: String, default: "" },
@@ -17,7 +21,7 @@ defineProps({
   <div class="cp" :class="[`cp--${tone}`, dim && 'cp--dim']">
     <div class="cp__value">
       <MPrice :value="faceValue" />
-      <span class="cp__cond">{{ Number(threshold) > 0 ? `满 ${Number(threshold).toFixed(0)} 可用` : "无门槛" }}</span>
+      <span class="cp__cond">{{ hasAmt(threshold) && Number(threshold) > 0 ? `满 ${Number(threshold).toFixed(0)} 可用` : "无门槛" }}</span>
     </div>
     <span class="cp__perf" aria-hidden="true" />
     <div class="cp__body">

@@ -7,7 +7,7 @@ import MState from "@/components/MState.vue";
 import Icon from "@/components/Icon.vue";
 import { discountApi, couponApi, activityApi } from "@/api";
 import { ApiError, noteThrottle, messageFor, E } from "@/api/client";
-import { yuan } from "@/utils/format";
+import { yuan, cutYuan, netPayable, hasAmt } from "@/utils/format";
 import { useCart } from "@/stores/cart";
 import { useSession } from "@/stores/session";
 import { useToast } from "@/stores/toast";
@@ -22,7 +22,11 @@ const loading = ref(true);
 const submit = ref({ phase: "idle", steps: [], orderNo: "" });
 
 const coupon = computed(() => cart.selectedCoupon);
-const couponFace = computed(() => Number(coupon.value?.faceValue) || 0);
+// N-5：null 保持 null（读不到），由 MPrice/cutYuan 呈现 "—"/"--"，不塌缩成 0
+const couponFace = computed(() => {
+  const f = coupon.value?.faceValue;
+  return hasAmt(f) ? Number(f) : null;
+});
 
 onMounted(async () => {
   if (!cart.lines.length) {
@@ -39,9 +43,7 @@ onMounted(async () => {
   }
 });
 
-const grandTotal = computed(() =>
-  Math.max(0, Number(calc.value?.payableAmount || 0) - couponFace.value)
-);
+const grandTotal = computed(() => netPayable(calc.value?.payableAmount, couponFace.value));
 
 function step(name, state, detail) {
   const s = submit.value.steps.find((x) => x.name === name);
@@ -161,8 +163,8 @@ async function placeOrder() {
         <section class="card card--pad">
           <h2 class="ck__cardTitle">应付</h2>
           <div class="sum"><span class="muted">商品 {{ cart.totalQuantity }} 件</span><span class="num">{{ yuan(calc?.originalAmount) }}</span></div>
-          <div class="sum"><span class="muted">活动优惠</span><span class="amount-cut num">-{{ yuan(calc?.totalDiscount) }}</span></div>
-          <div v-if="coupon" class="sum"><span class="muted">优惠券</span><span class="amount-cut num">-{{ yuan(couponFace) }}</span></div>
+          <div class="sum"><span class="muted">活动优惠</span><span class="amount-cut num">{{ cutYuan(calc?.totalDiscount) }}</span></div>
+          <div v-if="coupon" class="sum"><span class="muted">优惠券</span><span class="amount-cut num">{{ cutYuan(couponFace) }}</span></div>
           <hr class="divider" />
           <div class="sum sum--total"><span class="strong">合计</span><MPrice :value="grandTotal" /></div>
 

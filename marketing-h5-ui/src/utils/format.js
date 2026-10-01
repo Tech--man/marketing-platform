@@ -11,19 +11,48 @@ const NUM = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** 拆成整数位与小数位（两位），供价格组件分别放大/缩小 */
+/** 拆成整数位与小数位（两位），供价格组件分别放大/缩小。读不到（null/空串/非数）
+ *  给 "—" 段而不是 0/00——调用方应先过 hasAmt，这里的哨兵是给漏网调用兜底，
+ *  保证"不知道"永远不会被渲染成"免费"（2026-10-01 审计 P2-7 复审 N-5）。 */
 export function splitYuan(v) {
+  if (!hasAmt(v)) return { int: "—", dec: "" };
   const fixed = NUM(v).toFixed(2);
   const [int, dec] = fixed.split(".");
   return { int, dec };
 }
 
-/** "¥12.00" —— 完整金额文本 */
+/** 「有没有一笔真金额」：null/undefined/空串都算"读不到"，与后台 TriState 同一口径。
+ *  钱的读数宁可显示 —（读不到）也不能折叠成 0——"免费的"与"不知道"是两件事，
+ *  后者会把加载态/降级态伪装成定价（2026-10-01 审计 P2-7）。 */
+export function hasAmt(v) {
+  if (v == null || v === "") return false;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n);
+}
+
+/** "¥12.00" —— 完整金额文本；读不到（null/空串）给 "—" 而不是 ¥0.00 */
 export function yuan(v, { sign = true } = {}) {
+  if (!hasAmt(v)) return "—";
   const fixed = NUM(v).toFixed(2);
   const [int, dec] = fixed.split(".");
   const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return `${sign ? "¥" : ""}${grouped}.${dec}`;
+}
+
+/** 优惠扣减额（"-12.00"）——视图层的"活动优惠/优惠券"行统一走这里：
+ *  读不到时给裸 "—"，而不是 "-¥0.00"（伪装成真优惠）或 "-—"（负号挂空值）。
+ *  与 yuan() 同一判定（N-5：塌缩点必须收在工具层，视图只做呈现）。 */
+export function cutYuan(v) {
+  return hasAmt(v) ? `-${yuan(v, { sign: false })}` : "—";
+}
+
+/** 应付合计（原价 − 券抵扣，夹 0 下限）：试算没读到 → null（上层显示 "--"）；
+ *  券面值没读到 → 不抵扣、原样返回。Cart/Checkout 两处共用同一语义，
+ *  视图不再各自 `?? 0`（N-5：那是把"不知道"折成"免费"的塌缩点）。 */
+export function netPayable(payable, cut) {
+  if (!hasAmt(payable)) return null;
+  if (!hasAmt(cut)) return Number(payable);
+  return Math.max(0, Number(payable) - Number(cut));
 }
 
 /** 分 → 元（预算用）；null 视作「未知」而非 0，交由上层降级渲染 */

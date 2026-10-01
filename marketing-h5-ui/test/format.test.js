@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   splitYuan,
   yuan,
+  cutYuan,
+  netPayable,
+  hasAmt,
   cents,
   pct,
   countdown,
@@ -14,11 +17,36 @@ describe("金额/分/百分比", () => {
   it("splitYuan 把 BigDecimal 元拆成整数与两位小数，容忍字符串", () => {
     expect(splitYuan(1999)).toEqual({ int: "1999", dec: "00" });
     expect(splitYuan("89.5")).toEqual({ int: "89", dec: "50" });
-    expect(splitYuan(null)).toEqual({ int: "0", dec: "00" });
+    // N-5：旧断言 splitYuan(null)→{int:"0",dec:"00"} 把"读不到"钉成"真 0 元"，
+    // 视图层照它写出了 ¥0.00 合计。现在钉相反契约：哨兵段，绝不折叠成 0。
+    expect(splitYuan(null)).toEqual({ int: "—", dec: "" });
   });
   it("yuan 千分位分组，带符号", () => {
     expect(yuan(1234567.891)).toBe("¥1,234,567.89");
     expect(yuan(0, { sign: false })).toBe("0.00");
+  });
+  it("P2-7：读不到的金额给 —，绝不折叠成 ¥0.00（免费≠不知道）", () => {
+    expect(hasAmt(null)).toBe(false);
+    expect(hasAmt(undefined)).toBe(false);
+    expect(hasAmt("")).toBe(false);
+    expect(hasAmt(0)).toBe(true);
+    expect(hasAmt("12.5")).toBe(true);
+    expect(yuan(null)).toBe("—");
+    expect(yuan(undefined)).toBe("—");
+    expect(yuan("")).toBe("—");
+  });
+  it("N-5：扣减额 cutYuan 读不到给裸 —，读得到才带负号（不是 -¥0.00 也不是 -—）", () => {
+    expect(cutYuan(12.5)).toBe("-12.50");
+    expect(cutYuan("8")).toBe("-8.00");
+    expect(cutYuan(null)).toBe("—");
+    expect(cutYuan(undefined)).toBe("—");
+  });
+  it("N-5：应付合计 netPayable 试算未落地是 null，券未读到不抵扣，抵扣夹 0 下限", () => {
+    expect(netPayable(null, 5)).toBeNull();
+    expect(netPayable(undefined, null)).toBeNull();
+    expect(netPayable(100, null)).toBe(100);
+    expect(netPayable("88.5", "10")).toBe(78.5);
+    expect(netPayable(3, 10)).toBe(0);
   });
   it("cents 分转元；null 视作未知而非 0", () => {
     expect(cents(12345)).toBe(123.45);

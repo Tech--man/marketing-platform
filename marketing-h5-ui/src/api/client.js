@@ -8,8 +8,10 @@ import { reactive } from "vue";
  *    client，两者不成环。没登录就是游客：请求不带 Authorization，游客可看的目录读数
  *    （活动详情 / 秒杀场次 / 余量 / 券库存）照旧能拿。绝不再手填 userId。
  *
- * 2) **成败看 body.code，不看 HTTP status**：BizException/校验失败都是 HTTP 200 + 4xxxx，
- *    只有系统错/网络错才是 4xx/5xx。
+ * 2) **成败看 body.code，HTTP status 只作旁证**：send() 先解析 body，body 有 code
+ *    就以它为准（payload ? payload.code : status*100）——所以鉴权/限流段映射真实
+ *    HTTP 状态（40100/40101/40102→401、40300→403、42900→429）对本客户端透明，
+ *    其余业务错照旧 200 + 4xxxx；body 不是 JSON（502 网关页等）才退回 status*100。
  *
  * 3) **40101 只刷一次、只重试一次**，且并发的 40101 共用同一次刷新（refreshOnce）。
  *    refreshToken 是轮换的：一次刷新作废上一枚。两个请求各自去刷 → 第二个必然拿已被
@@ -154,7 +156,9 @@ async function send(method, path, body, withAuth) {
   if (payload && payload.code === 0) {
     return { code: E.SUCCESS, data: payload.data, message: payload.message, payload };
   }
-  const code = payload ? payload.code : res.status * 100;
+  // body 是 JSON 但没有 code 字段（如 Spring /error 默认体 {timestamp,status,error,path}）
+  // 也不能拿 undefined 当码——回落 status*100，与非 JSON body 同一出口
+  const code = payload && payload.code != null ? payload.code : res.status * 100;
   return {
     code,
     data: payload?.data,

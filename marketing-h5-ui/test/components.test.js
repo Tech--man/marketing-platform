@@ -18,6 +18,12 @@ describe("MPrice", () => {
     const w = mount(MPrice, { props: { value: 80, strike: 120 } });
     expect(w.find(".price__strike").text()).toContain("120.00");
   });
+  it("P2-7：value=null 显示 -- 且不印货币符（试算未落地不是免费）", () => {
+    const w = mount(MPrice, { props: { value: null } });
+    expect(w.find(".price__cur").exists()).toBe(false);
+    expect(w.find(".price__dec").exists()).toBe(false);
+    expect(w.find(".price__int").text()).toBe("--");
+  });
 });
 
 describe("MButton", () => {

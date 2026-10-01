@@ -9,7 +9,7 @@ import SeckillCard from "@/components/SeckillCard.vue";
 import Icon from "@/components/Icon.vue";
 import { activityApi, couponApi, seckillApi } from "@/api";
 import { noteThrottle, messageFor, ApiError } from "@/api/client";
-import { cents, yuan, pct, toDate } from "@/utils/format";
+import { cents, yuan, pct, hasAmt, toDate } from "@/utils/format";
 import { COUPON_OFFERS, HOME_ACTIVITY_NO } from "@/data/offers";
 import { useSession } from "@/stores/session";
 
@@ -74,10 +74,12 @@ async function load() {
 }
 onMounted(load);
 
+// N-5：usedAmount/budgetAmount 读不到时进度给 null（文本显示 "—"，进度条按 0 宽），
+// 不再 || 0 折叠成"0% 已发放"——那是把"读不到"伪装成"一分没发"
 const usedPct = computed(() => {
   const a = activity.value;
-  if (!a) return 0;
-  return pct(Number(a.usedAmount) || 0, Number(a.budgetAmount) || 0);
+  if (!a || !hasAmt(a.usedAmount) || !hasAmt(a.budgetAmount)) return null;
+  return pct(Number(a.usedAmount), Number(a.budgetAmount));
 });
 const remainYuan = computed(() => (remain.value == null ? null : cents(remain.value)));
 const endTarget = computed(() => toDate(activity.value?.endTime));
@@ -123,9 +125,9 @@ const started = computed(() => (toDate(activity.value?.startTime)?.getTime() ?? 
             <div v-if="remainYuan != null" class="hero__statValue num">{{ yuan(remainYuan) }}</div>
             <div v-else class="muted small">读数暂不可用</div>
           </div>
-          <div class="bar bar--lg"><div class="bar__fill" :style="{ width: usedPct + '%' }" /></div>
+          <div class="bar bar--lg"><div class="bar__fill" :style="{ width: (usedPct ?? 0) + '%' }" /></div>
           <div class="row row--between tiny muted">
-            <span>补贴进度</span><span>{{ usedPct }}% 已发放</span>
+            <span>补贴进度</span><span>{{ usedPct == null ? "—" : `${usedPct}% 已发放` }}</span>
           </div>
         </div>
       </section>

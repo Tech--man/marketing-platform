@@ -8,7 +8,7 @@ import MState from "@/components/MState.vue";
 import Icon from "@/components/Icon.vue";
 import { activityApi } from "@/api";
 import { ApiError, messageFor, needsLogin, noteThrottle } from "@/api/client";
-import { cents, yuan, pct, toDate, formatDateTime, uuid } from "@/utils/format";
+import { cents, yuan, pct, hasAmt, toDate, formatDateTime, uuid } from "@/utils/format";
 import { useSession } from "@/stores/session";
 import { useToast } from "@/stores/toast";
 import { toLogin } from "@/utils/auth";
@@ -56,9 +56,12 @@ async function load() {
 }
 onMounted(load);
 
-const usedPct = computed(() =>
-  act.value ? pct(Number(act.value.usedAmount) || 0, Number(act.value.budgetAmount) || 0) : 0
-);
+// N-5：读不到给 null（"—"），不折叠成"0% 已发放"
+const usedPct = computed(() => {
+  const a = act.value;
+  if (!a || !hasAmt(a.usedAmount) || !hasAmt(a.budgetAmount)) return null;
+  return pct(Number(a.usedAmount), Number(a.budgetAmount));
+});
 const remainYuan = computed(() => (remain.value == null ? null : cents(remain.value)));
 
 async function reserve() {
@@ -131,9 +134,9 @@ async function reserve() {
         <section class="card card--pad">
           <div class="row row--between av__budgetHead">
             <h2 class="strong">活动补贴</h2>
-            <span class="small muted">{{ usedPct }}% 已发放</span>
+            <span class="small muted">{{ usedPct == null ? "—" : `${usedPct}% 已发放` }}</span>
           </div>
-          <div class="bar bar--lg"><div class="bar__fill" :style="{ width: usedPct + '%' }" /></div>
+          <div class="bar bar--lg"><div class="bar__fill" :style="{ width: (usedPct ?? 0) + '%' }" /></div>
 
           <div class="av__remain">
             <div class="muted small">剩余补贴</div>
