@@ -696,7 +696,8 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 > （`/api/admin/users` 无凭证在网关 `AdminAuthFilter` 就被 401，根本到不了 MVC
 > advice）；**进程内 advice 的状态映射**由 `ActivityControllerTest` 的
 > `status().isUnauthorized()` 钉住（MockMvc 直打控制器）——Boot 3.4 渲染管道把
-> `setStatus` 盖回 200 的那类回归（52863dc→e23d0a5 的教训）走的是后者这条路，
+> `setStatus` 盖回 200 的那类回归（Boot 3.4 升级窗口实测踩过，见 git log
+> "审查收口第六/七批"两段提交的教训记录）走的是后者这条路，
 > 排障别找错现场。
 
 | Method | Path | 说明 |
