@@ -643,8 +643,7 @@ LITE 下 standalone 跑完七条链路仍是 551.6 MiB / 768 MiB，没触到 `me
 按需引入是必要的而不是洁癖，因为这份产物进的是常态服役档那个 jar。
 冒烟链路 8 六条（首页 200、索引 `no-store`、深链回退、指纹 `immutable`、缺文件必须 404、
 无凭证打 `/api/admin/users` 仍 40100）在 LITE 与 FULL 容器档各全绿；
-真浏览器走了一遍登录 → 十页渲染 → 界面改秒杀库存并核对 Redis 分桶真的按 `total-sold` 重建
-（证据 `docs/superpowers/evidence/6-browser-journey.md`）。
+真浏览器走了一遍登录 → 十页渲染 → 界面改秒杀库存并核对 Redis 分桶真的按 `total-sold` 重建。
 
 ## 四·五、消费者账号体系（C 端身份的唯一来源）
 
@@ -681,8 +680,8 @@ POST /api/auth/login（identifier + password，BCrypt 校验）
 - `CONSUMER_JWT_SECRET` 必须与 `ADMIN_JWT_SECRET` 是**不同**的值：同值的话两套凭证的隔离只剩
   claim 形状的侥幸。deploy-preview/deploy-full 的入口会拒绝同值与留空。
 - 上面这三条语义 + 登出与改密的"当场生效"，都由**冒烟链路 9** 端到端钉住（配对形状：先验有效、
-  再验作废、最后验新状态可用）。五套形态的实跑与它抓到的一处真缺陷（重放时代码按已被轮换掉的
-  `refresh_hash` 找受害会话，必然查不到 → 只拒不吊销）见 `docs/superpowers/evidence/9-identity-five-form-runs.md`。
+  再验作废、最后验新状态可用）。五套形态的实跑还当场抓到过一处真缺陷：重放时代码按已被轮换掉的
+  `refresh_hash` 找受害会话，必然查不到 → 只拒不吊销。
 
 ## 五、API 速查（经网关 8090；C 端需登录换来的 `Authorization: Bearer <accessToken>`，后台需 admin token）
 
@@ -1011,9 +1010,9 @@ URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己�
 **消费者账号加了链路 9 的 12 条 + 链路 6 的 C 端对偶 2 条**），
 所以标了跑时的断言数——**低于当前基数的格子只代表"当时那一版全绿"，不等于已在新断言下复跑过**。
 2026-09-25 这一轮把五套形态**全部按新基数各跑绿过一遍**（跑次、每档的红点与成因、
-以及链路 9 当场抓到的那处真缺陷，见 `docs/superpowers/evidence/9-identity-five-form-runs.md`）；
-2026-09-28 这一轮补掉它留的两格：**2 副本档按 114 复跑**（含跨副本限领与 jobs 持锁分布，
-见 `docs/superpowers/evidence/9-two-replica-and-capacity.md`）与 **`load-probe.sh` 容量重新取数**
+以及链路 9 当场抓到的那处真缺陷，记录在维护者本地过程档案，不随仓库分发）；
+2026-09-28 这一轮补掉它留的两格：**2 副本档按 114 复跑**（含跨副本限领与 jobs 持锁分布）
+与 **`load-probe.sh` 容量重新取数**
 （净排空 106 msg/s，登录口 BCrypt 与业务同 JVM 之后 LITE 的异步口径没有塌）。
 同日再补 **admin 两副本**那一格：`ui-route` 轮转不撕裂、12 次后台写恰好 12 行审计零重复、
 两个 admin 消费者同时在搬 —— 顺带发现 `admin-drain` 消费组每次进程启动泄漏一个消费者条目、
@@ -1025,7 +1024,7 @@ URL/`local|proxy`/样本数/`ERROR`）、④ 的未排空合计与脚本自己�
 | dev 开发档（本机 2 JVM） | **113/113**（2026-09-25，九条链路全集，⑥ dist 由 `start-dev.sh` 现场 `mvn package` 打进 standalone） | 同上；`ownForm=DEV`；**这一档第一次跑是红的**：`start-dev.sh` 没发 `ACCOUNT_HOST/ACCOUNT_PORT`，网关把 `/api/auth/login` 打到没人听的 127.0.0.1:8087 → 500，与当年漏 `ADMIN_HOST` 同形；补上两行后全绿。（`reset-demo-data.sh` 在这一档的实测是 **09-24 那趟**的记录，本轮没重跑） | 同上（`mode=local+proxy`、判活里 `marketing-standalone=true`、四个业务进程名 `null`=本档不适用）；standalone 本机 RSS 175 MiB 是**上一轮（89 条那趟）的读数，本轮复跑没重测**。**⑥ 在这一档验的是"同一份 dist 换一种装配"**：`/ui/` 由 standalone 里的 admin 模块发出，六条链路 8 断言全绿（含 `no-store`、深链回退、缺文件 404） |
 | FULL · 本机进程形态 | **114/114**（2026-09-25，九条链路全集；这一档的第七个 JVM 就是 `marketing-account:8087`，`start-all.sh` 的 `port_of` 补上之前它根本起不来——健康检查拿空端口 curl，等满 150s 再假报"未就绪"） | `local_message` 全 CONFIRMED、broker 消费组积压 0、Stream 键为 0；`ownForm=FULL` 且跑完 `admin_config` 归零；重预热走**跨进程投递 + 回执**分支（这就是比 LITE 多的那一条断言）；裸头直连 `:8082` 被拒而带签名 token 放行（这一档端口真的绑 `*`，是最需要这条的形态）。链路 9 的三条身份语义在这一档同样全绿
 | FULL · 本机进程 · 每服务一库隔离档 | **114/114**（2026-09-25，九条链路全集；`marketing_account` 是这一档的第 6 个库，`init/01-schema.sql` 补了建库与授权，现存卷走 `docker/mysql/migrate/2026-09-25-account-db.sql`） | 数据按服务落 6 个库；后台会话/审计写进 `marketing_admin`，消费者账号/会话/身份事件写进 `marketing_account`，与单库 `marketing` 里那套互不串。**这一档第一次跑红了 6 条**：不是账号体系坏了，是两套布局的 `userId` 撞号 + 共用同一个 Redis（详见第六节 已知噪音 ⑨），处置在冒烟侧。**这一档跑冒烟要 `MYSQL_DB=marketing_activity ./scripts/smoke-test.sh`**：链路 5 的灰度两条直连 DB 改列，不指过去就改到另一套布局的表上，服务读不到 → 那两条判据红（不会假绿）| 跨库发现唯一被真正用到的一档：`backlog.schemas` 一次列出 5 个库并逐库独立（缺表的库不进列表、某库查询失败只让那一行 `-1`）。**④ 在这里抓到了真漂移**：面板开局报 budget=1/coupon=1/seckill=1，那是上一套布局留在 Redis 里的缓存对不上本布局的 DB——`information_schema` 那段 SQL 存在的意义就是让这种偏差看得见 |
-| FULL · 容器化 1 副本 | **114/114**（2026-09-25，九条链路全集，镜像含账号体系 + ⑥ + H5 产物。第一次跑红 1 条是 已知噪音 ⑩ 那件换布局未重预热的事，`reset-demo-data.sh` 之后复跑全绿） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 owning 容器写回；链路 6 的直连探测走 `docker exec` 进容器这条路（C 端那条对偶断言在这一档正是这么打的）。**⑥ 在这一档只这一格能验**：`ui-route` 的 `lb://` 那条、以及重预热页的类型清单（admin 自己 `/cache/types` 实测返回 `[]`，靠 ④ 面板并集才有得选）。上一格（09-24，96/96）的读数与证据仍在 `docs/superpowers/evidence/6-reheat-full-container.md`，含消费组 `owning-exec` 2 consumers / pending 0 | `mode=proxy`，**target 从六个变成七个**：`marketing-account` 进了可抓清单且 `source=proxy status=OK`（这一档的清单由 `OPS_T_*` 覆写，8087 也补进了 `OpsTargets` 的端口正面清单）。**#82 在这一档当场复现**：`liveness` 里 activity/coupon/admin 报 `false` 而 `docker ps` 说它们在跑（判活读的是 ⑤ 的 schema 自述键，无可改参数的进程不写自述）；账号进程**故意不在**判活清单里——宁可这一格读数缺席，也不新增一条错读数 |
+| FULL · 容器化 1 副本 | **114/114**（2026-09-25，九条链路全集，镜像含账号体系 + ⑥ + H5 产物。第一次跑红 1 条是 已知噪音 ⑩ 那件换布局未重预热的事，`reset-demo-data.sh` 之后复跑全绿） | 同上 + 后台走 `lb://marketing-admin` 服务发现；重预热回执由 owning 容器写回；链路 6 的直连探测走 `docker exec` 进容器这条路（C 端那条对偶断言在这一档正是这么打的）。**⑥ 在这一档只这一格能验**：`ui-route` 的 `lb://` 那条、以及重预热页的类型清单（admin 自己 `/cache/types` 实测返回 `[]`，靠 ④ 面板并集才有得选）。上一格（09-24，96/96）的读数与证据记录在维护者本地过程档案，含消费组 `owning-exec` 2 consumers / pending 0 | `mode=proxy`，**target 从六个变成七个**：`marketing-account` 进了可抓清单且 `source=proxy status=OK`（这一档的清单由 `OPS_T_*` 覆写，8087 也补进了 `OpsTargets` 的端口正面清单）。**#82 在这一档当场复现**：`liveness` 里 activity/coupon/admin 报 `false` 而 `docker ps` 说它们在跑（判活读的是 ⑤ 的 schema 自述键，无可改参数的进程不写自述）；账号进程**故意不在**判活清单里——宁可这一格读数缺席，也不新增一条错读数 |
 | FULL · 容器化 2 副本（seckill + coupon） | **114/114**（2026-09-28 01:51，按新基数复跑） | 第三节的多副本三条证据 | 跨副本限领**实测只生效一次**（新账号 24 发并发打两个 coupon 副本：受理 1、41000 23、落库 1）；`jobs` 出现**两个不同持锁者**，三个任务各只有一个 holder。`liveness` 里 activity/coupon/admin 报 `false` = 已知 #82 复现，非新缺陷 |
 | FULL · 容器化 2 副本（**admin**） | **114/114**（2026-09-28 03:12；首跑 111/1 是部署期订阅竞态，见证据第 7 节） | 同上 | `ui-route` 在两副本间轮转，`/ui/` 与其 hash 资源连打 8 次全 200；两个 admin 都注册进 nacos（两个 IP、均 healthy）。**界面写动作的审计归属成立**：12 次后台写 → `admin_audit_log` 恰好 12 行、12 个不同 `resource_id`、**零重复**，且 `XINFO CONSUMERS` 显示**恰好两个消费者 idle≈1.4 s** 在搬同一张 `mkt:audit:pending`（pending 均为 0）—— 也就是"没重复"不是"只有一个在干活"的假象。④ 的 `consistency` 两副本读数一致（连读三次同形）。**新发现一处泄漏**：`admin-drain` 组里累积 **48 个消费者条目**，每个进程启动注册一个、从不清理（投递正确、不影响 pending，但 Redis 元数据无界增长） |
 

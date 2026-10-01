@@ -27,7 +27,7 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
-      # JDK 17 是硬性纪律（AGENTS.md）：更高版本上 Lombok 注解处理必挂
+      # JDK 17 是硬性纪律：更高版本上 Lombok 注解处理必挂（满屏 cannot find symbol: log）
       - name: mvn test（全 reactor）
         run: mvn -B test
 

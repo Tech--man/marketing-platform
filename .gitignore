@@ -4,9 +4,13 @@ logs/
 run/
 *.log
 hs_err_pid*
-# 门禁产物例外（复审 N-3/放行前置⑤）：evidence/ 下的门禁日志是要入仓的证据，
-# 不落盘的"手工跑过"等于没跑。
-!docs/superpowers/evidence/*.log
+
+# ---- 本地过程文档（公开仓库不分发，2026-10-01 起撤出跟踪）----
+# AGENTS.md（AI 工作区指令）与 docs/superpowers/（specs/plans/evidence 过程档案：
+# 各工作流设计文档、实施计划、审计证据落盘）是维护者侧的工作档案，保留在本地
+# 供开发与审计流程使用；三个门禁脚本的 evidence 输出目录不变（继续写本地）。
+AGENTS.md
+docs/superpowers/
 
 # ---- 根目录本地密钥（缺失时对应鉴权整片拒；每个环境自己生成） ----
 .admin-jwt-secret
